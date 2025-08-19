@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from datetime import timedelta
 from .models import User
@@ -12,7 +13,8 @@ from .serializers import (
     GoogleLoginSerializer,
     RequestPasswordResetSerializer,
     VerifyResetOTPSerializer,
-    ResetPasswordSerializer
+    ResetPasswordSerializer,
+    ProfileSerializer
 )
 from accounts.services.utils import send_otp_email, generate_otp
 from .services.google_auth import verify_google_token
@@ -42,12 +44,17 @@ class LoginView(APIView):
         serializer = LoginSerializer(data=request.data)
         if serializer.is_valid():
             data = serializer.validated_data
+            user = data.get("user")
+
             return Response({
                 "success": True,
                 "message": data.get("message"),
+                "email": user.email,
+                "role": user.role,  # assuming your User model has a 'role' field
                 "accessToken": data.get("accessToken"),
                 "refreshToken": data.get("refreshToken"),
             }, status=status.HTTP_200_OK)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -147,3 +154,17 @@ class ResetPasswordView(APIView):
             return Response({"success": True, 'message': 'Password reset successful'}, status=status.HTTP_200_OK)
         except User.DoesNotExist:
             return Response({"success": False, 'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+class ProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = ProfileSerializer(request.user, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        serializer = ProfileSerializer(request.user, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "Profile updated successfully", "profile": serializer.data}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
