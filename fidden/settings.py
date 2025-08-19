@@ -155,3 +155,9 @@ GOOGLE_CLIENT_IDS = {
     "ios": "your-ios-client-id.apps.googleusercontent.com",
     "android": "910463978621-0s39tt89mqhi8u07v1c2s0ku14toutga.apps.googleusercontent.com",
 }
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://fidden-service-provider.onrender.com",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
