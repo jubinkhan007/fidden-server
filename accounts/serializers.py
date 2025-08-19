@@ -1,10 +1,9 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from datetime import timedelta
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from .models import User
-from accounts.services.utils import generate_otp, send_otp_email
+from accounts.services.utils import send_otp_email
 
 class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
@@ -18,13 +17,8 @@ class RegisterSerializer(serializers.ModelSerializer):
             password=validated_data['password'],
             role=validated_data.get('role', 'user')
         )
-        otp = generate_otp()
-        user.otp = otp
-        user.otp_created_at = timezone.now()
-        user.save()
-
+        otp = user.generate_otp()
         send_otp_email(user.email, otp)
-
         return user
 
 
@@ -38,20 +32,13 @@ class VerifyOTPSerializer(serializers.Serializer):
         except User.DoesNotExist:
             raise serializers.ValidationError({"email": "User not found"})
 
-        # Check OTP match
-        if user.otp != attrs['otp']:
-            raise serializers.ValidationError({"otp": "Invalid OTP"})
+        if not user.is_otp_valid(attrs['otp']):
+            raise serializers.ValidationError({"otp": "Invalid or expired OTP"})
 
-        # Check OTP expiry (5 minutes)
-        if not user.otp_created_at or timezone.now() > user.otp_created_at + timedelta(minutes=5):
-            raise serializers.ValidationError({"otp": "OTP expired"})
-
-        # Mark user verified and clear OTP
         user.is_verified = True
         user.otp = None
         user.otp_created_at = None
         user.save()
-
         return attrs
 
 
@@ -65,9 +52,10 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError({"non_field_errors": "Invalid credentials"})
         if not user.is_verified:
             raise serializers.ValidationError({"non_field_errors": "Email not verified"})
+        if not user.is_active:
+            raise serializers.ValidationError({"non_field_errors": "User account inactive"})
 
         refresh = RefreshToken.for_user(user)
-
         return {
             "message": "Login Successful",
             "accessToken": str(refresh.access_token),
@@ -79,7 +67,26 @@ class GoogleLoginSerializer(serializers.Serializer):
     token = serializers.CharField(required=True, allow_blank=False)
     role = serializers.ChoiceField(
         choices=User.ROLE_CHOICES,
-        required=False,  # optional for existing users
+        required=False,
         allow_blank=True
     )
 
+
+class RequestPasswordResetSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class VerifyResetOTPSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.CharField(max_length=6)
+
+
+class ResetPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    new_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, data):
+        if data['new_password'] != data['confirm_password']:
+            raise serializers.ValidationError("Passwords do not match")
+        return data

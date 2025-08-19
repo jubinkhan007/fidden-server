@@ -5,6 +5,7 @@ def generate_otp():
     """Generate a 6-digit numeric OTP as string with leading zeros if needed."""
     return f"{random.randint(0, 999999):06d}"
 
+
 def send_otp_email(user_email, otp):
     """Send the OTP email to the user."""
     subject = "Your OTP Code"
