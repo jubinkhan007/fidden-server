@@ -48,11 +48,15 @@ class LoginView(APIView):
 
 class GoogleLoginView(APIView):
     def post(self, request):
+        # Validate input
         serializer = GoogleLoginSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         token = serializer.validated_data['token']
+        role = serializer.validated_data.get('role')  # optional, only used for first login
+
+        # Verify Google token
         user_info = verify_google_token(token)
         if not user_info:
             return Response({"error": "Invalid Google token"}, status=status.HTTP_400_BAD_REQUEST)
@@ -60,24 +64,38 @@ class GoogleLoginView(APIView):
         email = user_info["email"]
 
         try:
+            # Create user if not exists
             user, created = User.objects.get_or_create(
                 email=email,
-                defaults={"is_verified": True, "role": "user", "is_active": True}
+                defaults={
+                    "is_verified": True,
+                    "is_active": True,
+                    "role": role if role in dict(User.ROLE_CHOICES) else "user"
+                }
             )
         except Exception as e:
-            return Response({"error": "User creation failed", "details": str(e)},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": "User creation failed", "details": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
+        # For returning users, always use existing role
+        if not created:
+            role = user.role
+
+        # Check if user is active
         if not user.is_active:
             return Response({"error": "User account is inactive"}, status=status.HTTP_403_FORBIDDEN)
 
+        # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
-
         message = "Registration successful" if created else "Login successful"
 
         return Response({
             "success": True,
             "message": message,
+            "email": user.email,
+            "role": role,  # role from DB or newly saved
             "accessToken": str(refresh.access_token),
             "refreshToken": str(refresh),
         }, status=status.HTTP_200_OK)

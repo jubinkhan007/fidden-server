@@ -77,3 +77,9 @@ class LoginSerializer(serializers.Serializer):
 
 class GoogleLoginSerializer(serializers.Serializer):
     token = serializers.CharField(required=True, allow_blank=False)
+    role = serializers.ChoiceField(
+        choices=User.ROLE_CHOICES,
+        required=False,  # optional for existing users
+        allow_blank=True
+    )
+
