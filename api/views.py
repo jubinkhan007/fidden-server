@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
+from django.db.models import Avg
 
 from .models import Shop, Service, RatingReview
 from .serializers import ShopSerializer, ServiceSerializer, RatingReviewSerializer
@@ -23,7 +24,7 @@ class ShopListCreateView(APIView):
         if not shop:
             return Response({"detail": "No shop found for this user."}, status=status.HTTP_404_NOT_FOUND)
 
-        serializer = ShopSerializer(shop)
+        serializer = ShopSerializer(shop, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
@@ -36,7 +37,7 @@ class ShopListCreateView(APIView):
         serializer = ShopSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             shop = serializer.save(owner=request.user)
-            return Response(ShopSerializer(shop).data, status=status.HTTP_201_CREATED)
+            return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -49,7 +50,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def get(self, request, pk):
         shop = self.get_object(pk)
-        serializer = ShopSerializer(shop)
+        serializer = ShopSerializer(shop, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, pk):
@@ -57,7 +58,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
         serializer = ShopSerializer(shop, data=request.data, context={'request': request})
         if serializer.is_valid():
             shop = serializer.save(owner=request.user)
-            return Response(ShopSerializer(shop).data, status=status.HTTP_200_OK)
+            return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request, pk):
@@ -65,7 +66,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
         serializer = ShopSerializer(shop, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             shop = serializer.save(owner=request.user)
-            return Response(ShopSerializer(shop).data, status=status.HTTP_200_OK)
+            return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
@@ -84,7 +85,7 @@ class ServiceListCreateView(APIView):
             return Response({"detail": "You must create a shop before accessing services."}, status=status.HTTP_400_BAD_REQUEST)
 
         services = shop.services.all()
-        serializer = ServiceSerializer(services, many=True)
+        serializer = ServiceSerializer(services, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
@@ -92,10 +93,10 @@ class ServiceListCreateView(APIView):
         if not shop:
             return Response({"detail": "You must create a shop before adding services."}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = ServiceSerializer(data=request.data)
+        serializer = ServiceSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            serializer.save(shop=shop)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            service = serializer.save(shop=shop)
+            return Response(ServiceSerializer(service, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -114,7 +115,7 @@ class ServiceRetrieveUpdateDestroyView(APIView):
         if not service:
             return Response({"detail": "You must create a shop before accessing services."}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = ServiceSerializer(service)
+        serializer = ServiceSerializer(service, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, pk):
@@ -122,10 +123,10 @@ class ServiceRetrieveUpdateDestroyView(APIView):
         if not service:
             return Response({"detail": "You must create a shop before updating services."}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = ServiceSerializer(service, data=request.data)
+        serializer = ServiceSerializer(service, data=request.data, context={'request': request})
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            service = serializer.save()
+            return Response(ServiceSerializer(service, context={'request': request}).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request, pk):
@@ -133,10 +134,10 @@ class ServiceRetrieveUpdateDestroyView(APIView):
         if not service:
             return Response({"detail": "You must create a shop before updating services."}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = ServiceSerializer(service, data=request.data, partial=True)
+        serializer = ServiceSerializer(service, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            service = serializer.save()
+            return Response(ServiceSerializer(service, context={'request': request}).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
@@ -146,6 +147,7 @@ class ServiceRetrieveUpdateDestroyView(APIView):
 
         service.delete()
         return Response({"success": True, "message": "Service deleted successfully."}, status=status.HTTP_200_OK)
+
 
 class UserRatingReviewView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -159,7 +161,6 @@ class UserRatingReviewView(APIView):
         shop_id = request.query_params.get('shop')
         service_id = request.query_params.get('service')
 
-        # Filter reviews by user role 'user'
         reviews = RatingReview.objects.filter(user__role='user')
 
         if shop_id:
@@ -168,7 +169,7 @@ class UserRatingReviewView(APIView):
             reviews = reviews.filter(service_id=service_id)
 
         avg_rating = reviews.aggregate(avg=Avg('rating'))['avg'] or 0
-        serializer = RatingReviewSerializer(reviews, many=True)
+        serializer = RatingReviewSerializer(reviews, many=True, context={'request': request})
         return Response({
             "average_rating": round(avg_rating, 2),
             "reviews": serializer.data
@@ -182,5 +183,5 @@ class UserRatingReviewView(APIView):
         serializer = RatingReviewSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             review = serializer.save()
-            return Response(RatingReviewSerializer(review).data, status=status.HTTP_201_CREATED)
+            return Response(RatingReviewSerializer(review, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -21,15 +21,14 @@ class ServiceSerializer(serializers.ModelSerializer):
         read_only_fields = ('shop',)
 
     def to_representation(self, instance):
-        """Return full absolute URL for service_img"""
         rep = super().to_representation(instance)
         request = self.context.get('request')
-        if instance.service_img:
-            rep['service_img'] = request.build_absolute_uri(instance.service_img.url) if request else instance.service_img.url
-        else:
-            rep['service_img'] = None
+        # Return full URL if request is available
+        rep['service_img'] = (
+            request.build_absolute_uri(instance.service_img.url)
+            if instance.service_img and request else instance.service_img.url if instance.service_img else None
+        )
         return rep
-        
 
 
 class ShopSerializer(serializers.ModelSerializer):
@@ -45,13 +44,12 @@ class ShopSerializer(serializers.ModelSerializer):
         read_only_fields = ('owner_id',)
 
     def to_representation(self, instance):
-        """Return full absolute URL for shop_img"""
         rep = super().to_representation(instance)
         request = self.context.get('request')
-        if instance.shop_img:
-            rep['shop_img'] = request.build_absolute_uri(instance.shop_img.url) if request else instance.shop_img.url
-        else:
-            rep['shop_img'] = None
+        rep['shop_img'] = (
+            request.build_absolute_uri(instance.shop_img.url)
+            if instance.shop_img and request else instance.shop_img.url if instance.shop_img else None
+        )
         return rep
 
     def create(self, validated_data):
@@ -81,13 +79,12 @@ class RatingReviewSerializer(serializers.ModelSerializer):
         return "Anonymous"
 
     def to_representation(self, instance):
-        """Return full absolute URL for review_img"""
         rep = super().to_representation(instance)
         request = self.context.get('request')
-        if instance.review_img:
-            rep['review_img'] = request.build_absolute_uri(instance.review_img.url) if request else instance.review_img.url
-        else:
-            rep['review_img'] = None
+        rep['review_img'] = (
+            request.build_absolute_uri(instance.review_img.url)
+            if instance.review_img and request else instance.review_img.url if instance.review_img else None
+        )
         return rep
 
     def create(self, validated_data):

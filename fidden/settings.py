@@ -156,7 +156,7 @@ AUTH_USER_MODEL = 'accounts.User'
 
 GOOGLE_CLIENT_IDS = {
     "web": "910463978621-34r0n3pbn9rq81ort6fgcglef6hbnu3a.apps.googleusercontent.com",
-    "ios": "your-ios-client-id.apps.googleusercontent.com",
+    "ios": "910463978621-5tdrmslurgva1i31d56vjrobnh1cmfge.apps.googleusercontent.com",
     "android": "910463978621-0s39tt89mqhi8u07v1c2s0ku14toutga.apps.googleusercontent.com",
 }
 
