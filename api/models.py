@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 
+
 class Shop(models.Model):
     owner = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -15,6 +16,12 @@ class Shop(models.Model):
     close_at = models.TimeField()
     about_us = models.TextField(blank=True, null=True)
     shop_img = models.ImageField(upload_to='shop/', blank=True, null=True)
+
+    # ✅ changed from open_days → close_days
+    close_days = models.JSONField(
+        default=list,
+        help_text="List of closed days (e.g., ['monday', 'tuesday'])"
+    )
 
     def __str__(self):
         return self.name
@@ -44,6 +51,7 @@ class Service(models.Model):
         default=1,
         help_text="Maximum number of people who can take this service at a time"
     )
+    is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return f"{self.title} ({self.shop.name})"
