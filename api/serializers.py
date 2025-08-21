@@ -21,14 +21,15 @@ class ServiceSerializer(serializers.ModelSerializer):
         read_only_fields = ('shop',)
 
     def to_representation(self, instance):
-        """Customize output to return absolute URL for profile_image"""
+        """Return full absolute URL for service_img"""
         rep = super().to_representation(instance)
         request = self.context.get('request')
         if instance.service_img:
-            rep['service_img'] = request.build_absolute_uri(instance.service_img.url)
+            rep['service_img'] = request.build_absolute_uri(instance.service_img.url) if request else instance.service_img.url
         else:
             rep['service_img'] = None
         return rep
+        
 
 
 class ShopSerializer(serializers.ModelSerializer):
@@ -44,11 +45,11 @@ class ShopSerializer(serializers.ModelSerializer):
         read_only_fields = ('owner_id',)
 
     def to_representation(self, instance):
-        """Customize output to return absolute URL for profile_image"""
+        """Return full absolute URL for shop_img"""
         rep = super().to_representation(instance)
         request = self.context.get('request')
         if instance.shop_img:
-            rep['shop_img'] = request.build_absolute_uri(instance.shop_img.url)
+            rep['shop_img'] = request.build_absolute_uri(instance.shop_img.url) if request else instance.shop_img.url
         else:
             rep['shop_img'] = None
         return rep
@@ -78,6 +79,16 @@ class RatingReviewSerializer(serializers.ModelSerializer):
         if obj.user:
             return obj.user.name or obj.user.email or "Anonymous"
         return "Anonymous"
+
+    def to_representation(self, instance):
+        """Return full absolute URL for review_img"""
+        rep = super().to_representation(instance)
+        request = self.context.get('request')
+        if instance.review_img:
+            rep['review_img'] = request.build_absolute_uri(instance.review_img.url) if request else instance.review_img.url
+        else:
+            rep['review_img'] = None
+        return rep
 
     def create(self, validated_data):
         validated_data['user'] = self.context['request'].user
