@@ -55,3 +55,39 @@ class Service(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.shop.name})"
+
+class RatingReview(models.Model):
+    shop = models.ForeignKey(
+        "Shop",
+        on_delete=models.CASCADE,
+        related_name="ratings"
+    )
+    service = models.ForeignKey(
+        "Service",
+        on_delete=models.CASCADE,
+        related_name="ratings"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ratings"
+    )
+    rating = models.PositiveSmallIntegerField(
+        choices=[(1, "1 Star"), (2, "2 Stars"), (3, "3 Stars"), (4, "4 Stars"), (5, "5 Stars")],
+        help_text="Rating from 1 to 5"
+    )
+    review = models.TextField(blank=True, null=True)
+    review_img = models.ImageField(upload_to="reviews/", blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        if self.user:
+            user_name = self.user.name or self.user.email or "Anonymous"
+        else:
+            user_name = "Anonymous"
+        return f"{user_name} - {self.rating}⭐ for {self.service.title}"

@@ -4,6 +4,7 @@ from .views import (
     ShopRetrieveUpdateDestroyView,
     ServiceListCreateView,
     ServiceRetrieveUpdateDestroyView,
+    UserRatingReviewView,
 )
 
 urlpatterns = [
@@ -11,4 +12,5 @@ urlpatterns = [
     path('shop/<int:pk>/', ShopRetrieveUpdateDestroyView.as_view(), name='shop-detail'),
     path('services/', ServiceListCreateView.as_view(), name='service-list-create'),
     path('services/<int:pk>/', ServiceRetrieveUpdateDestroyView.as_view(), name='service-detail'),
+    path('reviews/', UserRatingReviewView.as_view(), name='user-reviews'),
 ]
