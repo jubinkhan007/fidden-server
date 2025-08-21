@@ -1,3 +1,49 @@
 from django.db import models
+from django.conf import settings
 
-# Create your models here.
+class Shop(models.Model):
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='shop'
+    )
+    name = models.CharField(max_length=255)
+    address = models.TextField()
+    location = models.CharField(max_length=255, blank=True, null=True)
+    capacity = models.PositiveIntegerField()
+    start_at = models.TimeField()
+    close_at = models.TimeField()
+    about_us = models.TextField(blank=True, null=True)
+    shop_img = models.ImageField(upload_to='shop/', blank=True, null=True)
+
+    def __str__(self):
+        return self.name
+
+
+class ServiceCategory(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class Service(models.Model):
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='services')
+    category = models.ForeignKey(ServiceCategory, on_delete=models.CASCADE, related_name='services')
+    title = models.CharField(max_length=255)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    discount_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    service_img = models.ImageField(upload_to='services/', blank=True, null=True)
+    duration = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        help_text="Duration of the service in minutes"
+    )
+    capacity = models.PositiveIntegerField(
+        default=1,
+        help_text="Maximum number of people who can take this service at a time"
+    )
+
+    def __str__(self):
+        return f"{self.title} ({self.shop.name})"

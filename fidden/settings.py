@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'rest_framework',  # Django REST Framework for API support
     'rest_framework_simplejwt',
     'accounts',  # Your accounts application
+    'api',
 ]
 
 
