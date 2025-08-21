@@ -87,7 +87,7 @@ class RatingReview(models.Model):
 
     def __str__(self):
         if self.user:
-            user_name = self.user.name or self.user.email or "Anonymous"
+            user_name = self.user.name or "Anonymous"
         else:
             user_name = "Anonymous"
         return f"{user_name} - {self.rating}⭐ for {self.service.title}"

@@ -75,7 +75,7 @@ class RatingReviewSerializer(serializers.ModelSerializer):
 
     def get_user_name(self, obj):
         if obj.user:
-            return obj.user.name or obj.user.email or "Anonymous"
+            return obj.user.name  or "Anonymous"
         return "Anonymous"
 
     def to_representation(self, instance):

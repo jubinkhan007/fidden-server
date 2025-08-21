@@ -169,9 +169,12 @@ class UserRatingReviewView(APIView):
             reviews = reviews.filter(service_id=service_id)
 
         avg_rating = reviews.aggregate(avg=Avg('rating'))['avg'] or 0
+        total_reviews = reviews.count()
+
         serializer = RatingReviewSerializer(reviews, many=True, context={'request': request})
         return Response({
             "average_rating": round(avg_rating, 2),
+            "total_reviews": total_reviews,
             "reviews": serializer.data
         }, status=status.HTTP_200_OK)
 
