@@ -5,7 +5,10 @@ from .views import (
     ServiceListCreateView,
     ServiceRetrieveUpdateDestroyView,
     UserRatingReviewView,
-    ServiceCategoryListView
+    ServiceCategoryListView,
+    SlotListView,
+    SlotBookingView,
+    CancelSlotBookingView
 )
 
 urlpatterns = [
@@ -14,5 +17,9 @@ urlpatterns = [
     path('services/', ServiceListCreateView.as_view(), name='service-list-create'),
     path('services/<int:pk>/', ServiceRetrieveUpdateDestroyView.as_view(), name='service-detail'),
     path('reviews/', UserRatingReviewView.as_view(), name='user-reviews'),
-    path('categories/', ServiceCategoryListView.as_view(), name='category-list')
+    path('categories/', ServiceCategoryListView.as_view(), name='category-list'),
+    path('shops/<int:shop_id>/slots/', SlotListView.as_view(), name='slot-list'),
+    path('slot-booking/', SlotBookingView.as_view(), name='slot-booking-create'),
+    path('slot-booking/<int:booking_id>/cancel/', CancelSlotBookingView.as_view(), name='slot-booking-cancel'),
+
 ]

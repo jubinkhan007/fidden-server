@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Shop, Service, ServiceCategory, RatingReview
+from .models import Shop, Service, ServiceCategory, RatingReview, Slot, SlotBooking
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -90,3 +90,67 @@ class RatingReviewSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data['user'] = self.context['request'].user
         return super().create(validated_data)
+
+
+class SlotSerializer(serializers.ModelSerializer):
+    available = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Slot
+        fields = ['id', 'shop', 'service', 'start_time', 'end_time', 'capacity_left', 'available']
+
+    def get_available(self, obj):
+        # Service-level capacity check
+        service_capacity_ok = obj.capacity_left > 0
+
+        # Shop-level capacity check
+        shop_capacity_ok = obj.service.shop.capacity > 0
+
+        return service_capacity_ok and shop_capacity_ok
+
+
+class SlotBookingSerializer(serializers.ModelSerializer):
+    slot_id = serializers.PrimaryKeyRelatedField(
+        queryset=Slot.objects.all(),
+        write_only=True,
+        source='slot'  # maps slot_id to slot internally
+    )
+
+    class Meta:
+        model = SlotBooking
+        fields = ['id', 'slot_id', 'user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at']
+        read_only_fields = ['user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at']
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        slot = validated_data.pop('slot')
+
+        # Check overlapping bookings
+        from django.db.models import Q
+        if SlotBooking.objects.filter(
+            user=user,
+            status="confirmed"
+        ).filter(
+            Q(start_time__lt=slot.end_time) & Q(end_time__gt=slot.start_time)
+        ).exists():
+            raise serializers.ValidationError("You already have a booking that overlaps this slot.")
+
+        # Check slot capacity
+        if slot.capacity_left <= 0:
+            raise serializers.ValidationError("This slot is fully booked.")
+
+        booking = SlotBooking.objects.create(
+            user=user,
+            slot=slot,
+            start_time=slot.start_time,
+            end_time=slot.end_time,
+            shop=slot.shop,
+            service=slot.service,
+            status='confirmed'
+        )
+
+        # Reduce slot capacity
+        slot.capacity_left -= 1
+        slot.save(update_fields=['capacity_left'])
+
+        return booking

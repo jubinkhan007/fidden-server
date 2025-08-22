@@ -6,9 +6,15 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg
 
-from .models import Shop, Service, RatingReview, ServiceCategory
-from .serializers import ShopSerializer, ServiceSerializer, RatingReviewSerializer, ServiceCategorySerializer
+from .models import Shop, Service, RatingReview, ServiceCategory, Slot, SlotBooking
+from .serializers import ShopSerializer, ServiceSerializer, RatingReviewSerializer, ServiceCategorySerializer, SlotSerializer, SlotBookingSerializer
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
+
+from datetime import datetime
+from django.db import transaction
+from django.db.models import Q
+from django.utils import timezone
+
 
 
 class ShopListCreateView(APIView):
@@ -78,7 +84,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
 class ServiceCategoryListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
-    
+
     def get(self, request):
         categories = ServiceCategory.objects.all()
         serializer = ServiceCategorySerializer(categories, many=True)
@@ -198,3 +204,93 @@ class UserRatingReviewView(APIView):
             review = serializer.save()
             return Response(RatingReviewSerializer(review, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SlotListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, shop_id):
+        service_id = request.query_params.get('service')
+        date_str = request.query_params.get('date')
+        if not service_id or not date_str:
+            return Response({"detail": "Query params 'service' and 'date' required."}, status=400)
+
+        try:
+            date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({"detail": "Invalid date format."}, status=400)
+
+        start_of_day = timezone.make_aware(datetime.combine(date, datetime.min.time()))
+        end_of_day = timezone.make_aware(datetime.combine(date, datetime.max.time()))
+
+        slots = Slot.objects.select_related('shop', 'service').filter(
+            shop_id=shop_id, service_id=service_id,
+            start_time__gte=start_of_day,
+            start_time__lte=end_of_day
+        ).order_by('start_time')
+
+        results = []
+        for s in slots:
+            service_ok = s.capacity_left > 0
+            overlap_count = SlotBooking.objects.filter(
+                shop=s.shop,
+                status='confirmed',
+                start_time__lt=s.end_time,
+                end_time__gt=s.start_time
+            ).count()
+            shop_ok = overlap_count < s.shop.capacity
+            results.append({
+                "id": s.id,
+                "shop": s.shop_id,
+                "service": s.service_id,
+                "start_time": s.start_time,
+                "end_time": s.end_time,
+                "capacity_left": s.capacity_left,
+                "available": service_ok and shop_ok
+            })
+        return Response({"slots": results}, status=200)
+
+
+class SlotBookingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = SlotBookingSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        booking = serializer.save()
+        return Response(SlotBookingSerializer(booking).data, status=status.HTTP_201_CREATED)
+
+
+class CancelSlotBookingView(APIView):
+    def post(self, request, booking_id):  # <- match URL param
+        # Get the booking for the logged-in user
+        booking = get_object_or_404(SlotBooking, id=booking_id, user=request.user)
+
+        if booking.status == "cancelled":
+            return Response(
+                {"error": "This booking is already cancelled."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Mark booking as cancelled
+        booking.status = "cancelled"
+        booking.save(update_fields=["status"])
+
+        # Restore capacity for the slot
+        slot = booking.slot
+        slot.capacity_left += 1
+        slot.save(update_fields=["capacity_left"])
+
+        # Restore capacity for the shop
+        shop = slot.shop
+        shop.capacity += 1
+        shop.save(update_fields=["capacity"])
+
+        return Response(
+            {
+                "message": "Booking cancelled successfully.",
+                "booking_id": booking.id,
+                "status": booking.status
+            },
+            status=status.HTTP_200_OK
+        )

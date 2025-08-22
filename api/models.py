@@ -1,5 +1,7 @@
 from django.db import models
 from django.conf import settings
+from datetime import timedelta
+from django.utils import timezone
 
 
 class Shop(models.Model):
@@ -91,3 +93,55 @@ class RatingReview(models.Model):
         else:
             user_name = "Anonymous"
         return f"{user_name} - {self.rating}⭐ for {self.service.title}"
+
+class Slot(models.Model):
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='slots')
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='slots')
+    start_time = models.DateTimeField(db_index=True)
+    end_time = models.DateTimeField()
+    capacity_left = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['service', 'start_time'], name='uniq_service_slot_start')
+        ]
+        ordering = ['start_time']
+        indexes = [
+            models.Index(fields=['shop', 'start_time']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.end_time:
+            self.end_time = self.start_time + timedelta(minutes=self.service.duration or 30)
+        if self.capacity_left is None:
+            self.capacity_left = self.service.capacity or 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.shop.name} · {self.service.title} · {timezone.localtime(self.start_time)}"
+
+
+class SlotBooking(models.Model):
+    STATUS_CHOICES = [('confirmed', 'Confirmed'), ('cancelled', 'Cancelled')]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='slot_bookings')
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='slot_bookings')
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='slot_bookings')
+    slot = models.ForeignKey(Slot, on_delete=models.CASCADE, related_name='bookings')
+    start_time = models.DateTimeField(db_index=True)
+    end_time = models.DateTimeField()
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='confirmed')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-start_time']
+        indexes = [
+            models.Index(fields=['shop', 'start_time', 'end_time']),
+            models.Index(fields=['service', 'start_time']),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'slot'], name='uniq_user_slot')
+        ]
+
+    def __str__(self):
+        return f"{self.user} → {self.service.title} @ {self.shop.name} ({timezone.localtime(self.start_time)})"
