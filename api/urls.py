@@ -5,6 +5,7 @@ from .views import (
     ServiceListCreateView,
     ServiceRetrieveUpdateDestroyView,
     UserRatingReviewView,
+    ServiceCategoryListView
 )
 
 urlpatterns = [
@@ -13,4 +14,5 @@ urlpatterns = [
     path('services/', ServiceListCreateView.as_view(), name='service-list-create'),
     path('services/<int:pk>/', ServiceRetrieveUpdateDestroyView.as_view(), name='service-detail'),
     path('reviews/', UserRatingReviewView.as_view(), name='user-reviews'),
+    path('categories/', ServiceCategoryListView.as_view(), name='category-list')
 ]

@@ -6,8 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg
 
-from .models import Shop, Service, RatingReview
-from .serializers import ShopSerializer, ServiceSerializer, RatingReviewSerializer
+from .models import Shop, Service, RatingReview, ServiceCategory
+from .serializers import ShopSerializer, ServiceSerializer, RatingReviewSerializer, ServiceCategorySerializer
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
 
@@ -73,6 +73,16 @@ class ShopRetrieveUpdateDestroyView(APIView):
         shop = self.get_object(pk)
         shop.delete()
         return Response({"success": True, "message": "Shop deleted successfully."}, status=status.HTTP_200_OK)
+
+
+class ServiceCategoryListView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
+    
+    def get(self, request):
+        categories = ServiceCategory.objects.all()
+        serializer = ServiceCategorySerializer(categories, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class ServiceListCreateView(APIView):
