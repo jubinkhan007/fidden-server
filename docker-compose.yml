@@ -4,7 +4,7 @@ services:
   web:
     build: .
     container_name: fidden_web
-    command: gunicorn fidden.wsgi:application --bind 0.0.0.0:8000
+    command: ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8000"]
     volumes:
       - ./:/app
       - media:/app/media
