@@ -24,7 +24,7 @@ RUN pip install -r requirements.txt
 COPY . .
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8050
 
 # Default command to run Django
-CMD ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8000"]
+CMD ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8050"]
