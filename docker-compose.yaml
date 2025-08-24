@@ -4,13 +4,13 @@ services:
   web:
     build: .
     container_name: fidden_web
-    command: ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8050"]
+    command: ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8090"]
     volumes:
       - ./:/app
       - media:/app/media
       - staticfiles:/app/staticfiles
     ports:
-      - "8050:8050"
+      - "8090:8090"
     depends_on:
       - redis
     env_file:
