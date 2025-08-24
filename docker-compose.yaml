@@ -42,7 +42,7 @@ services:
     image: redis:8
     container_name: fidden_redis
     ports:
-      - "6379:6379"
+      - "6385:6385"
 
 volumes:
   media:
