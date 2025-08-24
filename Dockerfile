@@ -8,6 +8,9 @@ ENV PYTHONUNBUFFERED 1
 # Set working directory
 WORKDIR /app
 
+# Set the Python path to include the current working directory
+ENV PYTHONPATH /app
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
