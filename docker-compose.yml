@@ -1,13 +1,10 @@
-version: '3.9'
-
 services:
   web:
     build: .
     container_name: fidden_web
     working_dir: /app
-    command: ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8090"]
+    command: ["gunicorn", "fidden.wsgi:application", "--chdir", "/app", "--bind", "0.0.0.0:8090"]
     volumes:
-      - ./:/app
       - media:/app/media
       - staticfiles:/app/staticfiles
     ports:

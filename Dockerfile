@@ -8,9 +8,6 @@ ENV PYTHONUNBUFFERED 1
 # Set working directory
 WORKDIR /app
 
-# Set the Python path to include the current working directory
-ENV PYTHONPATH /app
-
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -22,12 +19,11 @@ COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
-
 # Copy project files
 COPY . .
 
 # Expose port
 EXPOSE 8090
 
-# Default command to run Django
-CMD ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8090"]
+# Run Gunicorn with explicit working directory
+CMD ["gunicorn", "fidden.wsgi:application", "--chdir", "/app", "--bind", "0.0.0.0:8090"]
