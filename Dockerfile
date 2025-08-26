@@ -24,6 +24,11 @@ RUN pip install -r requirements.txt
 # Copy project files
 COPY . .
 
+# Fail fast if project files are missing from the build context
+RUN ls -la /app && \
+    test -f /app/manage.py && \
+    test -d /app/fidden || (echo "ERROR: Project files missing in image. Ensure Coolify build context is the repo root containing manage.py and fidden/." && exit 1)
+
 # Expose port
 EXPOSE 8090
 
