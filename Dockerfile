@@ -4,6 +4,8 @@ FROM python:3.9-slim
 # Prevent Python from writing .pyc files
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
+ENV PYTHONPATH=/app
+ENV DJANGO_SETTINGS_MODULE=fidden.settings
 
 # Set working directory
 WORKDIR /app
