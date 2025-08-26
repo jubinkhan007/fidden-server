@@ -27,5 +27,8 @@ COPY . .
 # Expose port
 EXPOSE 8090
 
-# Run Gunicorn with explicit working directory
-CMD ["gunicorn", "fidden.wsgi:application", "--chdir", "/app", "--bind", "0.0.0.0:8090"]
+# Add entrypoint that validates imports then launches the app
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8090"]
