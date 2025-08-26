@@ -8,7 +8,8 @@ from .views import (
     ServiceCategoryListView,
     SlotListView,
     SlotBookingView,
-    CancelSlotBookingView
+    CancelSlotBookingView,
+    AllShopsListView,
 )
 
 urlpatterns = [
@@ -21,5 +22,6 @@ urlpatterns = [
     path('shops/<int:shop_id>/slots/', SlotListView.as_view(), name='slot-list'),
     path('slot-booking/', SlotBookingView.as_view(), name='slot-booking-create'),
     path('slot-booking/<int:booking_id>/cancel/', CancelSlotBookingView.as_view(), name='slot-booking-cancel'),
+    path('users/all-shops/', AllShopsListView.as_view(), name='all-shops-list-user'),
 
 ]

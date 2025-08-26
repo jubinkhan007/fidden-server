@@ -12,8 +12,9 @@ from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
 from datetime import datetime
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
+from django.db.models import Avg, Count, Q, Value, FloatField
+from django.db.models.functions import Coalesce
 
 
 
@@ -294,3 +295,52 @@ class CancelSlotBookingView(APIView):
             },
             status=status.HTTP_200_OK
         )
+
+class AllShopsListView(APIView):
+    """
+    Fetch all shops with id, name, address, avg_rating, review_count.
+    Only accessible to users with role='user'.
+    Supports optional case-insensitive regex search on shop name and address via ?search=.
+    Sorted by avg_rating descending, then review_count descending.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if getattr(user, 'role', None) != 'user':
+            return Response({"detail": "Only users can view shops."}, status=403)
+
+        search_query = request.query_params.get('search', '')
+
+        shops_qs = Shop.objects.all()
+
+        if search_query:
+            shops_qs = shops_qs.filter(
+                Q(name__iregex=search_query) | Q(address__iregex=search_query)
+            )
+
+        # Annotate avg_rating with Coalesce and output_field to avoid mixed type error
+        shops_qs = shops_qs.annotate(
+            avg_rating=Coalesce(
+                Avg('ratings__rating'),
+                Value(0.0, output_field=FloatField())
+            ),
+            review_count=Count(
+                'ratings',
+                filter=Q(ratings__review__isnull=False) & ~Q(ratings__review__exact='')
+            )
+        ).order_by('-avg_rating', '-review_count')
+
+        shops_list = [
+            {
+                "id": shop.id,
+                "name": shop.name,
+                "address": shop.address,
+                "avg_rating": round(shop.avg_rating, 2),
+                "review_count": shop.review_count
+            }
+            for shop in shops_qs
+        ]
+
+        return Response({"shops": shops_list}, status=200)
