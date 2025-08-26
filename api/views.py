@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Avg
 
 from .models import Shop, Service, RatingReview, ServiceCategory, Slot, SlotBooking
-from .serializers import ShopSerializer, ServiceSerializer, RatingReviewSerializer, ServiceCategorySerializer, SlotSerializer, SlotBookingSerializer
+from .serializers import ShopSerializer, ServiceSerializer, RatingReviewSerializer, ServiceCategorySerializer, SlotSerializer, SlotBookingSerializer, ShopDetailSerializer
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
 from math import radians, cos, sin, asin, sqrt
@@ -323,7 +323,7 @@ class AllShopsListView(APIView):
     def get(self, request):
         user = request.user
         if getattr(user, 'role', None) != 'user':
-            return Response({"detail": "Only users can view shops."}, status=403)
+            return Response({"detail": "Only users can view shops."}, status=status.HTTP_403_FORBIDDEN)
 
         search_query = request.query_params.get('search', '')
         user_location = request.data.get("location")  # payload { "location": "12.345,67.890" }
@@ -385,4 +385,37 @@ class AllShopsListView(APIView):
             key=lambda x: (x["distance"], -x["avg_rating"], -x["review_count"])
         )
 
-        return Response({"shops": shops_list}, status=200)
+        return Response({"shops": shops_list}, status=status.HTTP_200_OK)
+
+class ShopDetailView(APIView):
+    """
+    Fetch detailed information for a single shop:
+        - shop name, address, location, avg_rating, review_count,
+        - about_us, start_at, close_at, shop_img, close_days,
+        - services (active only), reviews (for this shop only)
+    No distance calculation.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, shop_id):
+        user = request.user
+        if getattr(user, 'role', None) != 'user':
+            return Response({"detail": "Only users can view shops."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            shop = Shop.objects.annotate(
+                avg_rating=Coalesce(
+                    Avg('ratings__rating'),
+                    0.0
+                ),
+                review_count=Count(
+                    'ratings',
+                    filter=Q(ratings__review__isnull=False) & ~Q(ratings__review__exact='')
+                )
+            ).get(id=shop_id)
+        except Shop.DoesNotExist:
+            return Response({"detail": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+        serializer = ShopDetailSerializer(shop, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)

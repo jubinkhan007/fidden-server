@@ -154,3 +154,73 @@ class SlotBookingSerializer(serializers.ModelSerializer):
         slot.save(update_fields=['capacity_left'])
 
         return booking
+    
+class ShopDetailSerializer(serializers.ModelSerializer):
+    owner_id = serializers.IntegerField(source='owner.id', read_only=True)
+    avg_rating = serializers.FloatField(read_only=True)
+    review_count = serializers.IntegerField(read_only=True)
+    distance = serializers.FloatField(read_only=True)  # in meters
+    services = serializers.SerializerMethodField()
+    reviews = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Shop
+        fields = [
+            'id', 'name', 'address', 'location', 'capacity', 'start_at',
+            'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id',
+            'avg_rating', 'review_count', 'distance', 'services', 'reviews'
+        ]
+
+    def get_services(self, obj):
+        services = obj.services.filter(is_active=True)
+        request = self.context.get('request')
+        return [
+            {
+                'id': s.id,
+                'title': s.title,
+                'description': s.description,
+                'price': s.price,
+                'discount_price': s.discount_price,
+                'service_img': (
+                    request.build_absolute_uri(s.service_img.url)
+                    if s.service_img and request else s.service_img.url if s.service_img else None
+                )
+            }
+            for s in services
+        ]
+
+    def get_reviews(self, obj):
+        reviews = obj.ratings.all().order_by('-created_at')
+        request = self.context.get('request')
+        return [
+            {
+                'id': r.id,
+                'service': r.service.id,
+                'user': r.user.id if r.user else None,
+                'user_name': r.user.name if r.user and r.user.name else "Anonymous",
+                'profile_image': (
+                    request.build_absolute_uri(r.user.profile_image.url)
+                    if getattr(r.user, 'profile_image', None) and request else None
+                ),
+                'rating': r.rating,
+                'review': r.review,
+                'review_img': (
+                    request.build_absolute_uri(r.review_img.url)
+                    if r.review_img and request else r.review_img.url if r.review_img else None
+                ),
+                'created_at': r.created_at
+            }
+            for r in reviews
+        ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        request = self.context.get('request')
+        rep['shop_img'] = (
+            request.build_absolute_uri(instance.shop_img.url)
+            if instance.shop_img and request else instance.shop_img.url if instance.shop_img else None
+        )
+        # Round avg_rating to 1 decimal
+        if 'avg_rating' in rep and rep['avg_rating'] is not None:
+            rep['avg_rating'] = round(rep['avg_rating'], 1)
+        return rep
