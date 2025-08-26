@@ -1,5 +1,5 @@
-# Use python:3.9-slim
-FROM python:3.9-slim
+# Use python:3.11-slim
+FROM python:3.11-slim
 
 # Prevent Python from writing .pyc files
 ENV PYTHONDONTWRITEBYTECODE 1
