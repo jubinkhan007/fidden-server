@@ -328,6 +328,7 @@ class AllShopsListView(APIView):
             return Response({"detail": "Only users can view shops."}, status=status.HTTP_403_FORBIDDEN)
 
         search_query = request.query_params.get('search', '')
+        top = request.query_params.get('top')
         user_location = request.data.get("location")  # payload { "location": "12.345,67.890" }
 
         shops_qs = Shop.objects.all()
@@ -386,6 +387,12 @@ class AllShopsListView(APIView):
             shops_list,
             key=lambda x: (x["distance"], -x["avg_rating"], -x["review_count"])
         )
+        if top:
+            try:
+                top = int(top)
+                shops_list = shops_list[:top]
+            except ValueError:
+                return Response({"detail": "Invalid 'top' parameter. Must be an integer."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({"shops": shops_list}, status=status.HTTP_200_OK)
 
@@ -443,6 +450,7 @@ class AllServicesListView(APIView):
             return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
 
         search_query = request.query_params.get("search", "")
+        top = request.query_params.get("top")
 
         services_qs = (
             Service.objects.filter(is_active=True)
@@ -463,6 +471,14 @@ class AllServicesListView(APIView):
 
         # ✅ Apply sorting: rating first, then review_count
         services_qs = services_qs.order_by("-avg_rating", "-review_count")
+
+        # Limit results if 'top' param is provided
+        if top:
+            try:
+                top = int(top)
+                services_qs = services_qs[:top]
+            except ValueError:
+                return Response({"detail": "Invalid 'top' parameter. Must be an integer."}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = ServiceListSerializer(services_qs, many=True, context={"request": request})
         return Response({"services": serializer.data}, status=status.HTTP_200_OK)
