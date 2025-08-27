@@ -19,7 +19,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-default-key')
 DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = ["*"]#os.getenv('ALLOWED_HOSTS', '*').split(',')
+ALLOWED_HOSTS = ["*"] #os.getenv('ALLOWED_HOSTS', '*').split(',')
 
 # ==============================
 # Installed Apps
