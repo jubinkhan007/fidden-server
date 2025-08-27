@@ -27,6 +27,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.db.models import Avg, Count, Q, Value, FloatField, F
 from django.db.models.functions import Coalesce
+from .pagination import ServicesCursorPagination
 
 
 
@@ -440,6 +441,7 @@ class AllServicesListView(APIView):
     Sorted by:
         1. avg_rating (desc)
         2. review_count (desc)
+    Supports cursor-based pagination with optional 'top' param for page size.
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -450,7 +452,6 @@ class AllServicesListView(APIView):
             return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
 
         search_query = request.query_params.get("search", "")
-        top = request.query_params.get("top")
 
         services_qs = (
             Service.objects.filter(is_active=True)
@@ -469,19 +470,12 @@ class AllServicesListView(APIView):
                 Q(title__iregex=search_query) | Q(shop__name__iregex=search_query)
             )
 
-        # ✅ Apply sorting: rating first, then review_count
-        services_qs = services_qs.order_by("-avg_rating", "-review_count")
+        # Cursor pagination will handle ordering and page size
+        paginator = ServicesCursorPagination()
+        page = paginator.paginate_queryset(services_qs, request)
 
-        # Limit results if 'top' param is provided
-        if top:
-            try:
-                top = int(top)
-                services_qs = services_qs[:top]
-            except ValueError:
-                return Response({"detail": "Invalid 'top' parameter. Must be an integer."}, status=status.HTTP_400_BAD_REQUEST)
-
-        serializer = ServiceListSerializer(services_qs, many=True, context={"request": request})
-        return Response({"services": serializer.data}, status=status.HTTP_200_OK)
+        serializer = ServiceListSerializer(page, many=True, context={"request": request})
+        return paginator.get_paginated_response(serializer.data)
 
 class ServiceDetailView(APIView):
     """
