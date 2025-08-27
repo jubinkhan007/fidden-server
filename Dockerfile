@@ -1,30 +1,41 @@
+# Use official Python 3.13 slim image
 FROM python:3.13-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app \
-    DJANGO_SETTINGS_MODULE=fidden.settings
+# Prevent Python from writing .pyc files and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
+# Set working directory
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies and tzdata non-interactively
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        curl \
+        tzdata && \
+    ln -fs /usr/share/zoneinfo/Asia/Dhaka /etc/localtime && \
+    echo "Asia/Dhaka" > /etc/timezone && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
+# Ensure Python & Django pick the timezone
+ENV TZ=Asia/Dhaka
+
+# Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
+# Copy project code
 COPY . .
 
-# Fail fast if project files missing
-RUN test -f /app/manage.py && test -d /app/fidden || (echo "ERROR: Project files missing!" && exit 1)
+# Collect static files
+RUN python manage.py collectstatic --noinput
 
+# Expose port
 EXPOSE 8090
 
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8090", "--workers=4", "--threads=2", "--timeout=120"]
+# Default command
+CMD ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8090", "--workers", "3", "--threads", "2"]

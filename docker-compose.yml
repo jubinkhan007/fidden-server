@@ -1,18 +1,30 @@
+version: "3.9"
+
 services:
   web:
     build: .
     container_name: fidden_web
     working_dir: /app
-    command: ["gunicorn", "fidden.wsgi:application", "--chdir", "/app", "--bind", "0.0.0.0:8090"]
+    command: >
+      gunicorn fidden.wsgi:application
+      --chdir /app
+      --bind 0.0.0.0:8090
     volumes:
       - media:/app/media
       - staticfiles:/app/staticfiles
+      - ./:/app
     ports:
       - "8090:8090"
     depends_on:
       - redis
     env_file:
       - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8090/health/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   celery:
     build: .
@@ -23,26 +35,48 @@ services:
       - ./:/app
     depends_on:
       - redis
+      - web
     env_file:
       - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A fidden status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   celery-beat:
     build: .
     container_name: fidden_celery_beat
     working_dir: /app
-    command: celery -A fidden beat --loglevel=info
+    command: >
+      sh -c "until python manage.py migrate; do echo 'Waiting for DB'; sleep 3; done;
+             celery -A fidden beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     volumes:
       - ./:/app
     depends_on:
       - redis
+      - web
     env_file:
       - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep '[c]elery beat' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   redis:
     image: redis:8
     container_name: fidden_redis
     ports:
-      - "6385:6385"
+      - "6385:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   media:

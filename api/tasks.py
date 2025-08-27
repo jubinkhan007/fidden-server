@@ -35,7 +35,7 @@ def prefill_slots(self, days_ahead=7):
                 if (shop.close_days or []) and weekday in shop.close_days:
                     continue
 
-                services = shop.services.filter(is_active=True, duration__isnull=False)
+                services = shop.services.filter(is_active=True)
                 for service in services:
                     duration = service.duration or 30
                     start_dt = _aware(datetime.combine(date, shop.start_at))
