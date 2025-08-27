@@ -7,7 +7,17 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Avg
 
 from .models import Shop, Service, RatingReview, ServiceCategory, Slot, SlotBooking
-from .serializers import ShopSerializer, ServiceSerializer, RatingReviewSerializer, ServiceCategorySerializer, SlotSerializer, SlotBookingSerializer, ShopDetailSerializer
+from .serializers import (
+    ShopSerializer, 
+    ServiceSerializer, 
+    RatingReviewSerializer, 
+    ServiceCategorySerializer, 
+    SlotSerializer, 
+    SlotBookingSerializer, 
+    ShopDetailSerializer, 
+    ServiceListSerializer,
+    ServiceDetailSerializer
+)
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
 from math import radians, cos, sin, asin, sqrt
@@ -49,7 +59,6 @@ class ShopListCreateView(APIView):
             return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
 class ShopRetrieveUpdateDestroyView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
@@ -83,7 +92,6 @@ class ShopRetrieveUpdateDestroyView(APIView):
         shop.delete()
         return Response({"success": True, "message": "Shop deleted successfully."}, status=status.HTTP_200_OK)
 
-
 class ServiceCategoryListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
@@ -92,7 +100,6 @@ class ServiceCategoryListView(APIView):
         categories = ServiceCategory.objects.all()
         serializer = ServiceCategorySerializer(categories, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
 
 class ServiceListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -117,7 +124,6 @@ class ServiceListCreateView(APIView):
             service = serializer.save(shop=shop)
             return Response(ServiceSerializer(service, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class ServiceRetrieveUpdateDestroyView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -167,7 +173,6 @@ class ServiceRetrieveUpdateDestroyView(APIView):
         service.delete()
         return Response({"success": True, "message": "Service deleted successfully."}, status=status.HTTP_200_OK)
 
-
 class UserRatingReviewView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -207,7 +212,6 @@ class UserRatingReviewView(APIView):
             review = serializer.save()
             return Response(RatingReviewSerializer(review, context={'request': request}).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class SlotListView(APIView):
     permission_classes = [IsAuthenticated]
@@ -253,7 +257,6 @@ class SlotListView(APIView):
             })
         return Response({"slots": results}, status=200)
 
-
 class SlotBookingView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -262,7 +265,6 @@ class SlotBookingView(APIView):
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
         return Response(SlotBookingSerializer(booking).data, status=status.HTTP_201_CREATED)
-
 
 class CancelSlotBookingView(APIView):
     def post(self, request, booking_id):  # <- match URL param
@@ -418,4 +420,87 @@ class ShopDetailView(APIView):
 
 
         serializer = ShopDetailSerializer(shop, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class AllServicesListView(APIView):
+    """
+    Fetch all active services with:
+        - title, price, discount_price
+        - shop_id, shop_address
+        - avg_rating, review_count
+        - service_img
+    Supports optional search (?search=...).
+    Sorted by:
+        1. avg_rating (desc)
+        2. review_count (desc)
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if getattr(user, "role", None) != "user":
+            return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
+
+        search_query = request.query_params.get("search", "")
+
+        services_qs = (
+            Service.objects.filter(is_active=True)
+            .select_related("shop")
+            .annotate(
+                avg_rating=Coalesce(Avg("ratings__rating"), Value(0.0, output_field=FloatField())),
+                review_count=Count(
+                    "ratings",
+                    filter=Q(ratings__review__isnull=False) & ~Q(ratings__review__exact=""),
+                ),
+            )
+        )
+
+        if search_query:
+            services_qs = services_qs.filter(
+                Q(title__iregex=search_query) | Q(shop__name__iregex=search_query)
+            )
+
+        # ✅ Apply sorting: rating first, then review_count
+        services_qs = services_qs.order_by("-avg_rating", "-review_count")
+
+        serializer = ServiceListSerializer(services_qs, many=True, context={"request": request})
+        return Response({"services": serializer.data}, status=status.HTTP_200_OK)
+
+class ServiceDetailView(APIView):
+    """
+    Get details of a specific service:
+        - service_img, title, price, discount_price
+        - description, duration
+        - shop_id, shop_name
+        - avg_rating, review_count
+        - reviews (id, shop, user, user_name, user_img, rating, review)
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, service_id):
+        user = request.user
+        if getattr(user, "role", None) != "user":
+            return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
+
+        service = (
+            Service.objects.filter(id=service_id, is_active=True)
+            .select_related("shop")
+            .annotate(
+                avg_rating=Coalesce(Avg("ratings__rating"), Value(0.0, output_field=FloatField())),
+                review_count=Count(
+                    "ratings",
+                    filter=Q(ratings__review__isnull=False) & ~Q(ratings__review__exact=""),
+                ),
+            )
+            .first()
+        )
+
+        if not service:
+            return Response({"detail": "Service not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ServiceDetailSerializer(service, context={"request": request})
+
+        # Return serializer data directly, no extra "service" key
         return Response(serializer.data, status=status.HTTP_200_OK)

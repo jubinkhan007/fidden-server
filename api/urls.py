@@ -11,6 +11,8 @@ from .views import (
     CancelSlotBookingView,
     AllShopsListView,
     ShopDetailView,
+    AllServicesListView,
+    ServiceDetailView,
 )
 
 urlpatterns = [
@@ -25,5 +27,7 @@ urlpatterns = [
     path('slot-booking/<int:booking_id>/cancel/', CancelSlotBookingView.as_view(), name='slot-booking-cancel'),
     path('users/shops/', AllShopsListView.as_view(), name='all-shops-list-user'),
     path('users/shops/details/<int:shop_id>/', ShopDetailView.as_view(), name='shop-detail-user'),
+    path("users/services/", AllServicesListView.as_view(), name="all-services"),
+    path("users/services/<int:service_id>/", ServiceDetailView.as_view(), name="service-detail"),
 
 ]
