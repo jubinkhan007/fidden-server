@@ -355,7 +355,7 @@ class AllShopsListView(APIView):
             try:
                 user_lon, user_lat = map(float, user_location.split(","))
             except Exception:
-                return Response({"detail": "Invalid location format. Use 'lon,lat'."}, status=400)
+                return Response({"detail": "Invalid location format. Use 'lon,lat'."}, status=status.HTTP_400_BAD_REQUEST)
 
         for shop in shops_qs:
             shop_lon, shop_lat = None, None
@@ -376,7 +376,7 @@ class AllShopsListView(APIView):
                 "location": shop.location,
                 "avg_rating": round(shop.avg_rating, 2),
                 "review_count": shop.review_count,
-                "distance": round(distance, 2) if distance is not None else float("inf")  # in meters
+                "distance": round(distance, 2) if distance is not None else None  # in meters
             })
 
         # Sorting priorities:
