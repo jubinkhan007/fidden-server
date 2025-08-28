@@ -238,6 +238,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "title",
             "price",
             "discount_price",
+            "category",
             "shop_id",
             "shop_address",
             "avg_rating",

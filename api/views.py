@@ -29,6 +29,9 @@ from django.db.models import Avg, Count, Q, Value, FloatField, F
 from django.db.models.functions import Coalesce
 from .pagination import ServicesCursorPagination
 
+from urllib.parse import urlencode
+from collections import OrderedDict
+
 
 
 class ShopListCreateView(APIView):
@@ -320,8 +323,8 @@ class AllShopsListView(APIView):
         dlat = lat2 - lat1
         a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
         c = 2 * asin(sqrt(a))
-        km = 6371 * c  # distance in kilometers
-        return km * 1000  # convert to meters
+        km = 6371 * c
+        return km * 1000  # meters
 
     def get(self, request):
         user = request.user
@@ -329,11 +332,21 @@ class AllShopsListView(APIView):
             return Response({"detail": "Only users can view shops."}, status=status.HTTP_403_FORBIDDEN)
 
         search_query = request.query_params.get('search', '')
-        top = request.query_params.get('top')
         user_location = request.data.get("location")  # payload { "location": "12.345,67.890" }
+        page_size = request.query_params.get('top', 10)
+        cursor = request.query_params.get('cursor', 0)
+
+        try:
+            page_size = int(page_size)
+        except ValueError:
+            page_size = 10
+
+        try:
+            cursor = int(cursor)
+        except ValueError:
+            cursor = 0
 
         shops_qs = Shop.objects.all()
-
         if search_query:
             shops_qs = shops_qs.filter(
                 Q(name__iregex=search_query) | Q(address__iregex=search_query)
@@ -377,25 +390,31 @@ class AllShopsListView(APIView):
                 "location": shop.location,
                 "avg_rating": round(shop.avg_rating, 2),
                 "review_count": shop.review_count,
-                "distance": round(distance, 2) if distance is not None else None  # in meters
+                "distance": round(distance, 2) if distance is not None else None
             })
 
-        # Sorting priorities:
-        # 1. distance (nearest first)
-        # 2. avg_rating (highest first)
-        # 3. review_count (highest first)
+        # Custom sorting: distance → avg_rating → review_count
         shops_list = sorted(
             shops_list,
-            key=lambda x: (x["distance"], -x["avg_rating"], -x["review_count"])
+            key=lambda x: (x["distance"] if x["distance"] is not None else float("inf"),
+                           -x["avg_rating"], -x["review_count"])
         )
-        if top:
-            try:
-                top = int(top)
-                shops_list = shops_list[:top]
-            except ValueError:
-                return Response({"detail": "Invalid 'top' parameter. Must be an integer."}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response({"shops": shops_list}, status=status.HTTP_200_OK)
+        # Apply manual cursor pagination
+        start = cursor
+        end = cursor + page_size
+        results = shops_list[start:end]
+
+        next_cursor = end if end < len(shops_list) else None
+        prev_cursor = max(0, start - page_size) if start > 0 else None
+
+        base_url = request.build_absolute_uri().split('?')[0]
+
+        return Response(OrderedDict([
+            ("next", f"{base_url}?{urlencode({'cursor': next_cursor, 'top': page_size})}" if next_cursor is not None else None),
+            ("previous", f"{base_url}?{urlencode({'cursor': prev_cursor, 'top': page_size})}" if prev_cursor is not None else None),
+            ("results", results)
+        ]), status=status.HTTP_200_OK)
 
 class ShopDetailView(APIView):
     """
@@ -452,6 +471,7 @@ class AllServicesListView(APIView):
             return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
 
         search_query = request.query_params.get("search", "")
+        category_id = request.query_params.get("category")
 
         services_qs = (
             Service.objects.filter(is_active=True)
@@ -464,6 +484,9 @@ class AllServicesListView(APIView):
                 ),
             )
         )
+
+        if category_id:  # <-- Add this block
+            services_qs = services_qs.filter(category_id=category_id)
 
         if search_query:
             services_qs = services_qs.filter(
