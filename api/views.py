@@ -492,6 +492,7 @@ class AllServicesListView(APIView):
 
         search_query = request.query_params.get("search", "")
         category_id = request.query_params.get("category")
+        shop_id = request.query_params.get("shop")
 
         services_qs = (
             Service.objects.filter(is_active=True)
@@ -507,6 +508,9 @@ class AllServicesListView(APIView):
 
         if category_id:  # <-- Add this block
             services_qs = services_qs.filter(category_id=category_id)
+
+        if shop_id:  # <-- Add this block
+            services_qs = services_qs.filter(shop_id=shop_id)
 
         if search_query:
             services_qs = services_qs.filter(
