@@ -21,7 +21,8 @@ from .serializers import (
     RatingReviewSerializer, 
     ServiceCategorySerializer, 
     SlotSerializer, 
-    SlotBookingSerializer, 
+    SlotBookingSerializer,
+    ShopListSerializer, 
     ShopDetailSerializer, 
     ServiceListSerializer,
     ServiceDetailSerializer,
@@ -315,34 +316,15 @@ class CancelSlotBookingView(APIView):
 
 class AllShopsListView(APIView):
     """
-    Fetch all shops with id, name, address, avg_rating, review_count, and location.
+    Fetch all shops with id, name, address, avg_rating, review_count, location, distance, shop_img, badge.
     Sort priority:
-        1. Nearest to provided location (lat/lon in request.data["location"])
+        1. Nearest to provided location (optional, lat/lon in request.data["location"])
         2. Higher avg_rating
         3. Higher review_count
-    Works with or without search query (?search=...).
+    Supports search (?search=...) and manual cursor pagination.
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-
-    def get_image_url(self, request, file_field):
-        """
-        Return full absolute URL for an ImageField/FileField.
-        Returns None if the file doesn't exist.
-        """
-        if file_field and file_field.name and file_field.storage.exists(file_field.name):
-            return request.build_absolute_uri(file_field.url)
-        return None
-
-    def haversine(self, lon1, lat1, lon2, lat2):
-        """Calculate the great-circle distance between two points (in meters)."""
-        lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-        dlon = lon2 - lon1
-        dlat = lat2 - lat1
-        a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-        c = 2 * asin(sqrt(a))
-        km = 6371 * c
-        return km * 1000  # meters
 
     def get(self, request):
         user = request.user
@@ -350,7 +332,7 @@ class AllShopsListView(APIView):
             return Response({"detail": "Only users can view shops."}, status=status.HTTP_403_FORBIDDEN)
 
         search_query = request.query_params.get('search', '')
-        user_location = request.data.get("location")  # payload { "location": "12.345,67.890" }
+        user_location = request.data.get("location")  # optional
         page_size = request.query_params.get('top', 10)
         cursor = request.query_params.get('cursor', 0)
 
@@ -371,56 +353,30 @@ class AllShopsListView(APIView):
             )
 
         shops_qs = shops_qs.annotate(
-            avg_rating=Coalesce(
-                Avg('ratings__rating'),
-                Value(0.0, output_field=FloatField())
-            ),
+            avg_rating=Coalesce(Avg('ratings__rating'), Value(0.0, output_field=FloatField())),
             review_count=Count(
                 'ratings',
                 filter=Q(ratings__review__isnull=False) & ~Q(ratings__review__exact='')
             )
         )
 
-        shops_list = []
-        user_lon, user_lat = None, None
-        if user_location:
-            try:
-                user_lon, user_lat = map(float, user_location.split(","))
-            except Exception:
-                return Response({"detail": "Invalid location format. Use 'lon,lat'."}, status=status.HTTP_400_BAD_REQUEST)
+        # Sort by avg_rating and review_count first; distance sorted later
+        shops_qs = shops_qs.order_by('-avg_rating', '-review_count')
 
-        for shop in shops_qs:
-            shop_lon, shop_lat = None, None
-            if shop.location:
-                try:
-                    shop_lon, shop_lat = map(float, shop.location.split(","))
-                except Exception:
-                    pass
+        # Serialize with distance and badge
+        serializer = ShopListSerializer(
+            shops_qs, many=True, context={"request": request, "user_location": user_location}
+        )
+        shops_list = serializer.data
 
-            distance = None
-            if user_lon is not None and user_lat is not None and shop_lon is not None and shop_lat is not None:
-                distance = self.haversine(user_lon, user_lat, shop_lon, shop_lat)
-
-            shops_list.append({
-                "id": shop.id,
-                "name": shop.name,
-                "address": shop.address,
-                "location": shop.location,
-                "avg_rating": round(shop.avg_rating, 2),
-                "review_count": shop.review_count,
-                "distance": round(distance, 2) if distance is not None else None,
-                "shop_img": self.get_image_url(request, shop.shop_img),
-                "badge": "Top"
-            })
-
-        # Custom sorting: distance → avg_rating → review_count
+        # Sort by distance → avg_rating → review_count
         shops_list = sorted(
             shops_list,
             key=lambda x: (x["distance"] if x["distance"] is not None else float("inf"),
                            -x["avg_rating"], -x["review_count"])
         )
 
-        # Apply manual cursor pagination
+        # Manual cursor pagination
         start = cursor
         end = cursor + page_size
         results = shops_list[start:end]

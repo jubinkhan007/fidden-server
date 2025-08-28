@@ -165,6 +165,49 @@ class SlotBookingSerializer(serializers.ModelSerializer):
         slot.save(update_fields=['capacity_left'])
 
         return booking
+
+class ShopListSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    address = serializers.CharField()
+    location = serializers.CharField(allow_null=True)
+    avg_rating = serializers.FloatField()
+    review_count = serializers.IntegerField()
+    distance = serializers.SerializerMethodField()
+    shop_img = serializers.SerializerMethodField()
+    badge = serializers.SerializerMethodField()  # Added badge as method field
+
+    def get_shop_img(self, obj):
+        request = self.context.get("request")
+        if obj.shop_img and obj.shop_img.name and obj.shop_img.storage.exists(obj.shop_img.name):
+            return request.build_absolute_uri(obj.shop_img.url)
+        return None
+
+    def get_distance(self, obj):
+        """
+        Calculate distance from user's location passed in context:
+        context = {"user_location": "lon,lat"}  (optional)
+        """
+        user_location = self.context.get("user_location")
+        if not user_location or not obj.location:
+            return None
+        try:
+            user_lon, user_lat = map(float, user_location.split(","))
+            shop_lon, shop_lat = map(float, obj.location.split(","))
+        except Exception:
+            return None
+
+        # Haversine formula
+        lon1, lat1, lon2, lat2 = map(radians, [user_lon, user_lat, shop_lon, shop_lat])
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+        c = 2 * asin(sqrt(a))
+        km = 6371 * c
+        return round(km * 1000, 2)  # meters
+
+    def get_badge(self, obj):
+        return "Top"
     
 class ShopDetailSerializer(serializers.ModelSerializer):
     owner_id = serializers.IntegerField(source='owner.id', read_only=True)
