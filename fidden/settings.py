@@ -1,7 +1,11 @@
 import os
 from pathlib import Path
 from datetime import timedelta
+from dotenv import load_dotenv
 
+
+# Load .env file
+load_dotenv()
 # ==============================
 # Base Directory
 # ==============================

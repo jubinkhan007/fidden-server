@@ -6,7 +6,8 @@ from .models import (
     RatingReview, 
     Slot, 
     SlotBooking, 
-    FavoriteShop
+    FavoriteShop,
+    Promotion
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -410,3 +411,8 @@ class FavoriteShopSerializer(serializers.ModelSerializer):
             return round(km*1000, 2)  # meters
         except:
             return None
+
+class PromotionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Promotion
+        fields = ['id', 'title', 'subtitle', 'amount', 'is_active', 'created_at']

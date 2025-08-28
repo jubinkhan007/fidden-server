@@ -13,7 +13,8 @@ from .models import (
     ServiceCategory, 
     Slot, 
     SlotBooking, 
-    FavoriteShop
+    FavoriteShop,
+    Promotion
 )
 from .serializers import (
     ShopSerializer, 
@@ -26,7 +27,8 @@ from .serializers import (
     ShopDetailSerializer, 
     ServiceListSerializer,
     ServiceDetailSerializer,
-    FavoriteShopSerializer
+    FavoriteShopSerializer,
+    PromotionSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
@@ -541,4 +543,13 @@ class FavoriteShopView(APIView):
         user_location = request.data.get("location")  # optional: "lon,lat"
         favorites = FavoriteShop.objects.filter(user=request.user).select_related('shop')
         serializer = FavoriteShopSerializer(favorites, many=True, context={'request': request, 'user_location': user_location})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class PromotionListView(APIView):
+    """
+    GET: Retrieve all active promotions
+    """
+    def get(self, request):
+        promotions = Promotion.objects.filter(is_active=True).order_by('-created_at')
+        serializer = PromotionSerializer(promotions, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)

@@ -31,6 +31,8 @@ def prefill_slots(self, days_ahead=7):
                 date = today_local + timedelta(days=offset)
                 weekday = date.strftime("%A").lower()
 
+                # logger.debug(f"[Prefill Slots] Creating slots for shop={shop.name} on {date}")
+
                 # Skip if shop is closed that day
                 if (shop.close_days or []) and weekday in shop.close_days:
                     continue
@@ -38,11 +40,20 @@ def prefill_slots(self, days_ahead=7):
                 services = shop.services.filter(is_active=True)
                 for service in services:
                     duration = service.duration or 30
-                    start_dt = _aware(datetime.combine(date, shop.start_at))
-                    end_dt = _aware(datetime.combine(date, shop.close_at))
+                    start_dt = timezone.make_aware(
+                        datetime.combine(date, shop.start_at),
+                        timezone.get_current_timezone()
+                    )
+                    end_dt = timezone.make_aware(
+                        datetime.combine(date, shop.close_at),
+                        timezone.get_current_timezone()
+                    )
+
+                    if end_dt <= start_dt:
+                        continue
+
                     current = start_dt
                     batch = []
-
                     while current + timedelta(minutes=duration) <= end_dt:
                         batch.append(
                             Slot(

@@ -165,3 +165,21 @@ class FavoriteShop(models.Model):
 
     def __str__(self):
         return f"{self.user} ❤️ {self.shop.name}"
+
+class Promotion(models.Model):
+    title = models.CharField(max_length=255)
+    subtitle = models.CharField(max_length=500, blank=True, null=True)
+    amount = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2,
+        help_text="Discount amount or promotion value"
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} - {self.amount}"
