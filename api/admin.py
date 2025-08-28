@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Shop, Service, ServiceCategory, RatingReview
+from .models import Shop, Service, ServiceCategory, RatingReview, Promotion
 
 class ServiceInline(admin.TabularInline):
     model = Service
@@ -31,3 +31,10 @@ class RatingReviewAdmin(admin.ModelAdmin):
             return obj.user.name or "Anonymous"
         return "Anonymous"
     user_display.short_description = "User"
+
+@admin.register(Promotion)
+class PromotionAdmin(admin.ModelAdmin):
+    list_display = ('title', 'subtitle', 'amount', 'is_active', 'created_at')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('title', 'subtitle')
+    ordering = ('-created_at',)

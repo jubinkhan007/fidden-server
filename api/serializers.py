@@ -300,7 +300,8 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "avg_rating",
             "review_count",
             "service_img",
-            "badge", 
+            "badge",
+            "is_active" 
         ]
     
     def get_badge(self, obj):

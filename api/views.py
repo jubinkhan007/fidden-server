@@ -451,6 +451,10 @@ class AllServicesListView(APIView):
         search_query = request.query_params.get("search", "")
         category_id = request.query_params.get("category")
         shop_id = request.query_params.get("shop")
+        min_price = request.query_params.get("min_price")
+        max_price = request.query_params.get("max_price")
+        max_duration = request.query_params.get("max_duration")
+        min_rating = request.query_params.get("min_rating")
 
         services_qs = (
             Service.objects.filter(is_active=True)
@@ -469,6 +473,20 @@ class AllServicesListView(APIView):
 
         if shop_id:  # <-- Add this block
             services_qs = services_qs.filter(shop_id=shop_id)
+
+        # Price filter
+        if min_price:
+            services_qs = services_qs.filter(discount_price__gte=min_price)
+        if max_price:
+            services_qs = services_qs.filter(discount_price__lte=max_price)
+
+        # Duration filter
+        if max_duration:
+            services_qs = services_qs.filter(duration__lte=max_duration)
+
+        # Minimum rating filter
+        if min_rating:
+            services_qs = services_qs.filter(avg_rating__gte=float(min_rating))
 
         if search_query:
             services_qs = services_qs.filter(
