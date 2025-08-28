@@ -145,3 +145,23 @@ class SlotBooking(models.Model):
 
     def __str__(self):
         return f"{self.user} → {self.service.title} @ {self.shop.name} ({timezone.localtime(self.start_time)})"
+
+class FavoriteShop(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='favorite_shops'
+    )
+    shop = models.ForeignKey(
+        Shop,
+        on_delete=models.CASCADE,
+        related_name='favorited_by'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'shop')  # Prevent the same shop from being favorited multiple times by the same user
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user} ❤️ {self.shop.name}"

@@ -6,7 +6,15 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg
 
-from .models import Shop, Service, RatingReview, ServiceCategory, Slot, SlotBooking
+from .models import (
+    Shop, 
+    Service, 
+    RatingReview, 
+    ServiceCategory, 
+    Slot, 
+    SlotBooking, 
+    FavoriteShop
+)
 from .serializers import (
     ShopSerializer, 
     ServiceSerializer, 
@@ -16,7 +24,8 @@ from .serializers import (
     SlotBookingSerializer, 
     ShopDetailSerializer, 
     ServiceListSerializer,
-    ServiceDetailSerializer
+    ServiceDetailSerializer,
+    FavoriteShopSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
@@ -316,6 +325,15 @@ class AllShopsListView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def get_image_url(self, request, file_field):
+        """
+        Return full absolute URL for an ImageField/FileField.
+        Returns None if the file doesn't exist.
+        """
+        if file_field and file_field.name and file_field.storage.exists(file_field.name):
+            return request.build_absolute_uri(file_field.url)
+        return None
+
     def haversine(self, lon1, lat1, lon2, lat2):
         """Calculate the great-circle distance between two points (in meters)."""
         lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
@@ -390,7 +408,9 @@ class AllShopsListView(APIView):
                 "location": shop.location,
                 "avg_rating": round(shop.avg_rating, 2),
                 "review_count": shop.review_count,
-                "distance": round(distance, 2) if distance is not None else None
+                "distance": round(distance, 2) if distance is not None else None,
+                "shop_img": self.get_image_url(request, shop.shop_img),
+                "badge": "Top"
             })
 
         # Custom sorting: distance → avg_rating → review_count
@@ -536,4 +556,29 @@ class ServiceDetailView(APIView):
         serializer = ServiceDetailSerializer(service, context={"request": request})
 
         # Return serializer data directly, no extra "service" key
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class FavoriteShopView(APIView):
+    """
+    POST: Add a shop to favorites (shop_id in body)
+    GET: List all favorite shops of the logged-in user with full shop details
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = FavoriteShopSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        favorite = serializer.save()
+        return Response({
+            "id": favorite.id,
+            "user_id": favorite.user.id,
+            "shop_id": favorite.shop.id,
+            "created_at": favorite.created_at
+        }, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        user_location = request.data.get("location")  # optional: "lon,lat"
+        favorites = FavoriteShop.objects.filter(user=request.user).select_related('shop')
+        serializer = FavoriteShopSerializer(favorites, many=True, context={'request': request, 'user_location': user_location})
         return Response(serializer.data, status=status.HTTP_200_OK)

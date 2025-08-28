@@ -1,5 +1,16 @@
 from rest_framework import serializers
-from .models import Shop, Service, ServiceCategory, RatingReview, Slot, SlotBooking
+from .models import (
+    Shop, 
+    Service, 
+    ServiceCategory, 
+    RatingReview, 
+    Slot, 
+    SlotBooking, 
+    FavoriteShop
+)
+from math import radians, cos, sin, asin, sqrt
+from django.db.models.functions import Coalesce
+from django.db.models import Avg, Count, Q, Value, FloatField
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -230,6 +241,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
     shop_address = serializers.CharField(source="shop.address", read_only=True)
     avg_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
+    badge = serializers.SerializerMethodField()
 
     class Meta:
         model = Service
@@ -244,7 +256,11 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "avg_rating",
             "review_count",
             "service_img",
+            "badge", 
         ]
+    
+    def get_badge(self, obj):
+        return "Trending"
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
@@ -302,3 +318,52 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
         if rep.get("avg_rating") is not None:
             rep["avg_rating"] = round(rep["avg_rating"], 1)
         return rep
+
+class FavoriteShopSerializer(serializers.ModelSerializer):
+    shop_id = serializers.IntegerField(write_only=True, required=False)
+    name = serializers.CharField(source='shop.name', read_only=True)
+    address = serializers.CharField(source='shop.address', read_only=True)
+    location = serializers.CharField(source='shop.location', read_only=True)
+    avg_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
+    distance = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FavoriteShop
+        fields = ['id', 'shop_id', 'name', 'address', 'location', 'avg_rating', 'review_count', 'distance', 'created_at']
+
+    def validate_shop_id(self, value):
+        if not Shop.objects.filter(id=value).exists():
+            raise serializers.ValidationError("Shop does not exist.")
+        return value
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        shop = Shop.objects.get(id=validated_data['shop_id'])
+        favorite, created = FavoriteShop.objects.get_or_create(user=user, shop=shop)
+        return favorite
+
+    def get_avg_rating(self, obj):
+        return obj.shop.ratings.aggregate(avg=Coalesce(Avg('rating'), Value(0.0, output_field=FloatField())))['avg']
+
+    def get_review_count(self, obj):
+        return obj.shop.ratings.aggregate(
+            count=Count('id', filter=Q(review__isnull=False) & ~Q(review__exact=''))
+        )['count']
+
+    def get_distance(self, obj):
+        user_location = self.context.get('user_location')
+        if not user_location or not obj.shop.location:
+            return None
+        try:
+            user_lon, user_lat = map(float, user_location.split(','))
+            shop_lon, shop_lat = map(float, obj.shop.location.split(','))
+            lon1, lat1, lon2, lat2 = map(radians, [user_lon, user_lat, shop_lon, shop_lat])
+            dlon = lon2 - lon1
+            dlat = lat2 - lat1
+            a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+            c = 2*asin(sqrt(a))
+            km = 6371 * c
+            return round(km*1000, 2)  # meters
+        except:
+            return None
