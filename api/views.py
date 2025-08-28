@@ -95,7 +95,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
 class ServiceCategoryListView(APIView):
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         categories = ServiceCategory.objects.all()
