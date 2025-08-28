@@ -455,6 +455,8 @@ class AllServicesListView(APIView):
         max_price = request.query_params.get("max_price")
         max_duration = request.query_params.get("max_duration")
         min_rating = request.query_params.get("min_rating")
+        max_distance = request.query_params.get("max_distance")  # still query param for filtering
+        user_location = request.data.get("location")  # user location from body, format "lon,lat"
 
         services_qs = (
             Service.objects.filter(is_active=True)
@@ -493,11 +495,37 @@ class AllServicesListView(APIView):
                 Q(title__iregex=search_query) | Q(shop__name__iregex=search_query)
             )
 
+        # Convert to list if distance filtering is needed
+        services_list = list(services_qs)
+        if user_location and max_distance:
+            max_distance = float(max_distance)
+
+            def calculate_distance(service):
+                try:
+                    user_lon, user_lat = map(float, user_location.split(","))
+                    shop_lon, shop_lat = map(float, service.shop.location.split(","))
+                except Exception:
+                    return float("inf")
+                # Haversine formula
+                lon1, lat1, lon2, lat2 = map(radians, [user_lon, user_lat, shop_lon, shop_lat])
+                dlon = lon2 - lon1
+                dlat = lat2 - lat1
+                a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+                c = 2 * asin(sqrt(a))
+                km = 6371 * c
+                return km * 1000  # meters
+
+            services_list = [
+                s for s in services_list if calculate_distance(s) <= max_distance
+            ]
+
         # Cursor pagination will handle ordering and page size
         paginator = ServicesCursorPagination()
         page = paginator.paginate_queryset(services_qs, request)
 
-        serializer = ServiceListSerializer(page, many=True, context={"request": request})
+        serializer = ServiceListSerializer(
+            page, many=True, context={"request": request, "user_location": request.data.get("location")}
+        )
         return paginator.get_paginated_response(serializer.data)
 
 class ServiceDetailView(APIView):

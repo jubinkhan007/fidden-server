@@ -286,6 +286,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
     avg_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     badge = serializers.SerializerMethodField()
+    distance = serializers.SerializerMethodField()  # <-- added distance
 
     class Meta:
         model = Service
@@ -301,11 +302,36 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "review_count",
             "service_img",
             "badge",
+             "distance",  # <-- added distance
             "is_active" 
         ]
     
     def get_badge(self, obj):
         return "Trending"
+
+    def get_distance(self, obj):
+        """
+        Calculate distance from user's location passed in context:
+        context = {"user_location": "lon,lat"}  (optional)
+        """
+        user_location = self.context.get("user_location")
+        shop_location = getattr(obj.shop, "location", None)
+        if not user_location or not shop_location:
+            return None
+        try:
+            user_lon, user_lat = map(float, user_location.split(","))
+            shop_lon, shop_lat = map(float, shop_location.split(","))
+        except Exception:
+            return None
+
+        # Haversine formula
+        lon1, lat1, lon2, lat2 = map(radians, [user_lon, user_lat, shop_lon, shop_lat])
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+        a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+        c = 2 * asin(sqrt(a))
+        km = 6371 * c
+        return round(km * 1000, 2)  # meters
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
