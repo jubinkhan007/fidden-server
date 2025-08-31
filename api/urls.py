@@ -32,7 +32,7 @@ urlpatterns = [
     path('users/shops/details/<int:shop_id>/', ShopDetailView.as_view(), name='shop-detail-user'),
     path("users/services/", AllServicesListView.as_view(), name="all-services"),
     path("users/services/<int:service_id>/", ServiceDetailView.as_view(), name="service-detail"),
-    path('favorite-shop/', FavoriteShopView.as_view(), name='favorite-shop'),
+    path('users/favorite-shop/', FavoriteShopView.as_view(), name='favorite-shop'),
     path('promotions/', PromotionListView.as_view(), name='promotion-list'),
     path('users/service-wishlist/', ServiceWishlistView.as_view(), name='service-wishlist'),
 

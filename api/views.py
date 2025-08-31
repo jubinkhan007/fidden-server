@@ -581,6 +581,10 @@ class FavoriteShopView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        user = request.user
+        if getattr(user, "role", None) != "user":
+            return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
+
         serializer = FavoriteShopSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         favorite = serializer.save()
@@ -592,12 +596,20 @@ class FavoriteShopView(APIView):
         }, status=status.HTTP_201_CREATED)
 
     def get(self, request):
+        user = request.user
+        if getattr(user, "role", None) != "user":
+            return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
+
         user_location = request.data.get("location")  # optional: "lon,lat"
         favorites = FavoriteShop.objects.filter(user=request.user).select_related('shop')
         serializer = FavoriteShopSerializer(favorites, many=True, context={'request': request, 'user_location': user_location})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def delete(self, request):
+        user = request.user
+        if getattr(user, "role", None) != "user":
+            return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
+
         favorite_id = request.data.get("id")
         if not favorite_id:
             return Response({"detail": "ID is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -613,6 +625,9 @@ class PromotionListView(APIView):
     """
     GET: Retrieve all active promotions
     """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    
     def get(self, request):
         promotions = Promotion.objects.filter(is_active=True).order_by('-created_at')
         serializer = PromotionSerializer(promotions, many=True)
@@ -628,6 +643,10 @@ class ServiceWishlistView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        user = request.user
+        if getattr(user, "role", None) != "user":
+            return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
+
         serializer = ServiceWishlistSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         wishlist = serializer.save()
@@ -639,6 +658,10 @@ class ServiceWishlistView(APIView):
         }, status=status.HTTP_201_CREATED)
 
     def get(self, request):
+        user = request.user
+        if getattr(user, "role", None) != "user":
+            return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
+
         wishlists = ServiceWishlist.objects.filter(
             user=request.user,
             service__is_active=True
@@ -648,6 +671,10 @@ class ServiceWishlistView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def delete(self, request):
+        user = request.user
+        if getattr(user, "role", None) != "user":
+            return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
+
         wishList_id = request.data.get("id")
         wishlist_item = ServiceWishlist.objects.get(user=request.user, id=wishList_id)
 
