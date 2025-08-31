@@ -10,7 +10,7 @@ services:
       --chdir /app
       --bind 0.0.0.0:8090
     volumes:
-      - media:/app/media
+      - ./media:/app/media
       - staticfiles:/app/staticfiles
       - ./:/app
     ports:
