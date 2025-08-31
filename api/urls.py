@@ -14,7 +14,8 @@ from .views import (
     AllServicesListView,
     ServiceDetailView,
     FavoriteShopView,
-    PromotionListView
+    PromotionListView,
+    ServiceWishlistView
 )
 
 urlpatterns = [
@@ -33,5 +34,6 @@ urlpatterns = [
     path("users/services/<int:service_id>/", ServiceDetailView.as_view(), name="service-detail"),
     path('favorite-shop/', FavoriteShopView.as_view(), name='favorite-shop'),
     path('promotions/', PromotionListView.as_view(), name='promotion-list'),
+    path('users/service-wishlist/', ServiceWishlistView.as_view(), name='service-wishlist'),
 
 ]

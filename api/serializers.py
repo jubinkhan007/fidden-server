@@ -7,7 +7,8 @@ from .models import (
     Slot, 
     SlotBooking, 
     FavoriteShop,
-    Promotion
+    Promotion,
+    ServiceWishlist
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -17,7 +18,22 @@ from django.db.models import Avg, Count, Q, Value, FloatField
 class ServiceCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceCategory
-        fields = ['id', 'name']
+        fields = ['id', 'name', 'sc_img']
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        request = self.context.get('request')
+        
+        if instance.sc_img and instance.sc_img.name:
+            if request:
+                rep['sc_img'] = request.build_absolute_uri(instance.sc_img.url)
+            else:
+                # fallback if request not available
+                rep['sc_img'] = instance.sc_img.url
+        else:
+            rep['sc_img'] = None
+
+        return rep
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -302,7 +318,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "review_count",
             "service_img",
             "badge",
-             "distance",  # <-- added distance
+            "distance",  # <-- added distance
             "is_active" 
         ]
     
@@ -443,3 +459,59 @@ class PromotionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Promotion
         fields = ['id', 'title', 'subtitle', 'amount', 'is_active', 'created_at']
+
+class ServiceWishlistSerializer(serializers.ModelSerializer):
+    # For POST: write-only input
+    service_no = serializers.IntegerField(write_only=True, required=True)
+
+    # For GET: read-only response (use service_id for the field name)
+    service_id = serializers.IntegerField(source='service.id', read_only=True)
+    title = serializers.CharField(source='service.title', read_only=True)
+    price = serializers.DecimalField(source='service.price', max_digits=10, decimal_places=2, read_only=True)
+    discount_price = serializers.DecimalField(source='service.discount_price', max_digits=10, decimal_places=2, read_only=True)
+    category = serializers.CharField(source='service.category.id', read_only=True)
+    shop_id = serializers.IntegerField(source='service.shop.id', read_only=True)
+    shop_name = serializers.CharField(source='service.shop.name', read_only=True)
+    shop_address = serializers.CharField(source='service.shop.address', read_only=True)
+    avg_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
+    badge = serializers.SerializerMethodField()
+    service_img = serializers.SerializerMethodField()
+    is_active = serializers.BooleanField(source='service.is_active', read_only=True)
+
+    class Meta:
+        model = ServiceWishlist
+        fields = [
+            'id', 'service_no', 'service_id', 'title', 'price', 'discount_price', 'category',
+            'shop_id', 'shop_name', 'shop_address',
+            'avg_rating', 'review_count', 'badge', 'service_img', 'is_active', 'created_at'
+        ]
+
+    def validate_service_no(self, value):
+        if not Service.objects.filter(id=value, is_active=True).exists():
+            raise serializers.ValidationError("Active service does not exist.")
+        return value
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        service = Service.objects.get(id=validated_data['service_no'], is_active=True)
+        wishlist, created = ServiceWishlist.objects.get_or_create(user=user, service=service)
+        return wishlist
+
+    def get_avg_rating(self, obj):
+        return obj.service.ratings.aggregate(avg=Coalesce(Avg('rating'), Value(0.0, output_field=FloatField())))['avg']
+
+    def get_review_count(self, obj):
+        return obj.service.ratings.aggregate(
+            count=Count('id', filter=Q(review__isnull=False) & ~Q(review__exact=''))
+        )['count']
+
+    def get_badge(self, obj):
+        avg_rating = self.get_avg_rating(obj)
+        return "Top" if avg_rating and avg_rating >= 4.5 else None
+
+    def get_service_img(self, obj):
+        request = self.context.get('request')
+        if obj.service.service_img and obj.service.service_img.name and obj.service.service_img.storage.exists(obj.service.service_img.name):
+            return request.build_absolute_uri(obj.service.service_img.url) if request else obj.service.service_img.url
+        return None

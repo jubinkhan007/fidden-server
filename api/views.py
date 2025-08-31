@@ -14,7 +14,8 @@ from .models import (
     Slot, 
     SlotBooking, 
     FavoriteShop,
-    Promotion
+    Promotion,
+    ServiceWishlist
 )
 from .serializers import (
     ShopSerializer, 
@@ -28,7 +29,8 @@ from .serializers import (
     ServiceListSerializer,
     ServiceDetailSerializer,
     FavoriteShopSerializer,
-    PromotionSerializer
+    PromotionSerializer,
+    ServiceWishlistSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
@@ -114,7 +116,11 @@ class ServiceCategoryListView(APIView):
 
     def get(self, request):
         categories = ServiceCategory.objects.all()
-        serializer = ServiceCategorySerializer(categories, many=True)
+        serializer = ServiceCategorySerializer(
+            categories, 
+            many=True, 
+            context={'request': request}  # pass request here
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 class ServiceListCreateView(APIView):
@@ -591,6 +597,18 @@ class FavoriteShopView(APIView):
         serializer = FavoriteShopSerializer(favorites, many=True, context={'request': request, 'user_location': user_location})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    def delete(self, request):
+        favorite_id = request.data.get("id")
+        if not favorite_id:
+            return Response({"detail": "ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            favorite = FavoriteShop.objects.get(id=favorite_id, user=request.user)
+            favorite.delete()
+            return Response({"detail": "Favorite shop deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+        except FavoriteShop.DoesNotExist:
+            return Response({"detail": "Favorite shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
 class PromotionListView(APIView):
     """
     GET: Retrieve all active promotions
@@ -599,3 +617,42 @@ class PromotionListView(APIView):
         promotions = Promotion.objects.filter(is_active=True).order_by('-created_at')
         serializer = PromotionSerializer(promotions, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+class ServiceWishlistView(APIView):
+    """
+    POST: Add a service to wishlist (service_id in body)
+    GET: List all wishlisted services for logged-in user (only active shops)
+    DELETE: Remove a service from wishlist (service_id in body)
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ServiceWishlistSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        wishlist = serializer.save()
+        return Response({
+            "id": wishlist.id,
+            "user_id": wishlist.user.id,
+            "service_id": wishlist.service.id,
+            "created_at": wishlist.created_at
+        }, status=status.HTTP_201_CREATED)
+
+    def get(self, request):
+        wishlists = ServiceWishlist.objects.filter(
+            user=request.user,
+            service__is_active=True
+        ).select_related('service__shop', 'service__category')
+
+        serializer = ServiceWishlistSerializer(wishlists, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        wishList_id = request.data.get("id")
+        wishlist_item = ServiceWishlist.objects.get(user=request.user, id=wishList_id)
+
+        if not wishlist_item:
+            return Response({"detail": "Service not found in wishlist"}, status=status.HTTP_404_NOT_FOUND)
+
+        wishlist_item.delete()
+        return Response({"detail": "Service removed from wishlist"}, status=status.HTTP_204_NO_CONTENT)

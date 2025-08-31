@@ -1,5 +1,14 @@
 from django.contrib import admin
-from .models import Shop, Service, ServiceCategory, RatingReview, Promotion
+from .models import (
+    Shop, 
+    Service, 
+    ServiceCategory, 
+    RatingReview, 
+    Promotion, 
+    Slot, 
+    SlotBooking, 
+    ServiceWishlist
+)
 
 class ServiceInline(admin.TabularInline):
     model = Service
@@ -17,7 +26,7 @@ class ServiceAdmin(admin.ModelAdmin):
 
 @admin.register(ServiceCategory)
 class ServiceCategoryAdmin(admin.ModelAdmin):
-    list_display = ('name',)
+    list_display = ('name', 'sc_img',)
 
 @admin.register(RatingReview)
 class RatingReviewAdmin(admin.ModelAdmin):
@@ -37,4 +46,28 @@ class PromotionAdmin(admin.ModelAdmin):
     list_display = ('title', 'subtitle', 'amount', 'is_active', 'created_at')
     list_filter = ('is_active', 'created_at')
     search_fields = ('title', 'subtitle')
+    ordering = ('-created_at',)
+
+# ✅ Slots
+@admin.register(Slot)
+class SlotAdmin(admin.ModelAdmin):
+    list_display = ("shop", "service", "start_time", "end_time", "capacity_left")
+    list_filter = ("shop", "service", "start_time")
+    search_fields = ("shop__name", "service__title")
+    ordering = ("start_time",)
+
+
+# ✅ Slot Bookings
+@admin.register(SlotBooking)
+class SlotBookingAdmin(admin.ModelAdmin):
+    list_display = ("user", "shop", "service", "slot", "status", "start_time", "end_time")
+    list_filter = ("status", "shop", "service", "start_time")
+    search_fields = ("user__username", "shop__name", "service__title")
+    ordering = ("-start_time",)
+
+@admin.register(ServiceWishlist)
+class ServiceWishlistAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'service', 'created_at')
+    list_filter = ('created_at', 'user')
+    search_fields = ('user__username', 'service__title')
     ordering = ('-created_at',)

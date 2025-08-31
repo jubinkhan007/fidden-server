@@ -31,6 +31,7 @@ class Shop(models.Model):
 
 class ServiceCategory(models.Model):
     name = models.CharField(max_length=100, unique=True)
+    sc_img = models.ImageField(upload_to='services-category/', blank=True, null=True)
 
     def __str__(self):
         return self.name
@@ -183,3 +184,23 @@ class Promotion(models.Model):
 
     def __str__(self):
         return f"{self.title} - {self.amount}"
+
+class ServiceWishlist(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='service_wishlist'
+    )
+    service = models.ForeignKey(
+        Service,
+        on_delete=models.CASCADE,
+        related_name='wishlisted_by'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'service')  # Prevent duplicate wishlist entries
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user} ⭐ {self.service.title}"
