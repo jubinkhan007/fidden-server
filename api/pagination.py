@@ -17,3 +17,6 @@ class ServicesCursorPagination(CursorPagination):
                 return self.page_size  # fallback to default if invalid
         return self.page_size
 
+class GlobalSearchCursorPagination(CursorPagination):
+    page_size = 10
+    ordering = 'distance'  # will sort later manually in view if needed

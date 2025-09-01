@@ -30,7 +30,8 @@ from .serializers import (
     ServiceDetailSerializer,
     FavoriteShopSerializer,
     PromotionSerializer,
-    ServiceWishlistSerializer
+    ServiceWishlistSerializer,
+    GlobalSearchSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
@@ -41,11 +42,13 @@ from django.db import transaction
 from django.utils import timezone
 from django.db.models import Avg, Count, Q, Value, FloatField, F
 from django.db.models.functions import Coalesce
-from .pagination import ServicesCursorPagination
+from .pagination import ServicesCursorPagination, GlobalSearchCursorPagination
 
 from urllib.parse import urlencode
 from collections import OrderedDict
-
+from django.core.paginator import Paginator
+from api.utills.helper_function import haversine
+from rest_framework.pagination import PageNumberPagination
 
 
 class ShopListCreateView(APIView):
@@ -627,7 +630,7 @@ class PromotionListView(APIView):
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
         promotions = Promotion.objects.filter(is_active=True).order_by('-created_at')
         serializer = PromotionSerializer(promotions, many=True)
@@ -682,4 +685,106 @@ class ServiceWishlistView(APIView):
             return Response({"detail": "Service not found in wishlist"}, status=status.HTTP_404_NOT_FOUND)
 
         wishlist_item.delete()
-        return Response({"detail": "Service removed from wishlist"}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"status": "success", "detail": "Service removed from wishlist"}, status=status.HTTP_204_NO_CONTENT)
+
+class GlobalSearchView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        query = request.data.get("q", "").strip()
+        location = request.data.get("location")  # expects "lon,lat"
+        page_size = request.data.get("page_size", 10)
+
+        lat, lon = None, None
+        if location:
+            try:
+                lon, lat = map(float, location.split(","))  # longitude first
+            except ValueError:
+                pass
+
+        results = []
+
+        # --- Shops search ---
+        shops = Shop.objects.annotate(
+            avg_rating=Avg("ratings__rating"),
+            review_count=Count("ratings")
+        ).filter(
+            Q(name__icontains=query) |
+            Q(address__icontains=query) |
+            Q(services__title__icontains=query) |
+            Q(services__category__name__icontains=query)
+        ).distinct()
+
+        for shop in shops:
+            distance = None
+            if lat is not None and lon is not None and shop.location:
+                try:
+                    shop_lon, shop_lat = map(float, shop.location.split(","))  # lon,lat
+                    distance = haversine(lat, lon, shop_lat, shop_lon)
+                except ValueError:
+                    pass
+
+            results.append({
+                "type": "shop",
+                "id": shop.id,
+                "title": shop.name,
+                "extra_info": shop.address,
+                "image": request.build_absolute_uri(shop.shop_img.url) if shop.shop_img else None,
+                "distance": distance,
+                "rating": shop.avg_rating or 0,
+                "relevance": 1.0 if query.lower() in shop.name.lower() else 0.5,
+                "reviews": shop.review_count or 0
+            })
+
+        # --- Services search (strict) ---
+        services = Service.objects.annotate(
+            avg_rating=Avg("ratings__rating"),
+            review_count=Count("ratings")
+        ).select_related("shop", "category").distinct()
+
+        # Filter services: query must appear in service title or category name
+        services = [s for s in services if query.lower() in s.title.lower() or query.lower() in s.category.name.lower()]
+
+        for service in services:
+            distance = None
+            if lat is not None and lon is not None and service.shop and service.shop.location:
+                try:
+                    shop_lon, shop_lat = map(float, service.shop.location.split(","))  # lon,lat
+                    distance = haversine(lat, lon, shop_lat, shop_lon)
+                except ValueError:
+                    pass
+
+            # Relevance scoring
+            if service.title.lower() == query.lower() or service.category.name.lower() == query.lower():
+                relevance = 1.0
+            elif query.lower() in service.title.lower() or query.lower() in service.category.name.lower():
+                relevance = 0.7
+            else:
+                relevance = 0.5  # shouldn't reach here due to filtering above
+
+            results.append({
+                "type": "service",
+                "id": service.id,
+                "title": service.title,
+                "extra_info": f"{service.shop.name} · ${service.price}",
+                "image": request.build_absolute_uri(service.service_img.url) if service.service_img else None,
+                "distance": distance,
+                "rating": service.avg_rating or 0,
+                "relevance": relevance,
+                "reviews": service.review_count or 0
+            })
+
+        # --- Sort: distance -> relevance -> rating -> review_count ---
+        results.sort(key=lambda x: (
+            x["distance"] if x["distance"] is not None else float("inf"),
+            -x["relevance"],
+            -x["rating"],
+            -x["reviews"]
+        ))
+
+        # --- Pagination ---
+        paginator = PageNumberPagination()
+        paginator.page_size = page_size
+        paginated_results = paginator.paginate_queryset(results, request)
+        return paginator.get_paginated_response(paginated_results)

@@ -515,3 +515,14 @@ class ServiceWishlistSerializer(serializers.ModelSerializer):
         if obj.service.service_img and obj.service.service_img.name and obj.service.service_img.storage.exists(obj.service.service_img.name):
             return request.build_absolute_uri(obj.service.service_img.url) if request else obj.service.service_img.url
         return None
+
+class GlobalSearchSerializer(serializers.Serializer):
+    type = serializers.CharField()        # "shop" or "service"
+    id = serializers.IntegerField()
+    title = serializers.CharField()
+    extra_info = serializers.CharField(allow_null=True, required=False)
+    image = serializers.CharField(allow_null=True, required=False)
+
+    distance = serializers.FloatField(allow_null=True, required=False)
+    rating = serializers.FloatField(allow_null=True, required=False)
+    relevance = serializers.FloatField(allow_null=True, required=False)

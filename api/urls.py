@@ -15,7 +15,8 @@ from .views import (
     ServiceDetailView,
     FavoriteShopView,
     PromotionListView,
-    ServiceWishlistView
+    ServiceWishlistView,
+    GlobalSearchView
 )
 
 urlpatterns = [
@@ -35,5 +36,6 @@ urlpatterns = [
     path('users/favorite-shop/', FavoriteShopView.as_view(), name='favorite-shop'),
     path('promotions/', PromotionListView.as_view(), name='promotion-list'),
     path('users/service-wishlist/', ServiceWishlistView.as_view(), name='service-wishlist'),
+    path('global-search/', GlobalSearchView.as_view(), name='global-search'),
 
 ]
