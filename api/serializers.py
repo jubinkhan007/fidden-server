@@ -13,7 +13,7 @@ from .models import (
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
 from django.db.models import Avg, Count, Q, Value, FloatField
-from api.utills.helper_function import haversine
+from api.utills.helper_function import get_distance
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -202,24 +202,8 @@ class ShopListSerializer(serializers.Serializer):
         return None
 
     def get_distance(self, obj):
-        """
-        Calculate distance from user's location passed in context:
-        context = {"user_location": "lon,lat"}  (optional)
-        Both user_location and obj.location are stored as "lon,lat".
-        """
         user_location = self.context.get("user_location")
-        if not user_location or not obj.location:
-            return None
-
-        try:
-            # Parse "lon,lat" format
-            user_lon, user_lat = map(float, user_location.split(","))
-            shop_lon, shop_lat = map(float, obj.location.split(","))
-
-            # Use haversine (expects lat, lon order)
-            return haversine(user_lat, user_lon, shop_lat, shop_lon)
-        except Exception:
-            return None
+        return get_distance(user_location, obj.location)
 
     def get_badge(self, obj):
         return "Top"
@@ -324,26 +308,8 @@ class ServiceListSerializer(serializers.ModelSerializer):
         return "Trending"
 
     def get_distance(self, obj):
-        """
-        Calculate distance from user's location passed in context:
-        context = {"user_location": "lon,lat"}  (optional)
-        Both user_location and shop.location are stored as "lon,lat".
-        """
         user_location = self.context.get("user_location")
-        shop_location = getattr(obj.shop, "location", None)
-
-        if not user_location or not shop_location:
-            return None
-
-        try:
-            # Parse "lon,lat" format
-            user_lon, user_lat = map(float, user_location.split(","))
-            shop_lon, shop_lat = map(float, shop_location.split(","))
-
-            # Use haversine (expects lat, lon order)
-            return haversine(user_lat, user_lon, shop_lat, shop_lon)
-        except Exception:
-            return None
+        return get_distance(user_location, obj.shop.location if obj.shop else None)
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
@@ -436,18 +402,8 @@ class FavoriteShopSerializer(serializers.ModelSerializer):
         )['count']
 
     def get_distance(self, obj):
-        user_location = self.context.get('user_location')
-        if not user_location or not obj.shop.location:
-            return None
-        try:
-            # parse as "lon,lat"
-            user_lon, user_lat = map(float, user_location.split(','))
-            shop_lon, shop_lat = map(float, obj.shop.location.split(','))
-
-            # haversine expects (lat1, lon1, lat2, lon2)
-            return haversine(user_lat, user_lon, shop_lat, shop_lon)
-        except Exception:
-            return None
+        user_location = self.context.get("user_location")
+        return get_distance(user_location, obj.shop.location if obj.shop else None)
 
 class PromotionSerializer(serializers.ModelSerializer):
     class Meta:

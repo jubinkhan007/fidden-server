@@ -27,3 +27,21 @@ def query_in_text_words(text, query):
     query_lower = query.lower()
     words = re.findall(r'\w+', text.lower())
     return any(query_lower in word for word in words)
+
+def get_distance(user_location: str, shop_location: str):
+    """
+    Calculate distance between user_location and shop_location.
+    Both must be strings in the format "lon,lat".
+    Returns distance in meters (float), or None if invalid.
+    """
+    if not user_location or not shop_location:
+        return None
+
+    try:
+        user_lon, user_lat = map(float, user_location.split(","))
+        shop_lon, shop_lat = map(float, shop_location.split(","))
+        # haversine expects (lat1, lon1, lat2, lon2)
+        km = haversine(user_lat, user_lon, shop_lat, shop_lon)
+        return round(km, 2) 
+    except Exception:
+        return None
