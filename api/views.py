@@ -511,18 +511,14 @@ class AllServicesListView(APIView):
 
             def calculate_distance(service):
                 try:
+                    # Parse "lon,lat" format
                     user_lon, user_lat = map(float, user_location.split(","))
                     shop_lon, shop_lat = map(float, service.shop.location.split(","))
+
+                    # Use haversine (expects lat, lon order)
+                    return haversine(user_lat, user_lon, shop_lat, shop_lon) * 1000  # meters
                 except Exception:
                     return float("inf")
-                # Haversine formula
-                lon1, lat1, lon2, lat2 = map(radians, [user_lon, user_lat, shop_lon, shop_lat])
-                dlon = lon2 - lon1
-                dlat = lat2 - lat1
-                a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-                c = 2 * asin(sqrt(a))
-                km = 6371 * c
-                return km * 1000  # meters
 
             services_list = [
                 s for s in services_list if calculate_distance(s) <= max_distance
