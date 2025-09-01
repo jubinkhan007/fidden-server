@@ -408,6 +408,7 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
 
 class FavoriteShopSerializer(serializers.ModelSerializer):
     shop_id = serializers.IntegerField(write_only=True, required=False)
+    shop_no = serializers.IntegerField(source='shop.id', read_only=True) 
     name = serializers.CharField(source='shop.name', read_only=True)
     address = serializers.CharField(source='shop.address', read_only=True)
     location = serializers.CharField(source='shop.location', read_only=True)
@@ -417,7 +418,7 @@ class FavoriteShopSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FavoriteShop
-        fields = ['id', 'shop_id', 'name', 'address', 'location', 'avg_rating', 'review_count', 'distance', 'created_at']
+        fields = ['id', 'shop_id', 'shop_no', 'name', 'address', 'location', 'avg_rating', 'review_count', 'distance', 'created_at']
 
     def validate_shop_id(self, value):
         if not Shop.objects.filter(id=value).exists():

@@ -47,7 +47,7 @@ from .pagination import ServicesCursorPagination, GlobalSearchCursorPagination
 from urllib.parse import urlencode
 from collections import OrderedDict
 from django.core.paginator import Paginator
-from api.utills.helper_function import haversine
+from api.utills.helper_function import haversine, get_relevance, query_in_text_words
 from rest_framework.pagination import PageNumberPagination
 
 
@@ -685,7 +685,7 @@ class ServiceWishlistView(APIView):
             return Response({"detail": "Service not found in wishlist"}, status=status.HTTP_404_NOT_FOUND)
 
         wishlist_item.delete()
-        return Response({"status": "success", "detail": "Service removed from wishlist"}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"detail": "Service removed from wishlist"}, status=status.HTTP_204_NO_CONTENT)
 
 class GlobalSearchView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -696,12 +696,23 @@ class GlobalSearchView(APIView):
         location = request.data.get("location")  # expects "lon,lat"
         page_size = request.data.get("page_size", 10)
 
+        if not query:
+            return Response({"detail": "Query parameter 'q' is required."}, status=400)
+
+        try:
+            page_size = int(page_size)
+        except ValueError:
+            page_size = 10
+
         lat, lon = None, None
         if location:
             try:
-                lon, lat = map(float, location.split(","))  # longitude first
+                lon, lat = map(float, location.split(","))  # lon,lat
             except ValueError:
                 pass
+
+        query_norm = query.lower().strip()
+        query_words = query_norm.split()
 
         results = []
 
@@ -709,22 +720,34 @@ class GlobalSearchView(APIView):
         shops = Shop.objects.annotate(
             avg_rating=Avg("ratings__rating"),
             review_count=Count("ratings")
-        ).filter(
-            Q(name__icontains=query) |
-            Q(address__icontains=query) |
-            Q(services__title__icontains=query) |
-            Q(services__category__name__icontains=query)
         ).distinct()
 
         for shop in shops:
+            # Check if shop name/address matches all query words
+            shop_text = f"{shop.name} {shop.address}".lower()
+            shop_match = all(word in shop_text for word in query_words)
+
+            # OR any service of the shop matches all query words in title/category
+            service_match = False
+            for service in shop.services.all():
+                title_text = service.title.lower() if service.title else ""
+                category_text = service.category.name.lower() if service.category else ""
+                if all(word in title_text or word in category_text for word in query_words):
+                    service_match = True
+                    break
+
+            if not (shop_match or service_match):
+                continue  # skip shop
+
             distance = None
             if lat is not None and lon is not None and shop.location:
                 try:
-                    shop_lon, shop_lat = map(float, shop.location.split(","))  # lon,lat
+                    shop_lon, shop_lat = map(float, shop.location.split(","))
                     distance = haversine(lat, lon, shop_lat, shop_lon)
                 except ValueError:
                     pass
 
+            relevance = max(get_relevance(shop.name, query), get_relevance(shop.address or "", query)) or 0.5
             results.append({
                 "type": "shop",
                 "id": shop.id,
@@ -733,36 +756,34 @@ class GlobalSearchView(APIView):
                 "image": request.build_absolute_uri(shop.shop_img.url) if shop.shop_img else None,
                 "distance": distance,
                 "rating": shop.avg_rating or 0,
-                "relevance": 1.0 if query.lower() in shop.name.lower() else 0.5,
-                "reviews": shop.review_count or 0
+                "reviews": shop.review_count or 0,
+                "relevance": relevance,
             })
 
-        # --- Services search (strict) ---
+        # --- Services search ---
         services = Service.objects.annotate(
             avg_rating=Avg("ratings__rating"),
             review_count=Count("ratings")
         ).select_related("shop", "category").distinct()
 
-        # Filter services: query must appear in service title or category name
-        services = [s for s in services if query.lower() in s.title.lower() or query.lower() in s.category.name.lower()]
-
         for service in services:
+            if not service.shop:
+                continue
+
+            title_text = service.title.lower() if service.title else ""
+            category_text = service.category.name.lower() if service.category else ""
+            if not all(word in title_text or word in category_text for word in query_words):
+                continue
+
             distance = None
-            if lat is not None and lon is not None and service.shop and service.shop.location:
+            if lat is not None and lon is not None and service.shop.location:
                 try:
-                    shop_lon, shop_lat = map(float, service.shop.location.split(","))  # lon,lat
+                    shop_lon, shop_lat = map(float, service.shop.location.split(","))
                     distance = haversine(lat, lon, shop_lat, shop_lon)
                 except ValueError:
                     pass
 
-            # Relevance scoring
-            if service.title.lower() == query.lower() or service.category.name.lower() == query.lower():
-                relevance = 1.0
-            elif query.lower() in service.title.lower() or query.lower() in service.category.name.lower():
-                relevance = 0.7
-            else:
-                relevance = 0.5  # shouldn't reach here due to filtering above
-
+            relevance = max(get_relevance(service.title, query), get_relevance(category_text, query)) or 0.5
             results.append({
                 "type": "service",
                 "id": service.id,
@@ -771,11 +792,11 @@ class GlobalSearchView(APIView):
                 "image": request.build_absolute_uri(service.service_img.url) if service.service_img else None,
                 "distance": distance,
                 "rating": service.avg_rating or 0,
+                "reviews": service.review_count or 0,
                 "relevance": relevance,
-                "reviews": service.review_count or 0
             })
 
-        # --- Sort: distance -> relevance -> rating -> review_count ---
+        # --- Ordering: distance → relevance → rating → review count ---
         results.sort(key=lambda x: (
             x["distance"] if x["distance"] is not None else float("inf"),
             -x["relevance"],
