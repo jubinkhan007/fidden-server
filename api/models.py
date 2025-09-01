@@ -24,6 +24,7 @@ class Shop(models.Model):
         default=list,
         help_text="List of closed days (e.g., ['monday', 'tuesday'])"
     )
+    is_varified = models.BooleanField(default=False)
 
     def __str__(self):
         return self.name

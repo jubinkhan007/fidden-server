@@ -68,7 +68,7 @@ class ShopSerializer(serializers.ModelSerializer):
         model = Shop
         fields = [
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
-            'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id'
+            'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id', 'is_varified'
         ]
         read_only_fields = ('owner_id',)
 
