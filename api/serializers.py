@@ -111,6 +111,9 @@ class ShopSerializer(serializers.ModelSerializer):
         return shop
 
     def update(self, instance, validated_data):
+        # Reset status to pending on update
+        instance.status = "pending"
+
         # ⚡ optional: allow uploading new verification files during update
         files = validated_data.pop("verification_files", None)  
 
