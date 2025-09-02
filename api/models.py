@@ -28,7 +28,6 @@ class Shop(models.Model):
     close_days = models.JSONField(
         default=list,
         blank=True,
-        null=True,
         help_text="List of closed days (e.g., ['monday', 'tuesday'])"
     )
 
@@ -66,7 +65,6 @@ class VerificationFile(models.Model):
 
     def __str__(self):
         return f"{self.shop.name} - {self.file.name}"
-
 
 class ServiceCategory(models.Model):
     name = models.CharField(max_length=100, unique=True)
