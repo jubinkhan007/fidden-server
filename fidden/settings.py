@@ -40,7 +40,12 @@ INSTALLED_APPS = [
     'accounts',
     'api',
     'django_celery_beat',
+    # 'django_crontab',
 ]
+
+# CRONJOBS = [
+#     ('0 0 * * *', 'api.cron.generate_slots_cron')  # daily at midnight
+# ]
 
 # ==============================
 # REST Framework & JWT

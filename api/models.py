@@ -5,6 +5,12 @@ from django.utils import timezone
 
 
 class Shop(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("rejected", "Rejected"),
+        ("verified", "Verified"),
+    ]
+
     owner = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -19,12 +25,27 @@ class Shop(models.Model):
     about_us = models.TextField(blank=True, null=True)
     shop_img = models.ImageField(upload_to='shop/', blank=True, null=True)
 
-    # ✅ changed from open_days → close_days
     close_days = models.JSONField(
         default=list,
         help_text="List of closed days (e.g., ['monday', 'tuesday'])"
     )
-    is_varified = models.BooleanField(default=False)
+
+    # ✅ new field
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default="pending"
+    )
+
+    is_verified = models.BooleanField(default=False)  # renamed (typo fix)
+
+    def save(self, *args, **kwargs):
+        # Auto-update is_verified based on status
+        if self.status == "verified":
+            self.is_verified = True
+        else:
+            self.is_verified = False
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

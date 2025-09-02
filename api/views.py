@@ -357,7 +357,7 @@ class AllShopsListView(APIView):
         except ValueError:
             cursor = 0
 
-        shops_qs = Shop.objects.all()
+        shops_qs = Shop.objects.filter(is_verified=True)
         if search_query:
             shops_qs = shops_qs.filter(
                 Q(name__iregex=search_query) | Q(address__iregex=search_query)
