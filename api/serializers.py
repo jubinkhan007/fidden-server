@@ -8,7 +8,8 @@ from .models import (
     SlotBooking, 
     FavoriteShop,
     Promotion,
-    ServiceWishlist
+    ServiceWishlist,
+    VerificationFile
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -59,18 +60,31 @@ class ServiceSerializer(serializers.ModelSerializer):
         )
         return rep
 
+class VerificationFileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VerificationFile
+        fields = ["id", "file", "uploaded_at"]
+
 
 class ShopSerializer(serializers.ModelSerializer):
     # ✅ removed services from response
     owner_id = serializers.IntegerField(source='owner.id', read_only=True)
+    # 👇 for multiple file uploads at creation
+    verification_files = serializers.ListField(
+        child=serializers.FileField(),
+        write_only=True,
+        required=True  # 🔥 mandatory
+    )
+    uploaded_files = VerificationFileSerializer(source="verification_files", many=True, read_only=True)
 
     class Meta:
         model = Shop
         fields = [
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
-            'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id', 'is_verified', 'status',
+            'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id', 
+            'is_verified', 'status', 'verification_files', 'uploaded_files'
         ]
-        read_only_fields = ('owner_id',)
+        read_only_fields = ('owner_id','is_verified', 'uploaded_files')
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
@@ -82,13 +96,32 @@ class ShopSerializer(serializers.ModelSerializer):
         return rep
 
     def create(self, validated_data):
+        files = validated_data.pop("verification_files", None)
+
+        if not files:
+            raise serializers.ValidationError(
+                {"verification_files": "At least one verification file is required."}
+            )
+
         shop = Shop.objects.create(**validated_data)
+
+        for f in files:
+            VerificationFile.objects.create(shop=shop, file=f)
+
         return shop
 
     def update(self, instance, validated_data):
+        # ⚡ optional: allow uploading new verification files during update
+        files = validated_data.pop("verification_files", None)  
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+
+        if files:
+            for f in files:
+                VerificationFile.objects.create(shop=instance, file=f)
+
         return instance
 
 class RatingReviewSerializer(serializers.ModelSerializer):

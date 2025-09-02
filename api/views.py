@@ -60,7 +60,7 @@ class ShopListCreateView(APIView):
         if getattr(user, 'role', None) != 'owner':
             return Response({"detail": "You do not have a shop."}, status=status.HTTP_403_FORBIDDEN)
 
-        shop = Shop.objects.filter(owner=user).first()
+        shop = getattr(user, "shop", None)
         if not shop:
             return Response({"detail": "No shop found for this user."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -77,7 +77,10 @@ class ShopListCreateView(APIView):
         serializer = ShopSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             shop = serializer.save(owner=request.user)
-            return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_201_CREATED)
+            return Response(
+                ShopSerializer(shop, context={'request': request}).data,
+                status=status.HTTP_201_CREATED
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class ShopRetrieveUpdateDestroyView(APIView):

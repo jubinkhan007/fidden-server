@@ -10,6 +10,11 @@ from .models import (
     ServiceWishlist
 )
 
+
+admin.site.site_header = "Fidden Administration"
+admin.site.site_title = "Fidden Admin Portal"
+admin.site.index_title = "Welcome to Fidden Admin Dashboard"
+
 class ServiceInline(admin.TabularInline):
     model = Service
     extra = 1

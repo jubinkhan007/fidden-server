@@ -52,6 +52,21 @@ class Shop(models.Model):
     def __str__(self):
         return self.name
 
+class VerificationFile(models.Model):
+    shop = models.ForeignKey(
+        "Shop",
+        on_delete=models.CASCADE,
+        related_name="verification_files"
+    )
+    file = models.FileField(
+        upload_to="shop/verifications/",
+        help_text="Upload verification document (e.g., trade license, ID card)"
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.shop.name} - {self.file.name}"
+
 
 class ServiceCategory(models.Model):
     name = models.CharField(max_length=100, unique=True)
