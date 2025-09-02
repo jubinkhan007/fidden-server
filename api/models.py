@@ -27,6 +27,8 @@ class Shop(models.Model):
 
     close_days = models.JSONField(
         default=list,
+        blank=True,
+        null=True,
         help_text="List of closed days (e.g., ['monday', 'tuesday'])"
     )
 
