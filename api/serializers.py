@@ -9,7 +9,8 @@ from .models import (
     FavoriteShop,
     Promotion,
     ServiceWishlist,
-    VerificationFile
+    VerificationFile,
+    Reply
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -542,3 +543,69 @@ class GlobalSearchSerializer(serializers.Serializer):
     distance = serializers.FloatField(allow_null=True, required=False)
     rating = serializers.FloatField(allow_null=True, required=False)
     relevance = serializers.FloatField(allow_null=True, required=False)
+
+class ReplyCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating replies to rating reviews
+    """
+    class Meta:
+        model = Reply
+        fields = ['message']
+
+    def validate_message(self, value):
+        """
+        Validate the message field
+        """
+        if not value.strip():
+            raise serializers.ValidationError("Message cannot be empty.")
+        return value
+
+    def create(self, validated_data):
+        """
+        Create and return a new Reply instance
+        """
+        # Get context from view
+        rating_review = self.context.get('rating_review')
+        user = self.context.get('request').user
+        
+        # Create the reply
+        reply = Reply.objects.create(
+            rating_review=rating_review,
+            user=user,
+            message=validated_data['message']
+        )
+        
+        return reply
+
+class ReplySerializer(serializers.ModelSerializer):
+    
+    class Meta:
+        model = Reply
+        fields = ['id', 'message', 'created_at']
+
+class ShopRatingReviewSerializer(serializers.ModelSerializer):
+    service_id = serializers.IntegerField(source='service.id', read_only=True)
+    service_name = serializers.CharField(source='service.title', read_only=True)
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    user_name = serializers.CharField(source='user.name', read_only=True)
+    user_img = serializers.ImageField(source='user.profile_image', read_only=True)
+    reply = ReplySerializer(source='replies', many=True, read_only=True)
+    
+    class Meta:
+        model = RatingReview
+        fields = [
+            'id', 'service_id', 'service_name', 'rating', 'review', 
+            'user_id', 'user_name', 'user_img', 'reply', 'created_at'
+        ]
+    
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        request = self.context.get('request')
+        
+        # Add absolute URL for user image
+        if instance.user and instance.user.profile_image and request:
+            rep['user_img'] = request.build_absolute_uri(instance.user.profile_image.url)
+        elif instance.user and instance.user.profile_image:
+            rep['user_img'] = instance.user.profile_image.url
+        
+        return rep

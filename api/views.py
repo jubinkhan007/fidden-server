@@ -15,7 +15,8 @@ from .models import (
     SlotBooking, 
     FavoriteShop,
     Promotion,
-    ServiceWishlist
+    ServiceWishlist,
+    Reply
 )
 from .serializers import (
     ShopSerializer, 
@@ -31,7 +32,9 @@ from .serializers import (
     FavoriteShopSerializer,
     PromotionSerializer,
     ServiceWishlistSerializer,
-    GlobalSearchSerializer
+    GlobalSearchSerializer,
+    ReplyCreateSerializer,
+    ShopRatingReviewSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
@@ -48,6 +51,7 @@ from urllib.parse import urlencode
 from collections import OrderedDict
 from django.core.paginator import Paginator
 from api.utills.helper_function import haversine, get_relevance, query_in_text_words
+from django.db.models import Prefetch
 from rest_framework.pagination import PageNumberPagination
 
 
@@ -812,3 +816,88 @@ class GlobalSearchView(APIView):
         paginator.page_size = page_size
         paginated_results = paginator.paginate_queryset(results, request)
         return paginator.get_paginated_response(paginated_results)
+
+class ReplyCreateView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, rating_review_id):
+        user = request.user
+        if getattr(user, 'role', None) != 'owner':
+            return Response({"detail": "You do not have a shop."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            # Get the rating review instance
+            rating_review = RatingReview.objects.get(id=rating_review_id)
+        except RatingReview.DoesNotExist:
+            return Response(
+                {"error": "Rating review not found", "status": status.HTTP_404_NOT_FOUND},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = ReplyCreateSerializer(
+            data=request.data, 
+            context={
+                'request': request,
+                'rating_review': rating_review
+            }
+        )
+        serializer.is_valid(raise_exception=True)
+        reply = serializer.save()
+        
+        return Response(
+            {
+                "message": "Reply created successfully",
+                "id": reply.id,
+                "status": status.HTTP_201_CREATED
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+class ShopRatingReviewsView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
+
+    def get(self, request, shop_id):
+        user = request.user
+        
+        # Check if user is an owner
+        if getattr(user, 'role', None) != 'owner':
+            return Response({"detail": "Only owners can access this resource."}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Verify that the shop belongs to the owner
+        try:
+            shop = Shop.objects.get(id=shop_id, owner=user)
+        except Shop.DoesNotExist:
+            return Response(
+                {"detail": "Shop not found or you don't have permission to access it."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Prefetch replies for better performance
+        replies_prefetch = Prefetch(
+            'replies',
+            queryset=Reply.objects.select_related('user').order_by('created_at')
+        )
+        
+        # Get rating reviews for the specified shop
+        rating_reviews = RatingReview.objects.filter(
+            shop=shop
+        ).select_related(
+            'service', 'user'
+        ).prefetch_related(
+            replies_prefetch
+        ).order_by('-created_at')
+        
+        serializer = ShopRatingReviewSerializer(
+            rating_reviews, 
+            many=True,
+            context={'request': request}
+        )
+        
+        return Response({
+            "shop_id": shop_id,
+            "shop_name": shop.name,
+            "count": rating_reviews.count(),
+            "reviews": serializer.data
+        })

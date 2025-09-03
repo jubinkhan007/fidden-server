@@ -131,6 +131,45 @@ class RatingReview(models.Model):
             user_name = "Anonymous"
         return f"{user_name} - {self.rating}⭐ for {self.service.title}"
 
+    # Convenience method to get all replies for this review
+    def get_replies(self):
+        return self.replies.all()
+
+    # Property to check if the review has any replies
+    @property
+    def has_replies(self):
+        return self.replies.exists()
+
+class Reply(models.Model):
+    rating_review = models.ForeignKey(
+        RatingReview,
+        on_delete=models.CASCADE,
+        related_name="replies"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="review_replies"
+    )
+    message = models.TextField(
+        help_text="Reply message to the review"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "Replies"
+        ordering = ["created_at"]  # Show oldest first for conversation flow
+
+    def __str__(self):
+        if self.user:
+            user_name = self.user.name or "Anonymous"
+        else:
+            user_name = "Anonymous"
+        return f"Reply by {user_name} to review #{self.rating_review.id}"
+
 class Slot(models.Model):
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='slots')
     service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='slots')
