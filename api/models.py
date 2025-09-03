@@ -73,7 +73,6 @@ class ServiceCategory(models.Model):
     def __str__(self):
         return self.name
 
-
 class Service(models.Model):
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='services')
     category = models.ForeignKey(ServiceCategory, on_delete=models.CASCADE, related_name='services')
@@ -158,7 +157,6 @@ class Slot(models.Model):
 
     def __str__(self):
         return f"{self.shop.name} · {self.service.title} · {timezone.localtime(self.start_time)}"
-
 
 class SlotBooking(models.Model):
     STATUS_CHOICES = [('confirmed', 'Confirmed'), ('cancelled', 'Cancelled')]

@@ -15,6 +15,7 @@ from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
 from django.db.models import Avg, Count, Q, Value, FloatField
 from api.utills.helper_function import get_distance
+from django.db import transaction
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -186,37 +187,66 @@ class SlotBookingSerializer(serializers.ModelSerializer):
         fields = ['id', 'slot_id', 'user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at']
         read_only_fields = ['user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at']
 
-    def create(self, validated_data):
+    def validate(self, attrs):
+        """Additional validation before creation"""
+        slot = attrs.get('slot')
         user = self.context['request'].user
-        slot = validated_data.pop('slot')
-
-        # Check overlapping bookings
-        from django.db.models import Q
-        if SlotBooking.objects.filter(
+        
+        # Check slot capacity in validation phase
+        if slot.capacity_left <= 0:
+            raise serializers.ValidationError("This slot is fully booked.")
+        
+        # Check for overlapping bookings
+        overlapping = SlotBooking.objects.filter(
             user=user,
             status="confirmed"
         ).filter(
             Q(start_time__lt=slot.end_time) & Q(end_time__gt=slot.start_time)
-        ).exists():
-            raise serializers.ValidationError("You already have a booking that overlaps this slot.")
-
-        # Check slot capacity
-        if slot.capacity_left <= 0:
-            raise serializers.ValidationError("This slot is fully booked.")
-
-        booking = SlotBooking.objects.create(
-            user=user,
-            slot=slot,
-            start_time=slot.start_time,
-            end_time=slot.end_time,
-            shop=slot.shop,
-            service=slot.service,
-            status='confirmed'
         )
+        
+        if overlapping.exists():
+            raise serializers.ValidationError("You already have a booking that overlaps this slot.")
+        
+        return attrs
 
-        # Reduce slot capacity
-        slot.capacity_left -= 1
-        slot.save(update_fields=['capacity_left'])
+    def create(self, validated_data):
+        user = self.context['request'].user
+        slot = validated_data.pop('slot')
+
+        # Use atomic transaction with locking to prevent race conditions
+        with transaction.atomic():
+            # Lock the slot row to prevent concurrent bookings
+            slot = Slot.objects.select_for_update().get(id=slot.id)
+            
+            # Double-check capacity after locking (race condition protection)
+            if slot.capacity_left <= 0:
+                raise serializers.ValidationError("This slot is fully booked.")
+            
+            # Double-check overlapping bookings after locking
+            overlapping = SlotBooking.objects.filter(
+                user=user,
+                status="confirmed"
+            ).filter(
+                Q(start_time__lt=slot.end_time) & Q(end_time__gt=slot.start_time)
+            )
+            
+            if overlapping.exists():
+                raise serializers.ValidationError("You already have a booking that overlaps this slot.")
+
+            # Create the booking
+            booking = SlotBooking.objects.create(
+                user=user,
+                slot=slot,
+                start_time=slot.start_time,
+                end_time=slot.end_time,
+                shop=slot.shop,
+                service=slot.service,
+                status='confirmed'
+            )
+
+            # Reduce slot capacity
+            slot.capacity_left -= 1
+            slot.save(update_fields=['capacity_left'])
 
         return booking
 
