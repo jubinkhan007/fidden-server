@@ -20,10 +20,21 @@ class ServiceInline(admin.TabularInline):
     model = Service
     extra = 1
 
+class VerificationFileInline(admin.TabularInline):
+    model = VerificationFile
+    extra = 1
+
 @admin.register(Shop)
 class ShopAdmin(admin.ModelAdmin):
     list_display = ('name', 'owner', 'address', 'location', 'capacity')
-    inlines = [ServiceInline]
+    inlines = [ServiceInline, VerificationFileInline]
+
+@admin.register(VerificationFile)
+class VerificationFileAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'file', 'uploaded_at')
+    list_filter = ('uploaded_at', 'shop')
+    search_fields = ('shop__name', 'file')
+    ordering = ('-uploaded_at',)
 
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
@@ -78,9 +89,3 @@ class ServiceWishlistAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'service__title')
     ordering = ('-created_at',)
 
-@admin.register(VerificationFile)
-class VerificationFileAdmin(admin.ModelAdmin):
-    list_display = ('id', 'shop', 'file', 'uploaded_at')
-    list_filter = ('uploaded_at', 'shop')
-    search_fields = ('shop__name', 'file')
-    ordering = ('-uploaded_at',)
