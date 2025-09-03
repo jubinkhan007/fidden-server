@@ -603,7 +603,7 @@ class FavoriteShopView(APIView):
             return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
 
         user_location = request.data.get("location")  # optional: "lon,lat"
-        favorites = FavoriteShop.objects.filter(user=request.user).select_related('shop')
+        favorites = FavoriteShop.objects.filter(user=request.user, shop__is_verified=True).select_related('shop')
         serializer = FavoriteShopSerializer(favorites, many=True, context={'request': request, 'user_location': user_location})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
