@@ -7,7 +7,8 @@ from .models import (
     Promotion, 
     Slot, 
     SlotBooking, 
-    ServiceWishlist
+    ServiceWishlist,
+    VerificationFile
 )
 
 
@@ -76,3 +77,10 @@ class ServiceWishlistAdmin(admin.ModelAdmin):
     list_filter = ('created_at', 'user')
     search_fields = ('user__username', 'service__title')
     ordering = ('-created_at',)
+
+@admin.register(VerificationFile)
+class VerificationFileAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'file', 'uploaded_at')
+    list_filter = ('uploaded_at', 'shop')
+    search_fields = ('shop__name', 'file')
+    ordering = ('-uploaded_at',)
