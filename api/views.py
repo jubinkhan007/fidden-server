@@ -471,7 +471,10 @@ class AllServicesListView(APIView):
         user_location = request.data.get("location")  # user location from body, format "lon,lat"
 
         services_qs = (
-            Service.objects.filter(is_active=True)
+            Service.objects.filter(
+                is_active=True,
+                shop__is_verified=True
+            )
             .select_related("shop")
             .annotate(
                 avg_rating=Coalesce(Avg("ratings__rating"), Value(0.0, output_field=FloatField())),
