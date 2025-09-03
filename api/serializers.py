@@ -129,14 +129,21 @@ class ShopSerializer(serializers.ModelSerializer):
 
         return instance
 
+class ReplySerializer(serializers.ModelSerializer):
+    
+    class Meta:
+        model = Reply
+        fields = ['id', 'message', 'created_at']
+
 class RatingReviewSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField(read_only=True)
+    reply = ReplySerializer(source='replies', many=True, read_only=True)
 
     class Meta:
         model = RatingReview
         fields = [
             'id', 'shop', 'service', 'user', 'user_name',
-            'rating', 'review', 'review_img', 'created_at'
+            'rating', 'review', 'review_img', 'reply', 'created_at'
         ]
         read_only_fields = ['user', 'created_at', 'user_name']
 
@@ -577,11 +584,7 @@ class ReplyCreateSerializer(serializers.ModelSerializer):
         
         return reply
 
-class ReplySerializer(serializers.ModelSerializer):
-    
-    class Meta:
-        model = Reply
-        fields = ['id', 'message', 'created_at']
+
 
 class ShopRatingReviewSerializer(serializers.ModelSerializer):
     service_id = serializers.IntegerField(source='service.id', read_only=True)
