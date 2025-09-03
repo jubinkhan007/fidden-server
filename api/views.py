@@ -666,7 +666,8 @@ class ServiceWishlistView(APIView):
 
         wishlists = ServiceWishlist.objects.filter(
             user=request.user,
-            service__is_active=True
+            service__is_active=True,
+            service__shop__is_verified=True
         ).select_related('service__shop', 'service__category')
 
         serializer = ServiceWishlistSerializer(wishlists, many=True, context={'request': request})
