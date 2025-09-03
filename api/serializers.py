@@ -317,28 +317,60 @@ class ShopDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_reviews(self, obj):
-        reviews = obj.ratings.all().order_by('-created_at')
+        # Prefetch replies, service, and user to avoid N+1 queries
+        reviews = obj.ratings.all().prefetch_related(
+            'replies',      # Prefetch replies
+            'service',      # Prefetch service for each review
+            'user'          # Prefetch user for each review
+        ).order_by('-created_at')
+        
         request = self.context.get('request')
-        return [
-            {
-                'id': r.id,
-                'service': r.service.id,
-                'user': r.user.id if r.user else None,
-                'user_name': r.user.name if r.user and r.user.name else "Anonymous",
-                'profile_image': (
-                    request.build_absolute_uri(r.user.profile_image.url)
-                    if getattr(r.user, 'profile_image', None) and request else None
-                ),
-                'rating': r.rating,
-                'review': r.review,
-                'review_img': (
-                    request.build_absolute_uri(r.review_img.url)
-                    if r.review_img and request else r.review_img.url if r.review_img else None
-                ),
-                'created_at': r.created_at
+        review_list = []
+        
+        for review in reviews:
+            # Process replies for this review - only include id, message, and created_at
+            replies = []
+            for reply in review.replies.all():
+                replies.append({
+                    'id': reply.id,
+                    'message': reply.message,
+                    'created_at': reply.created_at
+                })
+            
+            # Build review data
+            review_data = {
+                'id': review.id,
+                'service_id': review.service.id if review.service else None,
+                'service_name': review.service.title if review.service else None,
+                'user_id': review.user.id if review.user else None,
+                'user_name': review.user.name if review.user and review.user.name else "Anonymous",
+                'rating': review.rating,
+                'review': review.review,
+                'created_at': review.created_at,
+                'replies': replies  # Include the simplified replies array
             }
-            for r in reviews
-        ]
+            
+            # Add user image
+            if review.user and getattr(review.user, 'profile_image', None):
+                review_data['user_img'] = (
+                    request.build_absolute_uri(review.user.profile_image.url)
+                    if request else review.user.profile_image.url
+                )
+            else:
+                review_data['user_img'] = None
+            
+            # Add review image
+            if review.review_img:
+                review_data['review_img'] = (
+                    request.build_absolute_uri(review.review_img.url)
+                    if request else review.review_img.url
+                )
+            else:
+                review_data['review_img'] = None
+            
+            review_list.append(review_data)
+        
+        return review_list
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
