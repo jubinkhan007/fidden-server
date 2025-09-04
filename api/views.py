@@ -699,13 +699,14 @@ class GlobalSearchView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        query = request.data.get("q", "").strip()
-        location = request.data.get("location")  # expects "lon,lat"
-        page_size = request.data.get("page_size", 10)
-
+        # --- Query param from URL ---
+        query = request.query_params.get("q", "").strip()
         if not query:
             return Response({"detail": "Query parameter 'q' is required."}, status=400)
 
+        # --- Location from POST body ---
+        location = request.data.get("location")  # expects "lon,lat"
+        page_size = request.data.get("page_size", 10)
         try:
             page_size = int(page_size)
         except ValueError:
@@ -714,13 +715,11 @@ class GlobalSearchView(APIView):
         lat, lon = None, None
         if location:
             try:
-                lon, lat = map(float, location.split(","))  # lon,lat
+                lon, lat = map(float, location.split(","))
             except ValueError:
                 pass
 
-        query_norm = query.lower().strip()
-        query_words = query_norm.split()
-
+        query_words = query.lower().split()
         results = []
 
         # --- Shops search ---
@@ -730,11 +729,10 @@ class GlobalSearchView(APIView):
         ).distinct()
 
         for shop in shops:
-            # Check if shop name/address matches all query words
             shop_text = f"{shop.name} {shop.address}".lower()
             shop_match = all(word in shop_text for word in query_words)
 
-            # OR any service of the shop matches all query words in title/category
+            # Check services of shop
             service_match = False
             for service in shop.services.all():
                 title_text = service.title.lower() if service.title else ""
@@ -744,8 +742,9 @@ class GlobalSearchView(APIView):
                     break
 
             if not (shop_match or service_match):
-                continue  # skip shop
+                continue
 
+            # Calculate distance if location provided
             distance = None
             if lat is not None and lon is not None and shop.location:
                 try:
@@ -754,7 +753,11 @@ class GlobalSearchView(APIView):
                 except ValueError:
                     pass
 
-            relevance = max(get_relevance(shop.name, query), get_relevance(shop.address or "", query)) or 0.5
+            relevance = max(
+                get_relevance(shop.name, query) or 0,
+                get_relevance(shop.address or "", query) or 0
+            ) or 0.5
+
             results.append({
                 "type": "shop",
                 "id": shop.id,
@@ -790,7 +793,11 @@ class GlobalSearchView(APIView):
                 except ValueError:
                     pass
 
-            relevance = max(get_relevance(service.title, query), get_relevance(category_text, query)) or 0.5
+            relevance = max(
+                get_relevance(service.title, query) or 0,
+                get_relevance(category_text, query) or 0
+            ) or 0.5
+
             results.append({
                 "type": "service",
                 "id": service.id,
@@ -803,7 +810,7 @@ class GlobalSearchView(APIView):
                 "relevance": relevance,
             })
 
-        # --- Ordering: distance → relevance → rating → review count ---
+        # --- Sort results: distance → relevance → rating → review count ---
         results.sort(key=lambda x: (
             x["distance"] if x["distance"] is not None else float("inf"),
             -x["relevance"],
