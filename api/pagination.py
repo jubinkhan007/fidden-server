@@ -20,3 +20,8 @@ class ServicesCursorPagination(CursorPagination):
 class GlobalSearchCursorPagination(CursorPagination):
     page_size = 10
     ordering = 'distance'  # will sort later manually in view if needed
+
+
+class ReviewCursorPagination(CursorPagination):
+    page_size = 10
+    ordering = "-created_at"  # newest first

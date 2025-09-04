@@ -45,7 +45,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.db.models import Avg, Count, Q, Value, FloatField, F
 from django.db.models.functions import Coalesce
-from .pagination import ServicesCursorPagination, GlobalSearchCursorPagination
+from .pagination import ServicesCursorPagination, GlobalSearchCursorPagination, ReviewCursorPagination
 
 from urllib.parse import urlencode
 from collections import OrderedDict
@@ -854,50 +854,71 @@ class ReplyCreateView(APIView):
             status=status.HTTP_201_CREATED
         )
 
+
+
+
+
+
 class ShopRatingReviewsView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
+    pagination_class = ReviewCursorPagination
 
     def get(self, request, shop_id):
         user = request.user
-        
+
         # Check if user is an owner
-        if getattr(user, 'role', None) != 'owner':
-            return Response({"detail": "Only owners can access this resource."}, status=status.HTTP_403_FORBIDDEN)
-        
+        if getattr(user, "role", None) != "owner":
+            return Response(
+                {"detail": "Only owners can access this resource."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Verify that the shop belongs to the owner
         try:
             shop = Shop.objects.get(id=shop_id, owner=user)
         except Shop.DoesNotExist:
             return Response(
                 {"detail": "Shop not found or you don't have permission to access it."},
-                status=status.HTTP_404_NOT_FOUND
+                status=status.HTTP_404_NOT_FOUND,
             )
-        
+
         # Prefetch replies for better performance
         replies_prefetch = Prefetch(
-            'replies',
-            queryset=Reply.objects.select_related('user').order_by('created_at')
+            "replies",
+            queryset=Reply.objects.select_related("user").order_by("created_at"),
         )
-        
-        # Get rating reviews for the specified shop
-        rating_reviews = RatingReview.objects.filter(
-            shop=shop
-        ).select_related(
-            'service', 'user'
-        ).prefetch_related(
-            replies_prefetch
-        ).order_by('-created_at')
-        
+
+        # Base queryset
+        queryset = (
+            RatingReview.objects.filter(shop=shop)
+            .select_related("service", "user")
+            .prefetch_related(replies_prefetch)
+            .order_by("-created_at")
+        )
+
+        # Search filter
+        search = request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(
+                Q(service__title__icontains=search)  # service_name
+                | Q(user__name__icontains=search)    # user_name
+                | Q(review__icontains=search)        # review text
+            )
+
+        # Apply cursor pagination
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request)
+
         serializer = ShopRatingReviewSerializer(
-            rating_reviews, 
+            page,
             many=True,
-            context={'request': request}
+            context={"request": request},
         )
-        
-        return Response({
-            "shop_id": shop_id,
+
+        return paginator.get_paginated_response({
+            "shop_id": shop.id,
             "shop_name": shop.name,
-            "count": rating_reviews.count(),
-            "reviews": serializer.data
+            "count": queryset.count(),
+            "reviews": serializer.data,
         })
