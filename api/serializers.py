@@ -10,12 +10,16 @@ from .models import (
     Promotion,
     ServiceWishlist,
     VerificationFile,
-    Reply
+    Reply,
+    ChatThread, 
+    Message, 
+    Notification,
+    Device
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
 from django.db.models import Avg, Count, Q, Value, FloatField
-from api.utills.helper_function import get_distance
+from api.utils.helper_function import get_distance
 from django.db import transaction
 
 
@@ -38,7 +42,6 @@ class ServiceCategorySerializer(serializers.ModelSerializer):
             rep['sc_img'] = None
 
         return rep
-
 
 class ServiceSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(required=False)
@@ -66,7 +69,6 @@ class VerificationFileSerializer(serializers.ModelSerializer):
     class Meta:
         model = VerificationFile
         fields = ["id", "file", "uploaded_at"]
-
 
 class ShopSerializer(serializers.ModelSerializer):
     # ✅ removed services from response
@@ -165,7 +167,6 @@ class RatingReviewSerializer(serializers.ModelSerializer):
         validated_data['user'] = self.context['request'].user
         return super().create(validated_data)
 
-
 class SlotSerializer(serializers.ModelSerializer):
     available = serializers.SerializerMethodField()
 
@@ -181,7 +182,6 @@ class SlotSerializer(serializers.ModelSerializer):
         shop_capacity_ok = obj.service.shop.capacity > 0
 
         return service_capacity_ok and shop_capacity_ok
-
 
 class SlotBookingSerializer(serializers.ModelSerializer):
     slot_id = serializers.PrimaryKeyRelatedField(
@@ -299,8 +299,17 @@ class ShopDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_services(self, obj):
-        services = obj.services.filter(is_active=True)
         request = self.context.get('request')
+        category_id = self.context.get('category_id')  # optional filter
+
+        services = obj.services.filter(is_active=True)
+        if category_id:
+            try:
+                category_id = int(category_id)
+                services = services.filter(category=category_id)  # <- use `category` here
+            except ValueError:
+                pass
+
         return [
             {
                 'id': s.id,
@@ -308,6 +317,12 @@ class ShopDetailSerializer(serializers.ModelSerializer):
                 'description': s.description,
                 'price': s.price,
                 'discount_price': s.discount_price,
+                'category_id': s.category.id if s.category else None,
+                'category_name': s.category.name if s.category else None,
+                'category_img': (
+                    request.build_absolute_uri(s.category.sc_img.url)
+                    if s.category and s.category.sc_img and request else s.category.sc_img.url if s.category and s.category.sc_img else None
+                ),
                 'service_img': (
                     request.build_absolute_uri(s.service_img.url)
                     if s.service_img and request else s.service_img.url if s.service_img else None
@@ -616,8 +631,6 @@ class ReplyCreateSerializer(serializers.ModelSerializer):
         
         return reply
 
-
-
 class ShopRatingReviewSerializer(serializers.ModelSerializer):
     service_id = serializers.IntegerField(source='service.id', read_only=True)
     service_name = serializers.CharField(source='service.title', read_only=True)
@@ -644,3 +657,27 @@ class ShopRatingReviewSerializer(serializers.ModelSerializer):
             rep['user_img'] = instance.user.profile_image.url
         
         return rep
+
+class MessageSerializer(serializers.ModelSerializer):
+    sender_email = serializers.CharField(source="sender.email", read_only=True)
+    class Meta:
+        model = Message
+        fields = ["id", "sender", "sender_email", "content", "timestamp", "is_read"]
+
+class ChatThreadSerializer(serializers.ModelSerializer):
+    messages = MessageSerializer(many=True, read_only=True)
+    shop_name = serializers.CharField(source="shop.name", read_only=True)
+    user_email = serializers.CharField(source="user.email", read_only=True)
+    class Meta:
+        model = ChatThread
+        fields = ["id", "shop", "shop_name", "user", "user_email", "messages", "created_at"]
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ["id", "message", "notification_type", "data", "is_read", "created_at"]
+
+class DeviceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Device
+        fields = ["device_token", "device_type"]

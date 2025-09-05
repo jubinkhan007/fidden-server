@@ -1,4 +1,4 @@
-version: "3.9"
+
 
 services:
   web:
@@ -6,15 +6,17 @@ services:
     container_name: fidden_web
     working_dir: /app
     command: >
-      gunicorn fidden.wsgi:application
-      --chdir /app
-      --bind 0.0.0.0:8090
+      uvicorn fidden.asgi:application
+      --host 0.0.0.0
+      --port 8090
     volumes:
       - ./media:/app/media
       - staticfiles:/app/staticfiles
       - ./:/app
     ports:
       - "8090:8090"
+    environment:
+      - DJANGO_SETTINGS_MODULE=fidden.settings
     depends_on:
       - redis
     env_file:

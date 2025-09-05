@@ -37,5 +37,5 @@ RUN python manage.py collectstatic --noinput
 # Expose port
 EXPOSE 8090
 
-# Default command
-CMD ["gunicorn", "fidden.wsgi:application", "--bind", "0.0.0.0:8090", "--workers", "3", "--threads", "2"]
+# Run Uvicorn (ASGI server for Django + Channels)
+CMD ["uvicorn", "fidden.asgi:application", "--host", "0.0.0.0", "--port", "8090"]

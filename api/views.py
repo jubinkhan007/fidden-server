@@ -16,7 +16,10 @@ from .models import (
     FavoriteShop,
     Promotion,
     ServiceWishlist,
-    Reply
+    Reply,
+    ChatThread, 
+    Message, 
+    Device
 )
 from .serializers import (
     ShopSerializer, 
@@ -34,7 +37,10 @@ from .serializers import (
     ServiceWishlistSerializer,
     GlobalSearchSerializer,
     ReplyCreateSerializer,
-    ShopRatingReviewSerializer
+    ShopRatingReviewSerializer, 
+    ChatThreadSerializer, 
+    MessageSerializer, 
+    DeviceSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
@@ -50,10 +56,10 @@ from .pagination import ServicesCursorPagination, GlobalSearchCursorPagination, 
 from urllib.parse import urlencode
 from collections import OrderedDict
 from django.core.paginator import Paginator
-from api.utills.helper_function import haversine, get_relevance, query_in_text_words
+from api.utils.helper_function import haversine, get_relevance, query_in_text_words
 from django.db.models import Prefetch
 from rest_framework.pagination import PageNumberPagination
-
+from api.utils.fcm import notify_user
 
 class ShopListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -439,8 +445,9 @@ class ShopDetailView(APIView):
         except Shop.DoesNotExist:
             return Response({"detail": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
 
-
-        serializer = ShopDetailSerializer(shop, context={'request': request})
+        # Get category_id from query params and pass to serializer
+        category_id = request.query_params.get('category_id')
+        serializer = ShopDetailSerializer(shop, context={'request': request,  'category_id': category_id})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 class AllServicesListView(APIView):
@@ -861,11 +868,6 @@ class ReplyCreateView(APIView):
             status=status.HTTP_201_CREATED
         )
 
-
-
-
-
-
 class ShopRatingReviewsView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
@@ -929,3 +931,58 @@ class ShopRatingReviewsView(APIView):
             "count": queryset.count(),
             "reviews": serializer.data,
         })
+
+class RegisterDeviceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = DeviceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        device_token = serializer.validated_data['device_token']
+        device_type = serializer.validated_data.get('device_type', 'android')
+        device, _ = Device.objects.update_or_create(
+            device_token=device_token,
+            defaults={'user': request.user, 'device_type': device_type}
+        )
+        return Response({"success": True, "device_id": device.id})
+
+class UserMessageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, shop_id):
+        user = request.user
+        content = request.data.get("content")
+        shop = Shop.objects.get(id=shop_id)
+        thread, _ = ChatThread.objects.get_or_create(shop=shop, user=user)
+        message = Message.objects.create(thread=thread, sender=user, content=content)
+
+        # Notify owner
+        notify_user(shop.owner, f"New message from {user.email}", data={"thread_id": thread.id})
+        return Response(MessageSerializer(message).data)
+
+class OwnerMessageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, thread_id):
+        owner = request.user
+        content = request.data.get("content")
+        thread = ChatThread.objects.get(id=thread_id)
+
+        if thread.shop.owner != owner:
+            return Response({"error": "Not authorized"}, status=403)
+
+        message = Message.objects.create(thread=thread, sender=owner, content=content)
+        # Notify user
+        notify_user(thread.user, f"Reply from {owner.email}", data={"thread_id": thread.id})
+        return Response(MessageSerializer(message).data)
+
+class ThreadListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if hasattr(user, "shop"):
+            threads = ChatThread.objects.filter(shop=user.shop).order_by("-created_at")
+        else:
+            threads = ChatThread.objects.filter(user=user).order_by("-created_at")
+        return Response(ChatThreadSerializer(threads, many=True).data)

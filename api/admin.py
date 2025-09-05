@@ -8,7 +8,8 @@ from .models import (
     Slot, 
     SlotBooking, 
     ServiceWishlist,
-    VerificationFile
+    VerificationFile,
+    Reply
 )
 
 
@@ -45,12 +46,17 @@ class ServiceAdmin(admin.ModelAdmin):
 class ServiceCategoryAdmin(admin.ModelAdmin):
     list_display = ('name', 'sc_img',)
 
+class ReplyInline(admin.TabularInline):
+    model = Reply
+    extra = 1
+
 @admin.register(RatingReview)
 class RatingReviewAdmin(admin.ModelAdmin):
     list_display = ('id', 'shop', 'service', 'user_display', 'rating', 'created_at')
     list_filter = ('rating', 'shop', 'service', 'created_at')
     search_fields = ('review', 'user__username', 'user__email')
     ordering = ('-created_at',)
+    inlines =[ReplyInline]
 
     def user_display(self, obj):
         if obj.user:

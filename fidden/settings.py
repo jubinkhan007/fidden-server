@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'accounts',
     'api',
     'django_celery_beat',
+    'channels',
     # 'django_crontab',
 ]
 
@@ -96,6 +97,15 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'fidden.wsgi.application'
+
+# Channels / Redis (use Docker service name)
+ASGI_APPLICATION = "fidden.asgi.application"
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [("redis", 6379)]},
+    },
+}
 
 # ==============================
 # Database
@@ -188,3 +198,6 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = os.getenv('CELERY_TIMEZONE', TIME_ZONE)
 CELERY_ENABLE_UTC = True
+
+# Firebase Push
+FCM_SERVER_KEY = os.getenv("FCM_SERVER_KEY", "BOWLcNRaCNEv3u6cPX3AglorjZFOE2x6PT_CRbh8tlfolmyR70syTrKnvWvD3mt7o2vdauNVy9ubSncm4D2hy1E") 

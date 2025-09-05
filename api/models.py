@@ -278,3 +278,30 @@ class ServiceWishlist(models.Model):
 
     def __str__(self):
         return f"{self.user} ⭐ {self.service.title}"
+
+class ChatThread(models.Model):
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="threads")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.CASCADE, related_name="threads")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class Message(models.Model):
+    thread = models.ForeignKey(ChatThread, on_delete=models.CASCADE, related_name="messages")
+    sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    content = models.TextField()
+    is_read = models.BooleanField(default=False)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+class Device(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="devices", on_delete=models.CASCADE)
+    device_token = models.CharField(max_length=255, unique=True)
+    device_type = models.CharField(max_length=50, default="android")  # android/ios
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+class Notification(models.Model):
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications")
+    message = models.CharField(max_length=512)
+    notification_type = models.CharField(max_length=50, default="chat")
+    data = models.JSONField(default=dict, blank=True)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
