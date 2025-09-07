@@ -9,7 +9,11 @@ from .models import (
     SlotBooking, 
     ServiceWishlist,
     VerificationFile,
-    Reply
+    Reply,
+    ChatThread, 
+    Message, 
+    Device, 
+    Notification
 )
 
 
@@ -93,5 +97,33 @@ class ServiceWishlistAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'service', 'created_at')
     list_filter = ('created_at', 'user')
     search_fields = ('user__username', 'service__title')
+    ordering = ('-created_at',)
+
+@admin.register(ChatThread)
+class ChatThreadAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'user', 'created_at')
+    list_filter = ('created_at', 'shop')
+    search_fields = ('user__username', 'shop__name')
+    ordering = ('-created_at',)
+
+@admin.register(Message)
+class MessageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'thread', 'sender', 'is_read', 'timestamp')
+    list_filter = ('is_read', 'timestamp')
+    search_fields = ('sender__username', 'content')
+    ordering = ('-timestamp',)
+
+@admin.register(Device)
+class DeviceAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'device_type', 'device_token', 'created_at', 'updated_at')
+    list_filter = ('device_type', 'created_at')
+    search_fields = ('user__username', 'device_token')
+    ordering = ('-created_at',)
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ('id', 'recipient', 'message', 'notification_type', 'is_read', 'created_at')
+    list_filter = ('notification_type', 'is_read', 'created_at')
+    search_fields = ('recipient__username', 'message')
     ordering = ('-created_at',)
 
