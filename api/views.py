@@ -981,8 +981,10 @@ class ThreadListView(APIView):
 
     def get(self, request):
         user = request.user
-        if hasattr(user, "shop"):
-            threads = ChatThread.objects.filter(shop=user.shop).order_by("-created_at")
-        else:
-            threads = ChatThread.objects.filter(user=user).order_by("-created_at")
+        # Return only threads that belong to the authenticated user
+        # - as a customer (thread.user == request.user)
+        # - or as a shop owner (thread.shop.owner == request.user)
+        threads = ChatThread.objects.filter(
+            Q(user=user) | Q(shop__owner=user)
+        ).order_by("-created_at")
         return Response(ChatThreadSerializer(threads, many=True).data)
