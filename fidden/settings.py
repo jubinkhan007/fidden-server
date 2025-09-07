@@ -101,13 +101,12 @@ WSGI_APPLICATION = 'fidden.wsgi.application'
 # Channels / Redis (use Docker service name)
 ASGI_APPLICATION = "fidden.asgi.application"
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [REDIS_URL],
-        },
+            "hosts": [("fidden_redis", 6379)]},
     },
 }
 
