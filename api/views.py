@@ -54,6 +54,8 @@ from django.db.models.functions import Coalesce
 from .pagination import ServicesCursorPagination, GlobalSearchCursorPagination, ReviewCursorPagination
 
 from urllib.parse import urlencode
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 from collections import OrderedDict
 from django.core.paginator import Paginator
 from api.utils.helper_function import haversine, get_relevance, query_in_text_words
@@ -958,7 +960,20 @@ class UserMessageView(APIView):
 
         # Notify owner
         notify_user(shop.owner, f"New message from {user.email}", data={"thread_id": thread.id})
-        return Response(MessageSerializer(message).data)
+
+        # Broadcast over websockets to recipient and echo to sender
+        channel_layer = get_channel_layer()
+        message_data = MessageSerializer(message).data
+        async_to_sync(channel_layer.group_send)(
+            f"user_{shop.owner.id}",
+            {"type": "chat_message", "message": message_data},
+        )
+        async_to_sync(channel_layer.group_send)(
+            f"user_{user.id}",
+            {"type": "chat_message", "message": message_data},
+        )
+
+        return Response(message_data)
 
 class OwnerMessageView(APIView):
     permission_classes = [IsAuthenticated]
@@ -974,7 +989,20 @@ class OwnerMessageView(APIView):
         message = Message.objects.create(thread=thread, sender=owner, content=content)
         # Notify user
         notify_user(thread.user, f"Reply from {owner.email}", data={"thread_id": thread.id})
-        return Response(MessageSerializer(message).data)
+
+        # Broadcast over websockets to recipient and echo to sender
+        channel_layer = get_channel_layer()
+        message_data = MessageSerializer(message).data
+        async_to_sync(channel_layer.group_send)(
+            f"user_{thread.user.id}",
+            {"type": "chat_message", "message": message_data},
+        )
+        async_to_sync(channel_layer.group_send)(
+            f"user_{owner.id}",
+            {"type": "chat_message", "message": message_data},
+        )
+
+        return Response(message_data)
 
 class ThreadListView(APIView):
     permission_classes = [IsAuthenticated]
