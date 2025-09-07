@@ -103,7 +103,8 @@ ASGI_APPLICATION = "fidden.asgi.application"
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [("redis", 6379)]},
+        "CONFIG": {
+            "hosts": [("fidden_redis", 6379)]},
     },
 }
 
