@@ -960,11 +960,32 @@ class UserMessageView(APIView):
         thread, _ = ChatThread.objects.get_or_create(shop=shop, user=user)
         message = Message.objects.create(thread=thread, sender=user, content=content)
 
-        # Notify owner
+        # Notify owner and get the created notification
+        from api.models import Notification
+        notification = Notification.objects.create(
+            recipient=shop.owner,
+            message=f"New message from {user.email}",
+            notification_type="chat",
+            data={"thread_id": thread.id}
+        )
         notify_user(shop.owner, f"New message from {user.email}", data={"thread_id": thread.id})
 
-        # Broadcast over websockets to recipient and echo to sender
+        # Broadcast notification over websockets to recipient
         channel_layer = get_channel_layer()
+        notification_data = {
+            "id": notification.id,
+            "message": notification.message,
+            "notification_type": notification.notification_type,
+            "data": notification.data,
+            "is_read": notification.is_read,
+            "created_at": notification.created_at.isoformat()
+        }
+        async_to_sync(channel_layer.group_send)(
+            f"user_{shop.owner.id}",
+            {"type": "notification", "notification": notification_data},
+        )
+
+        # Broadcast over websockets to recipient and echo to sender
         message_data = MessageSerializer(message).data
         async_to_sync(channel_layer.group_send)(
             f"user_{shop.owner.id}",
@@ -989,11 +1010,32 @@ class OwnerMessageView(APIView):
             return Response({"error": "Not authorized"}, status=403)
 
         message = Message.objects.create(thread=thread, sender=owner, content=content)
-        # Notify user
+        # Notify user and get the created notification
+        from api.models import Notification
+        notification = Notification.objects.create(
+            recipient=thread.user,
+            message=f"Reply from {owner.email}",
+            notification_type="chat",
+            data={"thread_id": thread.id}
+        )
         notify_user(thread.user, f"Reply from {owner.email}", data={"thread_id": thread.id})
 
-        # Broadcast over websockets to recipient and echo to sender
+        # Broadcast notification over websockets to recipient
         channel_layer = get_channel_layer()
+        notification_data = {
+            "id": notification.id,
+            "message": notification.message,
+            "notification_type": notification.notification_type,
+            "data": notification.data,
+            "is_read": notification.is_read,
+            "created_at": notification.created_at.isoformat()
+        }
+        async_to_sync(channel_layer.group_send)(
+            f"user_{thread.user.id}",
+            {"type": "notification", "notification": notification_data},
+        )
+
+        # Broadcast over websockets to recipient and echo to sender
         message_data = MessageSerializer(message).data
         async_to_sync(channel_layer.group_send)(
             f"user_{thread.user.id}",

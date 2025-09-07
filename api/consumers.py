@@ -63,3 +63,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def chat_message(self, event):
         await self.send(text_data=json.dumps(event))
+    
+    async def notification(self, event):
+        await self.send(text_data=json.dumps(event))
