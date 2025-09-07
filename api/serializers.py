@@ -661,10 +661,11 @@ class ShopRatingReviewSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     sender_email = serializers.CharField(source="sender.email", read_only=True)
     sender_id = serializers.SerializerMethodField()
+    thread_id = serializers.IntegerField(source="thread.id", read_only=True)
 
     class Meta:
         model = Message
-        fields = ["id", "sender_id", "sender_email", "content", "timestamp", "is_read"]
+        fields = ["id", "thread_id", "sender_id", "sender_email", "content", "timestamp", "is_read"]
 
     def get_sender_id(self, obj):
         # If the sender is the shop owner, return the shop id; otherwise return the user id
