@@ -98,17 +98,25 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'fidden.wsgi.application'
 
-# Channels / Redis (use Docker service name)
+# Channels / Redis with env-based config and safe fallback (best for free Render)
 ASGI_APPLICATION = "fidden.asgi.application"
 
+REDIS_URL = os.getenv("REDIS_URL")
+CHANNEL_LAYER_BACKEND = os.getenv("CHANNEL_LAYER_BACKEND", "memory").lower()
 
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [("fidden_redis", 6379)]},
-    },
-}
+if CHANNEL_LAYER_BACKEND == "redis" and REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [REDIS_URL]},
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
 
 # ==============================
 # Database
