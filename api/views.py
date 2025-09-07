@@ -987,4 +987,5 @@ class ThreadListView(APIView):
         threads = ChatThread.objects.filter(
             Q(user=user) | Q(shop__owner=user)
         ).order_by("-created_at")
-        return Response(ChatThreadSerializer(threads, many=True).data)
+        serializer = ChatThreadSerializer(threads, many=True, context={'request': request})
+        return Response(serializer.data)

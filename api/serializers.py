@@ -660,17 +660,62 @@ class ShopRatingReviewSerializer(serializers.ModelSerializer):
 
 class MessageSerializer(serializers.ModelSerializer):
     sender_email = serializers.CharField(source="sender.email", read_only=True)
+    sender_id = serializers.SerializerMethodField()
+
     class Meta:
         model = Message
-        fields = ["id", "sender", "sender_email", "content", "timestamp", "is_read"]
+        fields = ["id", "sender_id", "sender_email", "content", "timestamp", "is_read"]
+
+    def get_sender_id(self, obj):
+        # If the sender is the shop owner, return the shop id; otherwise return the user id
+        try:
+            if obj.thread and obj.thread.shop and obj.thread.shop.owner_id == obj.sender_id:
+                return obj.thread.shop_id
+        except Exception:
+            pass
+        return obj.sender_id
 
 class ChatThreadSerializer(serializers.ModelSerializer):
     messages = MessageSerializer(many=True, read_only=True)
     shop_name = serializers.CharField(source="shop.name", read_only=True)
     user_email = serializers.CharField(source="user.email", read_only=True)
+    user_name = serializers.CharField(source="user.name", read_only=True)
+    user_img = serializers.ImageField(source="user.profile_image", read_only=True)
+    shop_img = serializers.ImageField(source="shop.shop_img", read_only=True)
     class Meta:
         model = ChatThread
-        fields = ["id", "shop", "shop_name", "user", "user_email", "messages", "created_at"]
+        fields = [
+            "id",
+            "shop",
+            "shop_name",
+            "shop_img",
+            "user",
+            "user_email",
+            "user_name",
+            "user_img",
+            "messages",
+            "created_at",
+        ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        request = self.context.get('request')
+
+        # Absolute URLs for images if request available
+        if instance.shop and instance.shop.shop_img:
+            rep['shop_img'] = (
+                request.build_absolute_uri(instance.shop.shop_img.url)
+                if request else instance.shop.shop_img.url
+            )
+
+        if instance.user and getattr(instance.user, 'profile_image', None):
+            if instance.user.profile_image:
+                rep['user_img'] = (
+                    request.build_absolute_uri(instance.user.profile_image.url)
+                    if request else instance.user.profile_image.url
+                )
+
+        return rep
 
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
