@@ -23,6 +23,8 @@ from .views import (
     OwnerMessageView, 
     ThreadListView, 
     RegisterDeviceView,
+    NotificationsView,
+    NotificationDetailView,
     
 )
 
@@ -50,6 +52,6 @@ urlpatterns = [
     path("threads/<int:shop_id>/send/", UserMessageView.as_view(), name="user-send-message"),
     path("threads/<int:thread_id>/reply/", OwnerMessageView.as_view(), name="owner-reply-message"),
     path('register-device/', RegisterDeviceView.as_view(), name='register-device'),
-    # path("notifications/", NotificationListView.as_view(), name="notifications")
-    
+    path("notifications/", NotificationsView.as_view(), name="user-notifications"),
+    path("notifications/<int:pk>/", NotificationDetailView.as_view(), name="notification-detail"),
 ]

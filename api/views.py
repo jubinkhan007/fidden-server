@@ -19,7 +19,8 @@ from .models import (
     Reply,
     ChatThread, 
     Message, 
-    Device
+    Device,
+    Notification
 )
 from .serializers import (
     ShopSerializer, 
@@ -40,7 +41,8 @@ from .serializers import (
     ShopRatingReviewSerializer, 
     ChatThreadSerializer, 
     MessageSerializer, 
-    DeviceSerializer
+    DeviceSerializer,
+    NotificationSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
@@ -1016,4 +1018,43 @@ class ThreadListView(APIView):
             Q(user=user) | Q(shop__owner=user)
         ).order_by("-created_at")
         serializer = ChatThreadSerializer(threads, many=True, context={'request': request})
+        return Response(serializer.data)
+
+class NotificationsView(APIView):
+    """
+    List all notifications for the authenticated user.
+    Option: Mark all as read when listing.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Only fetch notifications for the logged-in user
+        notifications = Notification.objects.filter(recipient=request.user).order_by("-created_at")
+
+        # # Mark all as read
+        # notifications.update(is_read=True)
+
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data)
+
+
+class NotificationDetailView(APIView):
+    """
+    Retrieve a single notification.
+    Marks as read when viewed.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            notification = Notification.objects.get(pk=pk, recipient=request.user)
+        except Notification.DoesNotExist:
+            return Response({"detail": "Notification not found."}, status=404)
+
+        # Mark as read if not already
+        if not notification.is_read:
+            notification.is_read = True
+            notification.save(update_fields=["is_read"])
+
+        serializer = NotificationSerializer(notification)
         return Response(serializer.data)
