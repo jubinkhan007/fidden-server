@@ -117,34 +117,57 @@ from typing import Any, Dict, Optional
 from django.conf import settings
 from pyfcm import FCMNotification
 from api.models import Notification
+import firebase_admin
+from firebase_admin import credentials
 
 # -------------------------------
 # FCM client (HTTP v1 only)
 # -------------------------------
 def get_fcm_service() -> Optional[FCMNotification]:
     """
-    Initialize FCM using a Service Account JSON (path or JSON string)
+    Initialize FCM using a Service Account JSON (path, JSON string, or env variable)
     - settings.FCM_SERVICE_ACCOUNT_FILE: absolute path OR JSON string
+    - fallback: os.environ['FCM_SERVICE_ACCOUNT_JSON']
     """
     svc = getattr(settings, "FCM_SERVICE_ACCOUNT_FILE", None)
-    if not svc:
-        print("FCM service account file missing in settings")
-        return None
 
-    # If it's a path on disk
-    if isinstance(svc, str) and os.path.exists(svc):
-        return FCMNotification(service_account_file=svc)
+    # Try using FCM_SERVICE_ACCOUNT_FILE from settings
+    if svc:
+        try:
+            # If it's a path on disk
+            if isinstance(svc, str) and os.path.exists(svc):
+                return FCMNotification(service_account_file=svc)
 
-    # If it's JSON content in a setting/env
+            # If it's JSON content
+            info = json.loads(svc) if isinstance(svc, str) else dict(svc)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                json.dump(info, f)
+                path = f.name
+            return FCMNotification(service_account_file=path)
+        except Exception as e:
+            print("Failed to load FCM service account from settings:", e)
+
+    # Fallback: try environment variable
     try:
-        info = json.loads(svc) if isinstance(svc, str) else dict(svc)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(info, f)
-            path = f.name
-        return FCMNotification(service_account_file=path)
+        service_account_json_str = os.environ.get("FCM_SERVICE_ACCOUNT_JSON")
+        if service_account_json_str:
+            info = json.loads(service_account_json_str)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                json.dump(info, f)
+                temp_path = f.name
+            # Initialize Firebase Admin SDK (optional if using pyfcm)
+            cred = credentials.Certificate(temp_path)
+            if not firebase_admin._apps:
+                firebase_admin.initialize_app(cred)
+            return FCMNotification(service_account_file=temp_path)
+        else:
+            print("FCM_SERVICE_ACCOUNT_JSON environment variable not set.")
     except Exception as e:
-        print("Failed to load FCM service account:", e)
-        return None
+        print("Failed to load FCM service account from environment variable:", e)
+        traceback.print_exc()
+
+    print("FCM service not configured. Skipping push.")
+    return None
 
 push_service: Optional[FCMNotification] = get_fcm_service()
 
@@ -223,7 +246,8 @@ def send_push_notification(
                 dry_run=dry_run,
                 timeout=120,
             )
-            print(f"\nFCM sent to token {token}:\n", json.dumps(result, indent=2, ensure_ascii=False))
+            if debug:
+                print(f"\nFCM sent to token {token}:\n", json.dumps(result, indent=2, ensure_ascii=False))
         except Exception as e:
             print(f"Failed to send push notification to token {token}: {e}")
             traceback.print_exc()
