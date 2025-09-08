@@ -18,3 +18,5 @@ venv/
 
 #service_account_fcm
 service_account_fcm.json
+
+.env
