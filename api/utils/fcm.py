@@ -65,9 +65,11 @@ def send_push_notification(user, title, message, data=None):
             try:
                 push_service.notify(
                     fcm_token=token,
-                    notification_title=title,
-                    notification_body=message,
-                    data_payload=data or {}
+                    data_payload={
+                        "title": title,
+                        "body": message,
+                        **(data or {})
+                    }
                 )
             except Exception as e:
                 print(f"Failed to send push notification to token {token}: {e}")

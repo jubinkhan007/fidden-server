@@ -13,7 +13,8 @@ from .models import (
     ChatThread, 
     Message, 
     Device, 
-    Notification
+    Notification,
+    Revenue
 )
 
 
@@ -127,3 +128,9 @@ class NotificationAdmin(admin.ModelAdmin):
     search_fields = ('recipient__username', 'message')
     ordering = ('-created_at',)
 
+@admin.register(Revenue)
+class RevenueAdmin(admin.ModelAdmin):
+    list_display = ('shop', 'revenue', 'timestamp')  # columns to show in the table
+    list_filter = ('shop', 'timestamp')             # filter sidebar
+    search_fields = ('shop__name',)                 # search box for shop name
+    ordering = ('-timestamp',)                      # newest first

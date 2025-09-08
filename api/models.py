@@ -305,3 +305,27 @@ class Notification(models.Model):
     data = models.JSONField(default=dict, blank=True)
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+class Revenue(models.Model):
+    shop = models.ForeignKey(
+        "Shop",
+        on_delete=models.CASCADE,
+        related_name="revenues"
+    )
+    revenue = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Total revenue amount"
+    )
+    timestamp = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When this revenue record was created"
+    )
+
+    class Meta:
+        ordering = ["-timestamp"]
+        verbose_name = "Revenue"
+        verbose_name_plural = "Revenues"
+
+    def __str__(self):
+        return f"{self.shop.name} – {self.revenue} at {self.timestamp:%Y-%m-%d}"
