@@ -448,6 +448,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
 class ServiceDetailSerializer(serializers.ModelSerializer):
     shop_id = serializers.IntegerField(source="shop.id", read_only=True)
     shop_name = serializers.CharField(source="shop.name", read_only=True)
+    shop_address = serializers.CharField(source="shop.address", read_only=True)
     avg_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     reviews = serializers.SerializerMethodField()
@@ -464,6 +465,7 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
             "duration",
             "shop_id",
             "shop_name",
+            "shop_address",
             "avg_rating",
             "review_count",
             "reviews",

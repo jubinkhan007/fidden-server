@@ -1,0 +1,152 @@
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
+from django.shortcuts import get_object_or_404
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+import stripe
+import json
+from django.conf import settings
+
+from api.models import Shop, SlotBooking
+from accounts.models import User
+from .models import Payment, UserStripeCustomer, ShopStripeAccount
+
+stripe.api_key = settings.STRIPE_SECRET_KEY
+STRIPE_ENDPOINT_SECRET = settings.STRIPE_WEBHOOK_SECRET
+
+# -----------------------------
+# 1️⃣ Create PaymentIntent
+# -----------------------------
+class CreatePaymentIntentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, booking_id):
+        booking = get_object_or_404(SlotBooking, id=booking_id)
+
+        # 1. Ensure User Stripe Customer exists
+        user = request.user
+        user_customer, _ = UserStripeCustomer.objects.get_or_create(user=user)
+        if not user_customer.stripe_customer_id:
+            stripe_customer = stripe.Customer.create(email=user.email)
+            user_customer.stripe_customer_id = stripe_customer.id
+            user_customer.save()
+
+        # 2. Ensure Shop Stripe Account exists
+        shop = booking.shop
+        shop_account = getattr(shop, 'stripe_account', None)
+        if not shop_account:
+            return Response({"error": "Shop Stripe account not found"}, status=400)
+
+        # 3. Create PaymentIntent
+        amount_cents = int(booking.service.price * 100)
+        try:
+            intent = stripe.PaymentIntent.create(
+                amount=amount_cents,
+                currency="usd",
+                customer=user_customer.stripe_customer_id,
+                payment_method_types=["card"],
+                transfer_data={"destination": shop_account.stripe_account_id},
+                metadata={"booking_id": booking.id}
+            )
+        except Exception as e:
+            return Response({"error": f"PaymentIntent creation failed: {str(e)}"}, status=500)
+
+        # 4. Save Payment record
+        Payment.objects.update_or_create(
+            booking=booking,
+            defaults={
+                "user": user,
+                "amount": booking.service.price,
+                "stripe_payment_intent_id": intent.id,
+                "status": "pending"
+            }
+        )
+
+        return Response({"client_secret": intent.client_secret}, status=200)
+
+# -----------------------------
+# 2️⃣ Shop Onboarding Link
+# -----------------------------
+class ShopOnboardingLinkView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, shop_id):
+        shop = get_object_or_404(Shop, id=shop_id)
+        if shop.owner != request.user:
+            return Response({"error": "Not authorized"}, status=403)
+        if not hasattr(shop, "stripe_account"):
+            return Response({"error": "Stripe account not found"}, status=400)
+
+        account_link = stripe.AccountLink.create(
+            account=shop.stripe_account.stripe_account_id,
+            refresh_url="https://yourdomain.com/stripe/refresh",
+            return_url="https://yourdomain.com/stripe/return",
+            type="account_onboarding"
+        )
+        return Response({"url": account_link.url})
+
+# -----------------------------
+# 3️⃣ Save Card View
+# -----------------------------
+class SaveCardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        user_customer, _ = UserStripeCustomer.objects.get_or_create(user=user)
+
+        if not user_customer.stripe_customer_id:
+            stripe_customer = stripe.Customer.create(email=user.email)
+            user_customer.stripe_customer_id = stripe_customer.id
+            user_customer.save()
+
+        # Create SetupIntent to save card
+        setup_intent = stripe.SetupIntent.create(
+            customer=user_customer.stripe_customer_id,
+            payment_method_types=["card"],
+        )
+
+        return Response({"client_secret": setup_intent.client_secret}, status=200)
+
+# -----------------------------
+# 4️⃣ Stripe Webhook
+# -----------------------------
+@method_decorator(csrf_exempt, name='dispatch')
+def stripe_webhook(request):
+    payload = request.body
+    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_ENDPOINT_SECRET)
+    except ValueError:
+        return Response(status=400)
+    except stripe.error.SignatureVerificationError:
+        return Response(status=400)
+
+    # Handle the event
+    if event['type'] == 'payment_intent.succeeded':
+        intent = event['data']['object']
+        booking_id = intent.metadata.get('booking_id')
+        try:
+            payment = Payment.objects.get(stripe_payment_intent_id=intent.id)
+            payment.status = "succeeded"
+            payment.save()
+            # Optionally mark booking confirmed
+            booking = payment.booking
+            booking.status = "confirmed"
+            booking.save()
+        except Payment.DoesNotExist:
+            pass
+
+    if event['type'] == 'payment_intent.payment_failed':
+        intent = event['data']['object']
+        try:
+            payment = Payment.objects.get(stripe_payment_intent_id=intent.id)
+            payment.status = "failed"
+            payment.save()
+        except Payment.DoesNotExist:
+            pass
+
+    return Response(status=200)

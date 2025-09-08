@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'accounts',
     'api',
+    'payments',
     'django_celery_beat',
     'channels',
     # 'django_crontab',
@@ -213,3 +214,7 @@ CELERY_ENABLE_UTC = True
 
 FCM_SERVER_KEY = os.getenv("FCM_SERVER_KEY", "")
 FCM_SERVICE_ACCOUNT_FILE = os.environ.get("FCM_SERVICE_ACCOUNT_JSON")
+
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")  # sk_test_...
+STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY")  # pk_test_...
+STRIPE_ENDPOINT_SECRET = os.environ.get("STRIPE_ENDPOINT_SECRET")  # webhook secret
