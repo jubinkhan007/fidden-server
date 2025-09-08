@@ -4,7 +4,8 @@ from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
-from django.db.models import Avg
+from django.db.models import Avg, Sum
+from django.utils.timezone import make_aware
 
 from .models import (
     Shop, 
@@ -50,7 +51,7 @@ from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.expressions import Func
-from datetime import datetime
+from datetime import datetime, timedelta
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Avg, Count, Q, Value, FloatField, F
@@ -1081,7 +1082,6 @@ class NotificationsView(APIView):
         serializer = NotificationSerializer(notifications, many=True)
         return Response(serializer.data)
 
-
 class NotificationDetailView(APIView):
     """
     Retrieve a single notification.
@@ -1104,8 +1104,11 @@ class NotificationDetailView(APIView):
         return Response(serializer.data)
 
 class WeeklyShopRevenueView(APIView):
+
+    permission_classes = [IsAuthenticated]
     """
     Get all revenue records for a given shop_id with shop details
+    Optional query param: ?day=7 to get records from today to previous 7 days
     """
     def get(self, request, shop_id):
         try:
@@ -1115,7 +1118,42 @@ class WeeklyShopRevenueView(APIView):
                 {"detail": f"Shop with id {shop_id} not found."},
                 status=status.HTTP_404_NOT_FOUND
             )
+        
+        day_param = request.query_params.get('day')
+        if day_param:
+            try:
+                days = int(day_param)
+                if days < 0:
+                    raise ValueError
+            except ValueError:
+                return Response(
+                    {"detail": "Invalid 'day' parameter. Must be a non-negative integer."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Calculate the date from which to filter
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            # Make timezone aware if your project uses timezone-aware datetimes
+            start_date = make_aware(start_date)
+            end_date = make_aware(end_date)
+            
+            revenues = Revenue.objects.filter(
+                shop=shop,
+                timestamp__range=(start_date, end_date)
+            ).order_by('-timestamp')
+        else:
+            revenues = Revenue.objects.filter(shop=shop).order_by('-timestamp')
 
-        revenues = Revenue.objects.filter(shop=shop).order_by('-timestamp')
+        # Total revenue (all time, not filtered)
+        total_revenue = Revenue.objects.filter(shop=shop).aggregate(
+            total=Sum('revenue')
+        )['total'] or 0
+
         serializer = RevenueSerializer(revenues, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "total_revenue": total_revenue,
+                "revenues": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
