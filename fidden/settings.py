@@ -210,10 +210,6 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = os.getenv('CELERY_TIMEZONE', TIME_ZONE)
 CELERY_ENABLE_UTC = True
 
-# Firebase Push
-# Configure FCM using one of these methods:
-# 1. Legacy Server Key: Set FCM_SERVER_KEY to your legacy FCM server key
-# 2. Service Account File: Set FCM_SERVICE_ACCOUNT_FILE to path of your service account JSON file
-# 3. Service Account JSON: Set FCM_SERVICE_ACCOUNT_FILE to the JSON content as a string
+
 FCM_SERVER_KEY = os.getenv("FCM_SERVER_KEY", "")
-FCM_SERVICE_ACCOUNT_FILE = os.getenv("FCM_SERVICE_ACCOUNT_FILE", "") 
+FCM_SERVICE_ACCOUNT_FILE = os.environ.get("FCM_SERVICE_ACCOUNT_JSON")

@@ -14,7 +14,8 @@ from .models import (
     ChatThread, 
     Message, 
     Notification,
-    Device
+    Device,
+    Revenue
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -727,5 +728,12 @@ class DeviceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Device
         fields = ["device_token", "device_type"]
+
+class RevenueSerializer(serializers.ModelSerializer):
+    shop_id = serializers.ReadOnlyField(source='shop.id')
+
+    class Meta:
+        model = Revenue
+        fields = ['id', 'shop_id', 'revenue', 'timestamp']
 
 

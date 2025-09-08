@@ -25,6 +25,7 @@ from .views import (
     RegisterDeviceView,
     NotificationsView,
     NotificationDetailView,
+    WeeklyShopRevenueView,
     
 )
 
@@ -54,4 +55,5 @@ urlpatterns = [
     path('register-device/', RegisterDeviceView.as_view(), name='register-device'),
     path("notifications/", NotificationsView.as_view(), name="user-notifications"),
     path("notifications/<int:pk>/", NotificationDetailView.as_view(), name="notification-detail"),
+    path('shop/<int:shop_id>/revenues/', WeeklyShopRevenueView.as_view(), name='weekly-shop-revenues'),
 ]

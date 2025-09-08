@@ -20,7 +20,8 @@ from .models import (
     ChatThread, 
     Message, 
     Device,
-    Notification
+    Notification,
+    Revenue
 )
 from .serializers import (
     ShopSerializer, 
@@ -42,7 +43,8 @@ from .serializers import (
     ChatThreadSerializer, 
     MessageSerializer, 
     DeviceSerializer,
-    NotificationSerializer
+    NotificationSerializer,
+    RevenueSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 
@@ -1100,3 +1102,20 @@ class NotificationDetailView(APIView):
 
         serializer = NotificationSerializer(notification)
         return Response(serializer.data)
+
+class WeeklyShopRevenueView(APIView):
+    """
+    Get all revenue records for a given shop_id with shop details
+    """
+    def get(self, request, shop_id):
+        try:
+            shop = Shop.objects.get(id=shop_id)
+        except Shop.DoesNotExist:
+            return Response(
+                {"detail": f"Shop with id {shop_id} not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        revenues = Revenue.objects.filter(shop=shop).order_by('-timestamp')
+        serializer = RevenueSerializer(revenues, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)

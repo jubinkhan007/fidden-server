@@ -1,86 +1,246 @@
+# # api/utils/fcm.py
+# from pyfcm import FCMNotification
+# from django.conf import settings
+# from api.models import Notification
+# import os
+# import json
+# import tempfile
+# import requests
+
+# # Initialize FCM service
+# def get_fcm_service():
+#     """Initialize FCM service with proper configuration"""
+#     # Preferred: explicit service account file path
+#     if getattr(settings, 'FCM_SERVICE_ACCOUNT_FILE', None):
+#         service_account_value = settings.FCM_SERVICE_ACCOUNT_FILE
+#         if isinstance(service_account_value, str) and os.path.exists(service_account_value):
+#             return FCMNotification(service_account_file=service_account_value)
+#         # If not a path, maybe it's JSON content
+#         try:
+#             service_account_info = json.loads(service_account_value)
+#             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+#                 json.dump(service_account_info, f)
+#                 temp_file_path = f.name
+#             return FCMNotification(service_account_file=temp_file_path)
+#         except (json.JSONDecodeError, TypeError, KeyError):
+#             pass
+
+#     # Fallback: allow JSON provided via FCM_SERVER_KEY only if it's actually a service account JSON
+#     fcm_key = getattr(settings, 'FCM_SERVER_KEY', None)
+#     if fcm_key and isinstance(fcm_key, str) and (fcm_key.strip().startswith('{')):
+#         try:
+#             service_account_info = json.loads(fcm_key)
+#             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+#                 json.dump(service_account_info, f)
+#                 temp_file_path = f.name
+#             return FCMNotification(service_account_file=temp_file_path)
+#         except (json.JSONDecodeError, KeyError):
+#             pass
+
+#     # If no valid service account credentials found, disable FCM gracefully
+#     return None
+
+# push_service = get_fcm_service()
+
+# def get_legacy_server_key():
+#     """Return legacy FCM server key if configured"""
+#     key = getattr(settings, 'FCM_SERVER_KEY', None)
+#     # Only treat as legacy key if it's not JSON (to avoid misinterpreting service account JSON)
+#     if isinstance(key, str) and not key.strip().startswith('{'):
+#         return key.strip()
+#     return None
+
+# LEGACY_SERVER_KEY = get_legacy_server_key()
+
+# def send_with_legacy_server_key(token, title, message, data=None):
+#     """Send push via legacy HTTP API using server key."""
+#     if not LEGACY_SERVER_KEY:
+#         return
+#     headers = {
+#         'Authorization': f'key={LEGACY_SERVER_KEY}',
+#         'Content-Type': 'application/json',
+#     }
+#     payload = {
+#         'to': token,
+#         'notification': {
+#             'title': title,
+#             'body': message,
+#         },
+#         'data': data or {},
+#     }
+#     resp = requests.post('https://fcm.googleapis.com/fcm/send', headers=headers, json=payload, timeout=20)
+#     resp.raise_for_status()
+
+# def send_push_notification(user, title, message, data=None):
+#     if not push_service and not LEGACY_SERVER_KEY:
+#         print("FCM service not configured (no service account or server key). Skipping push notification.")
+#         return
+    
+#     tokens = [d.device_token for d in user.devices.all()]
+#     if tokens:
+#         # Send notification to each device token individually
+#         for token in tokens:
+#             try:
+#                 if push_service:
+#                     result = push_service.notify(
+#                         fcm_token=token,
+#                         notification_title=title,
+#                         notification_body=message,
+#                         data_payload=data or {}
+#                     )
+#                     print("result:", result)
+#                 else:
+#                     send_with_legacy_server_key(token, title, message, data)
+#                     print("result: sent via legacy server key")
+#             except Exception as e:
+#                 print(f"Failed to send push notification to token {token}: {e}")
+
+# def notify_user(user, message, notification_type="chat", data=None):
+#     # Save to DB
+#     Notification.objects.create(
+#         recipient=user,
+#         message=message,
+#         notification_type=notification_type,
+#         data=data or {}
+#     )
+#     # Send FCM
+#     send_push_notification(user, "New Notification", message, data)
+
+
 # api/utils/fcm.py
-from pyfcm import FCMNotification
-from django.conf import settings
-from api.models import Notification
-import os
+from __future__ import annotations
 import json
+import os
 import tempfile
+import traceback
+from typing import Any, Dict, Optional
+from django.conf import settings
+from pyfcm import FCMNotification
+from api.models import Notification
 
-# Initialize FCM service
-def get_fcm_service():
-    """Initialize FCM service with proper configuration"""
-    # Check if service account file is provided
-    if hasattr(settings, 'FCM_SERVICE_ACCOUNT_FILE') and settings.FCM_SERVICE_ACCOUNT_FILE:
-        if os.path.exists(settings.FCM_SERVICE_ACCOUNT_FILE):
-            return FCMNotification(service_account_file=settings.FCM_SERVICE_ACCOUNT_FILE)
-        else:
-            # If file doesn't exist, treat the value as JSON content
-            try:
-                service_account_info = json.loads(settings.FCM_SERVICE_ACCOUNT_FILE)
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                    json.dump(service_account_info, f)
-                    temp_file_path = f.name
-                return FCMNotification(service_account_file=temp_file_path)
-            except (json.JSONDecodeError, KeyError):
-                pass
-    
-    # Check if server key is provided
-    fcm_key = settings.FCM_SERVER_KEY
-    if fcm_key:
-        # Check if it's a service account key (JSON string) or server key
-        if fcm_key.startswith('{') or 'client_email' in fcm_key:
-            # It's a service account key, create a temporary file
-            try:
-                # Parse the JSON to validate it
-                service_account_info = json.loads(fcm_key)
-                
-                # Create a temporary file with the service account key
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                    json.dump(service_account_info, f)
-                    temp_file_path = f.name
-                
-                # Initialize FCM with the service account file
-                return FCMNotification(service_account_file=temp_file_path)
-            except (json.JSONDecodeError, KeyError):
-                # If it's not valid JSON, treat it as a server key
-                return FCMNotification(fcm_key)
-        else:
-            # It's a legacy server key
-            return FCMNotification(fcm_key)
-    
-    # If no configuration is provided, return None to handle gracefully
-    return None
+# -------------------------------
+# FCM client (HTTP v1 only)
+# -------------------------------
+def get_fcm_service() -> Optional[FCMNotification]:
+    """
+    Initialize FCM using a Service Account JSON (path or JSON string)
+    - settings.FCM_SERVICE_ACCOUNT_FILE: absolute path OR JSON string
+    """
+    svc = getattr(settings, "FCM_SERVICE_ACCOUNT_FILE", None)
+    if not svc:
+        print("FCM service account file missing in settings")
+        return None
 
-push_service = get_fcm_service()
+    # If it's a path on disk
+    if isinstance(svc, str) and os.path.exists(svc):
+        return FCMNotification(service_account_file=svc)
 
-def send_push_notification(user, title, message, data=None):
+    # If it's JSON content in a setting/env
+    try:
+        info = json.loads(svc) if isinstance(svc, str) else dict(svc)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(info, f)
+            path = f.name
+        return FCMNotification(service_account_file=path)
+    except Exception as e:
+        print("Failed to load FCM service account:", e)
+        return None
+
+push_service: Optional[FCMNotification] = get_fcm_service()
+
+# -------------------------------
+# Helpers
+# -------------------------------
+def _stringify(d: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """FCM data map must be strings."""
+    src = d or {}
+    return {str(k): ("" if v is None else str(v)) for k, v in src.items()}
+
+def _android_config() -> Dict[str, Any]:
+    return {
+        "priority": "HIGH",
+        "notification": {
+            "channel_id": "fidden_messages",
+            "sound": "default",
+            "click_action": "FLUTTER_NOTIFICATION_CLICK",
+        },
+    }
+
+def _apns_config() -> Dict[str, Any]:
+    return {
+        "headers": {
+            "apns-push-type": "alert",
+            "apns-priority": "10",
+        },
+        "payload": {
+            "aps": {
+                "alert": {},
+                "sound": "default",
+                "badge": 1,
+            }
+        },
+    }
+
+# -------------------------------
+# Senders (HTTP v1 only)
+# -------------------------------
+def send_push_notification(
+    user,
+    title: str,
+    message: str,
+    data: Optional[Dict[str, Any]] = None,
+    *,
+    debug: bool = False,
+    dry_run: bool = False,
+) -> None:
+    """
+    Sends push notifications using FCM HTTP v1 only
+    - title/body included in data_payload for Flutter
+    """
     if not push_service:
-        print("FCM service not configured. Skipping push notification.")
+        print("FCM service not configured. Skipping push.")
         return
-    
-    tokens = [d.device_token for d in user.devices.all()]
-    if tokens:
-        # Send notification to each device token individually
-        for token in tokens:
-            try:
-                push_service.notify(
-                    fcm_token=token,
-                    data_payload={
-                        "title": title,
-                        "body": message,
-                        **(data or {})
-                    }
-                )
-            except Exception as e:
-                print(f"Failed to send push notification to token {token}: {e}")
 
-def notify_user(user, message, notification_type="chat", data=None):
-    # Save to DB
+    tokens = [d.device_token for d in user.devices.all() if getattr(d, "device_token", None)]
+    if not tokens:
+        return
+
+    payload_data = _stringify(data)
+    payload_data.setdefault("title", title)
+    payload_data.setdefault("body", message)
+
+    android_cfg = _android_config()
+    apns_cfg = _apns_config()
+
+    for token in tokens:
+        try:
+            result = push_service.notify(
+                fcm_token=token,
+                data_payload=payload_data,
+                android_config=android_cfg,
+                apns_config=apns_cfg,
+                fcm_options={"analytics_label": "chat"},
+                dry_run=dry_run,
+                timeout=120,
+            )
+            print(f"\nFCM sent to token {token}:\n", json.dumps(result, indent=2, ensure_ascii=False))
+        except Exception as e:
+            print(f"Failed to send push notification to token {token}: {e}")
+            traceback.print_exc()
+
+def notify_user(
+    user,
+    message: str,
+    notification_type: str = "chat",
+    data: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Persist notification in DB + send FCM
+    """
     Notification.objects.create(
         recipient=user,
         message=message,
         notification_type=notification_type,
-        data=data or {}
+        data=data or {},
     )
-    # Send FCM
     send_push_notification(user, "New Notification", message, data)
