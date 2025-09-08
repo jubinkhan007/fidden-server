@@ -14,3 +14,6 @@ venv/
 
 # Logs
 *.log
+
+#service_account_fcm
+service_account_fcm.json
