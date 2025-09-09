@@ -14,7 +14,7 @@ from accounts.models import User
 from .models import Payment, UserStripeCustomer, ShopStripeAccount
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
-STRIPE_ENDPOINT_SECRET = settings.STRIPE_WEBHOOK_SECRET
+STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
 
 # -----------------------------
 # 1️⃣ Create PaymentIntent
