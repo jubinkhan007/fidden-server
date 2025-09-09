@@ -74,10 +74,9 @@ class ShopOnboardingLinkView(APIView):
 
     def get(self, request, shop_id):
         shop = get_object_or_404(Shop, id=shop_id)
-        if shop.owner != request.user:
-            return Response({"error": "Not authorized"}, status=403)
-        if not hasattr(shop, "stripe_account"):
-            return Response({"error": "Stripe account not found"}, status=400)
+        user = request.user
+        if getattr(user, "role", None) != "owner":
+            return Response({"detail": "Only owner can view services."}, status=status.HTTP_403_FORBIDDEN)
 
         account_link = stripe.AccountLink.create(
             account=shop.stripe_account.stripe_account_id,

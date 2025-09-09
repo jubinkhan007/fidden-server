@@ -215,7 +215,7 @@ class SlotBooking(models.Model):
             models.Index(fields=['service', 'start_time']),
         ]
         constraints = [
-            models.UniqueConstraint(fields=['user', 'slot'], name='uniq_user_slot')
+            models.UniqueConstraint(fields=['user', 'slot', 'status'], name='uniq_user_slot_status')
         ]
 
     def __str__(self):
