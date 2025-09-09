@@ -113,39 +113,43 @@ class SaveCardView(APIView):
 # 4️⃣ Stripe Webhook
 # -----------------------------
 @method_decorator(csrf_exempt, name='dispatch')
-def stripe_webhook(request):
-    payload = request.body
-    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+class StripeWebhookView(APIView):
+    authentication_classes = []  # Disable authentication for webhook
+    permission_classes = []      # Disable permission checks
 
-    try:
-        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_ENDPOINT_SECRET)
-    except ValueError:
-        return Response(status=400)
-    except stripe.error.SignatureVerificationError:
-        return Response(status=400)
+    def post(self, request, *args, **kwargs):
+        payload = request.body
+        sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
 
-    # Handle the event
-    if event['type'] == 'payment_intent.succeeded':
-        intent = event['data']['object']
-        booking_id = intent.metadata.get('booking_id')
         try:
-            payment = Payment.objects.get(stripe_payment_intent_id=intent.id)
-            payment.status = "succeeded"
-            payment.save()
-            # Optionally mark booking confirmed
-            booking = payment.booking
-            booking.status = "confirmed"
-            booking.save()
-        except Payment.DoesNotExist:
-            pass
+            event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_ENDPOINT_SECRET)
+        except ValueError:
+            return Response(status=400)
+        except stripe.error.SignatureVerificationError:
+            return Response(status=400)
 
-    if event['type'] == 'payment_intent.payment_failed':
-        intent = event['data']['object']
-        try:
-            payment = Payment.objects.get(stripe_payment_intent_id=intent.id)
-            payment.status = "failed"
-            payment.save()
-        except Payment.DoesNotExist:
-            pass
+        # Handle events
+        if event['type'] == 'payment_intent.succeeded':
+            intent = event['data']['object']
+            booking_id = intent.metadata.get('booking_id')
+            try:
+                payment = Payment.objects.get(stripe_payment_intent_id=intent.id)
+                payment.status = "succeeded"
+                payment.save()
+                # Optionally confirm booking
+                booking = payment.booking
+                booking.status = "confirmed"
+                booking.save()
+            except Payment.DoesNotExist:
+                pass
 
-    return Response(status=200)
+        elif event['type'] == 'payment_intent.payment_failed':
+            intent = event['data']['object']
+            try:
+                payment = Payment.objects.get(stripe_payment_intent_id=intent.id)
+                payment.status = "failed"
+                payment.save()
+            except Payment.DoesNotExist:
+                pass
+
+        return Response(status=200)
