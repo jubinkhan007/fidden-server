@@ -64,7 +64,7 @@ class CreatePaymentIntentView(APIView):
             }
         )
 
-        return Response({"client_secret": intent.client_secret}, status=200)
+        return Response({"client_secret": intent.client_secret, "payment_intent_id": intent.id}, status=200)
 
 # -----------------------------
 # 2️⃣ Shop Onboarding Link
