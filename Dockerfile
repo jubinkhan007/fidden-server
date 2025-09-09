@@ -38,4 +38,4 @@ RUN python manage.py collectstatic --noinput
 EXPOSE 8090
 
 # Run Uvicorn (ASGI server for Django + Channels)
-CMD ["sh", "-c", "uvicorn fidden.asgi:application --host 0.0.0.0 --port $PORT --ws websockets"]
+CMD ["uvicorn", "fidden.asgi:application", "--host", "0.0.0.0", "--port", "8080", "--ws", "websockets"]
