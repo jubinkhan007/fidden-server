@@ -64,7 +64,22 @@ class CreatePaymentIntentView(APIView):
             }
         )
 
-        return Response({"client_secret": intent.client_secret, "payment_intent_id": intent.id}, status=200)
+        # 5. Create Ephemeral Key for the frontend
+        try:
+            ephemeral_key = stripe.EphemeralKey.create(
+                customer=user_customer.stripe_customer_id,
+                stripe_version="2024-04-10"  # Always use the latest Stripe API version your frontend supports
+            )
+        except Exception as e:
+            return Response({"error": f"Ephemeral key creation failed: {str(e)}"}, status=500)
+
+        # 6. Return response with client_secret, ephemeralKey, and customer ID
+        return Response({
+            "client_secret": intent.client_secret,
+            "payment_intent_id": intent.id,
+            "ephemeral_key": ephemeral_key.secret,
+            "customer_id": user_customer.stripe_customer_id
+        }, status=status.HTTP_200_OK)
 
 # -----------------------------
 # 2️⃣ Shop Onboarding Link
