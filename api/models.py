@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from datetime import timedelta
 from django.utils import timezone
+from django.db.models import Q
 
 
 class Shop(models.Model):
@@ -215,8 +216,13 @@ class SlotBooking(models.Model):
             models.Index(fields=['service', 'start_time']),
         ]
         constraints = [
-            models.UniqueConstraint(fields=['user', 'slot', 'status'], name='uniq_user_slot_status')
+            models.UniqueConstraint(
+                fields=['user', 'slot'],
+                condition=Q(status='confirmed'),
+                name='uniq_user_slot_confirmed'
+            )
         ]
+
 
     def __str__(self):
         return f"{self.user} → {self.service.title} @ {self.shop.name} ({timezone.localtime(self.start_time)})"

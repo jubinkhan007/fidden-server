@@ -127,47 +127,70 @@ class SaveCardView(APIView):
 # -----------------------------
 # 4️⃣ Stripe Webhook
 # -----------------------------
-@method_decorator(csrf_exempt, name='dispatch')
+@method_decorator(csrf_exempt, name="dispatch")
 class StripeWebhookView(APIView):
     authentication_classes = []  # Disable authentication for webhook
     permission_classes = []      # Disable permission checks
 
     def post(self, request, *args, **kwargs):
         payload = request.body
-        sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+        sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
 
         try:
-            event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_ENDPOINT_SECRET)
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, STRIPE_ENDPOINT_SECRET
+            )
         except ValueError:
-            return Response(status=400)
+            # Invalid payload
+            return Response({"error": "Invalid payload"}, status=400)
         except stripe.error.SignatureVerificationError:
-            return Response(status=400)
+            # Invalid signature
+            return Response({"error": "Invalid signature"}, status=400)
 
-        # Handle events
-        if event['type'] == 'payment_intent.succeeded':
-            intent = event['data']['object']
-            booking_id = intent.metadata.get('booking_id')
-            try:
-                payment = Payment.objects.get(stripe_payment_intent_id=intent.id)
-                payment.status = "succeeded"
-                payment.save()
-                # Optionally confirm booking
-                booking = payment.booking
-                booking.status = "confirmed"
-                booking.save()
-            except Payment.DoesNotExist:
-                pass
+        event_type = event["type"]
+        data = event["data"]["object"]
 
-        elif event['type'] == 'payment_intent.payment_failed':
-            intent = event['data']['object']
-            try:
-                payment = Payment.objects.get(stripe_payment_intent_id=intent.id)
-                payment.status = "failed"
-                payment.save()
-            except Payment.DoesNotExist:
-                pass
+        # --- Handle PaymentIntents (recommended way to track payments) ---
+        if event_type == "payment_intent.succeeded":
+            self._update_payment_status(data, "succeeded")
+
+        elif event_type == "payment_intent.payment_failed":
+            self._update_payment_status(data, "failed")
+
+        elif event_type == "payment_intent.canceled":
+            self._update_payment_status(data, "cancelled")
+
+        # --- Handle Charges (optional, useful for extra logging) ---
+        elif event_type == "charge.succeeded":
+            self._update_payment_status(data, "succeeded")
+
+        elif event_type == "charge.failed":
+            self._update_payment_status(data, "failed")
+
+        # --- Handle Transfers / Payouts (if using Connect) ---
+        elif event_type.startswith("transfer."):
+            # TODO: Update your transfer table if you have one
+            print("🔄 Transfer event:", event_type, data["id"])
+
+        else:
+            # Log unhandled events for debugging
+            print("⚠️ Unhandled event:", event_type)
 
         return Response(status=200)
+
+    def _update_payment_status(self, stripe_obj, new_status):
+        """Helper to safely update your Payment model"""
+        intent_id = stripe_obj.get("id")
+        if stripe_obj.get("object") == "charge":
+            intent_id = stripe_obj.get("payment_intent")  # link charge → intent
+
+        try:
+            payment = Payment.objects.get(stripe_payment_intent_id=intent_id)
+            payment.status = new_status
+            payment.save(update_fields=["status"])
+            print(f"✅ Payment {intent_id} updated to {new_status}")
+        except Payment.DoesNotExist:
+            print(f"⚠️ Payment with intent {intent_id} not found")
 
 class VerifyShopOnboardingView(APIView):
     permission_classes = [IsAuthenticated]
