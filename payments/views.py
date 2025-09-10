@@ -153,3 +153,34 @@ class StripeWebhookView(APIView):
                 pass
 
         return Response(status=200)
+
+class VerifyShopOnboardingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, shop_id):
+        shop = get_object_or_404(Shop, id=shop_id)
+
+        # Ensure the user is the owner of the shop
+        if request.user != shop.owner:
+            return Response(
+                {"detail": "You are not the owner of this shop."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Retrieve the linked Stripe account
+        if not hasattr(shop, "stripe_account") or not shop.stripe_account.stripe_account_id:
+            return Response(
+                {"detail": "Shop has no Stripe account."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        account = stripe.Account.retrieve(shop.stripe_account.stripe_account_id)
+
+        data = {
+            "account_id": account.id,
+            "charges_enabled": account.charges_enabled,
+            "payouts_enabled": account.payouts_enabled,
+            "requirements": account.requirements.currently_due,
+            "onboarded": account.charges_enabled and account.payouts_enabled,
+        }
+        return Response(data, status=status.HTTP_200_OK)
