@@ -19,6 +19,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from django.http import JsonResponse
+from payments.views import StripeWebhookView
 
 def health(request):
     return JsonResponse({"status": "ok"})
@@ -30,4 +31,5 @@ urlpatterns = [
     path('api/', include('api.urls')),
     path("payments/", include('payments.urls')),
     path("health/", health),
+    path("stripe-webhook/", StripeWebhookView.as_view(), name="stripe-webhook"),
 ]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
