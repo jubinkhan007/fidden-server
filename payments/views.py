@@ -234,11 +234,17 @@ class BookingListView(APIView):
             bookings_queryset  = bookings_queryset.filter(shop_id=shop_id)
 
         else:  # Regular user
-            user_id = request.query_params.get('user_id')
-            if not user_id:
-                return Response({"error": "user_id is required for users"}, status=status.HTTP_400_BAD_REQUEST)
-            bookings_queryset  = bookings_queryset.filter(user_id=user_id)
+            user_email = request.query_params.get('user_email')
+            if not user_email:
+                return Response({"error": "user_email is required"}, status=400)
 
+            try:
+                user = User.objects.get(email=user_email)
+                user_id = user.id
+                bookings_queryset = bookings_queryset.filter(user_id=user_id)
+            except User.DoesNotExist:
+                return Response({"error": "User not found"}, status=404)
+            
         # Pagination
         paginator = BookingCursorPagination()
         page = paginator.paginate_queryset(bookings_queryset, request)
