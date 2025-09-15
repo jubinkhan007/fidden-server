@@ -66,6 +66,7 @@ class Booking(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE)
     slot = models.ForeignKey(SlotBooking, on_delete=models.CASCADE)
+    stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -126,7 +127,8 @@ def create_booking_on_payment_success(sender, instance, created, **kwargs):
                     user=instance.user,
                     shop=instance.booking.shop,  # SlotBooking has relation with Shop
                     slot=instance.booking,
-                    status="active"
+                    status="active",
+                    stripe_payment_intent_id=instance.stripe_payment_intent_id
                 )
             except Exception as e:
                 print(f"Booking creation failed for payment {instance.id}: {e}")

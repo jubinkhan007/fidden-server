@@ -11,7 +11,9 @@ from django.conf import settings
 
 from api.models import Shop, SlotBooking
 from accounts.models import User
-from .models import Payment, UserStripeCustomer, ShopStripeAccount
+from .models import Payment, UserStripeCustomer, ShopStripeAccount, Booking
+from .serializers import BookingSerializer
+from .pagination import BookingCursorPagination
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
@@ -210,3 +212,35 @@ class VerifyShopOnboardingView(APIView):
             "onboarded": account.charges_enabled and account.payouts_enabled,
         }
         return Response(data, status=status.HTTP_200_OK)
+
+class BookingListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """
+        Get bookings based on user role and query params:
+        - Owner: must provide shop_id
+        - User: must provide user_id
+        """
+        user = request.user
+
+        # Optimize query with related objects
+        bookings_queryset = Booking.objects.select_related('user', 'shop', 'slot')
+
+        if user.role == 'owner':
+            shop_id = request.query_params.get('shop_id')
+            if not shop_id:
+                return Response({"error": "shop_id is required for owners"}, status=status.HTTP_400_BAD_REQUEST)
+            bookings_queryset  = bookings_queryset.filter(shop_id=shop_id)
+
+        else:  # Regular user
+            user_id = request.query_params.get('user_id')
+            if not user_id:
+                return Response({"error": "user_id is required for users"}, status=status.HTTP_400_BAD_REQUEST)
+            bookings_queryset  = bookings_queryset.filter(user_id=user_id)
+
+        # Pagination
+        paginator = BookingCursorPagination()
+        page = paginator.paginate_queryset(bookings_queryset, request)
+        serializer = BookingSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
