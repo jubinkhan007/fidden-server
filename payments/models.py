@@ -53,6 +53,28 @@ class Payment(models.Model):
         return f"Payment {self.id} for {self.booking}"
 
 # -----------------------------
+# Booking Table
+# -----------------------------
+class Booking(models.Model):
+    STATUS_CHOICES = [
+        ("active", "Active"),
+        ("completed", "Completed"),
+        ("cancelled", "Cancelled"),
+    ]
+
+    payment = models.OneToOneField(Payment, on_delete=models.CASCADE, related_name="booking_record")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE)
+    slot = models.ForeignKey(SlotBooking, on_delete=models.CASCADE)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Booking {self.id} - {self.status}"
+
+# -----------------------------
 # Signals
 # -----------------------------
 # Create Stripe account when Shop is created
@@ -91,3 +113,20 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
             stripe.Customer.delete(instance.stripe_customer.stripe_customer_id)
         except Exception as e:
             print(f"Stripe customer deletion failed for user {instance.email}: {e}")
+
+# Create Booking when Payment succeeds
+@receiver(post_save, sender=Payment)
+def create_booking_on_payment_success(sender, instance, created, **kwargs):
+    if instance.status == "succeeded":
+        # Ensure Booking not already created
+        if not hasattr(instance, "booking_record"):
+            try:
+                Booking.objects.create(
+                    payment=instance,
+                    user=instance.user,
+                    shop=instance.booking.shop,  # SlotBooking has relation with Shop
+                    slot=instance.booking,
+                    status="active"
+                )
+            except Exception as e:
+                print(f"Booking creation failed for payment {instance.id}: {e}")

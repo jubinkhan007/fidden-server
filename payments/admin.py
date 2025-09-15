@@ -1,7 +1,12 @@
 # payments/admin.py
 
 from django.contrib import admin
-from .models import ShopStripeAccount, UserStripeCustomer, Payment
+from .models import (
+    ShopStripeAccount, 
+    UserStripeCustomer, 
+    Payment, 
+    Booking
+)
 
 # -----------------------------
 # ShopStripeAccount Admin
@@ -30,3 +35,10 @@ class PaymentAdmin(admin.ModelAdmin):
     list_filter = ("status", "currency", "created_at")
     search_fields = ("booking__id", "user__email", "stripe_payment_intent_id")
     readonly_fields = ("created_at", "updated_at", "stripe_payment_intent_id")
+
+@admin.register(Booking)
+class BookingAdmin(admin.ModelAdmin):
+    list_display = ("id", "payment", "user", "shop", "slot", "status", "created_at", "updated_at")
+    list_filter = ("status", "created_at")
+    search_fields = ("user__email", "shop__name")
+    readonly_fields = ("created_at", "updated_at")
