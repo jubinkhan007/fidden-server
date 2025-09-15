@@ -41,7 +41,6 @@ def _setup_daily_slot_prefill_schedule():
         # (e.g., during collectstatic, makemigrations). Admin can manage schedule later.
         pass
 
-
 class ApiConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'api'

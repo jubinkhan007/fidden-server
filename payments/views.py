@@ -16,9 +16,6 @@ from .models import Payment, UserStripeCustomer, ShopStripeAccount
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
 
-# -----------------------------
-# 1️⃣ Create PaymentIntent
-# -----------------------------
 class CreatePaymentIntentView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -81,9 +78,6 @@ class CreatePaymentIntentView(APIView):
             "customer_id": user_customer.stripe_customer_id
         }, status=status.HTTP_200_OK)
 
-# -----------------------------
-# 2️⃣ Shop Onboarding Link
-# -----------------------------
 class ShopOnboardingLinkView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -101,9 +95,6 @@ class ShopOnboardingLinkView(APIView):
         )
         return Response({"url": account_link.url})
 
-# -----------------------------
-# 3️⃣ Save Card View
-# -----------------------------
 class SaveCardView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -124,9 +115,6 @@ class SaveCardView(APIView):
 
         return Response({"client_secret": setup_intent.client_secret}, status=200)
 
-# -----------------------------
-# 4️⃣ Stripe Webhook
-# -----------------------------
 @method_decorator(csrf_exempt, name="dispatch")
 class StripeWebhookView(APIView):
     authentication_classes = []  # Disable authentication for webhook

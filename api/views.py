@@ -6,7 +6,6 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Sum
 from django.utils.timezone import make_aware
-
 from .models import (
     Shop, 
     Service, 
@@ -29,7 +28,6 @@ from .serializers import (
     ServiceSerializer, 
     RatingReviewSerializer, 
     ServiceCategorySerializer, 
-    SlotSerializer, 
     SlotBookingSerializer,
     ShopListSerializer, 
     ShopDetailSerializer, 
@@ -38,7 +36,6 @@ from .serializers import (
     FavoriteShopSerializer,
     PromotionSerializer,
     ServiceWishlistSerializer,
-    GlobalSearchSerializer,
     ReplyCreateSerializer,
     ShopRatingReviewSerializer, 
     ChatThreadSerializer, 
@@ -48,22 +45,17 @@ from .serializers import (
     RevenueSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
-
-from math import radians, cos, sin, asin, sqrt
-from django.db.models.expressions import Func
 from datetime import datetime, timedelta
-from django.db import transaction
 from django.utils import timezone
-from django.db.models import Avg, Count, Q, Value, FloatField, F
+from django.db.models import Avg, Count, Q, Value, FloatField
 from django.db.models.functions import Coalesce
-from .pagination import ServicesCursorPagination, GlobalSearchCursorPagination, ReviewCursorPagination
-
+from .pagination import ServicesCursorPagination, ReviewCursorPagination
 from urllib.parse import urlencode
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from collections import OrderedDict
 from django.core.paginator import Paginator
-from api.utils.helper_function import haversine, get_relevance, query_in_text_words
+from api.utils.helper_function import haversine, get_relevance
 from django.db.models import Prefetch
 from rest_framework.pagination import PageNumberPagination
 from api.utils.fcm import notify_user
