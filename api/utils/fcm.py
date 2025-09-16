@@ -109,11 +109,17 @@ def send_push_notification(
     android_cfg = _android_config()
     apns_cfg = _apns_config()
 
+    notification_block = {
+        "title": title,
+        "body": message,
+    }
+
     for token in tokens:
         try:
             result = push_service.notify(
                 fcm_token=token,
                 data_payload=payload_data,
+                notification=notification_block,   # 👈 add this
                 android_config=android_cfg,
                 apns_config=apns_cfg,
                 fcm_options={"analytics_label": "chat"},
