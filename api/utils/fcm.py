@@ -114,7 +114,6 @@ def send_push_notification(
             result = push_service.notify(
                 fcm_token=token,
                 data_payload=payload_data,
-                notification=payload_data,
                 android_config=android_cfg,
                 apns_config=apns_cfg,
                 fcm_options={"analytics_label": "chat"},
