@@ -937,13 +937,27 @@ class RegisterDeviceView(APIView):
     def post(self, request):
         serializer = DeviceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        fcm_token = serializer.validated_data['fcm_token']
         device_token = serializer.validated_data['device_token']
         device_type = serializer.validated_data.get('device_type', 'android')
-        device, _ = Device.objects.update_or_create(
-            device_token=device_token,
-            defaults={'user': request.user, 'device_type': device_type}
+
+        # Update existing device with same fcm_token or create new
+        device, created = Device.objects.update_or_create(
+            device_token=device_token,  # lookup by device
+            defaults={
+                'user': request.user,
+                'fcm_token': fcm_token,  # update with latest token
+                'device_type': device_type,
+            }
         )
-        return Response({"success": True, "device_id": device.id})
+
+        return Response({
+            "success": True,
+            "device_id": device.device_token,
+            "fcm_token": device.fcm_token,
+            "created": created
+        })
 
 class UserMessageView(APIView):
     permission_classes = [IsAuthenticated]

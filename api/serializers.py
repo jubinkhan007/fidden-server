@@ -729,7 +729,7 @@ class NotificationSerializer(serializers.ModelSerializer):
 class DeviceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Device
-        fields = ["device_token", "device_type"]
+        fields = ["fcm_token", "device_token", "device_type"]
 
 class RevenueSerializer(serializers.ModelSerializer):
     shop_id = serializers.ReadOnlyField(source='shop.id')

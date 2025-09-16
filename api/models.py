@@ -299,6 +299,7 @@ class Message(models.Model):
 
 class Device(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="devices", on_delete=models.CASCADE)
+    fcm_token = models.CharField(max_length=255, unique=True)
     device_token = models.CharField(max_length=255, unique=True)
     device_type = models.CharField(max_length=50, default="android")  # android/ios
     created_at = models.DateTimeField(auto_now_add=True)
