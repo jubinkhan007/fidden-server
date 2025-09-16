@@ -46,6 +46,7 @@ def get_fcm_service() -> Optional[FCMNotification]:
     print("FCM service not configured. Skipping push.")
     return None
 
+
 push_service: Optional[FCMNotification] = get_fcm_service()
 
 # -------------------------------
@@ -54,6 +55,7 @@ push_service: Optional[FCMNotification] = get_fcm_service()
 def _stringify(d: Optional[Dict[str, Any]]) -> Dict[str, str]:
     src = d or {}
     return {str(k): "" if v is None else str(v) for k, v in src.items()}
+
 
 def _android_config() -> Dict[str, Any]:
     return {
@@ -65,14 +67,23 @@ def _android_config() -> Dict[str, Any]:
         },
     }
 
-def _apns_config() -> Dict[str, Any]:
+
+def _apns_config(title: str, body: str) -> Dict[str, Any]:
     return {
         "headers": {"apns-push-type": "alert", "apns-priority": "10"},
-        "payload": {"aps": {"alert": {}, "sound": "default", "badge": 1}},
+        "payload": {
+            "aps": {
+                "alert": {"title": title, "body": body},  # 👈 include title + body for iOS
+                "sound": "default",
+                "badge": 1,
+            }
+        },
     }
+
 
 def _is_valid_fcm_token(token: str) -> bool:
     return token and len(token) > 50
+
 
 # -------------------------------
 # Sending push notifications
@@ -107,13 +118,19 @@ def send_push_notification(
     payload_data.setdefault("body", message)
 
     android_cfg = _android_config()
-    apns_cfg = _apns_config()
+    apns_cfg = _apns_config(title, message)
+
+    notification_block = {
+        "title": title,
+        "body": message,
+    }
 
     for token in tokens:
         try:
             result = push_service.notify(
                 fcm_token=token,
                 data_payload=payload_data,
+                notification=notification_block,   # 👈 REQUIRED for iOS + Android
                 android_config=android_cfg,
                 apns_config=apns_cfg,
                 fcm_options={"analytics_label": "chat"},
@@ -128,6 +145,7 @@ def send_push_notification(
         except Exception as e:
             print(f"Failed sending to token {token}: {e}")
             traceback.print_exc()
+
 
 def notify_user(
     user,
