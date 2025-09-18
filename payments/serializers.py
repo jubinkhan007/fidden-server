@@ -15,6 +15,7 @@ class userBookingSerializer(serializers.ModelSerializer):
     shop_address = serializers.CharField(source='shop.address', read_only=True)
     shop_img = serializers.SerializerMethodField()  # ✅ custom field for absolute URL
     slot_time = serializers.DateTimeField(source='slot.start_time', read_only=True)
+    service_id = serializers.CharField(source='slot.service.id', read_only=True)
     service_title = serializers.CharField(source='slot.service.title', read_only=True)
     service_duration = serializers.CharField(source='slot.service.duration', read_only=True)
 
@@ -33,6 +34,7 @@ class userBookingSerializer(serializers.ModelSerializer):
             'shop_img',          
             'slot',
             'slot_time',
+            'service_id',
             'service_title',
             'service_duration',
             'status',

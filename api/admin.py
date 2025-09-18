@@ -130,7 +130,7 @@ class NotificationAdmin(admin.ModelAdmin):
 
 @admin.register(Revenue)
 class RevenueAdmin(admin.ModelAdmin):
-    list_display = ('shop', 'revenue', 'timestamp')  # columns to show in the table
-    list_filter = ('shop', 'timestamp')             # filter sidebar
-    search_fields = ('shop__name',)                 # search box for shop name
-    ordering = ('-timestamp',)                      # newest first
+    list_display = ('shop', 'revenue', 'timestamp')
+    list_filter = ('shop', 'timestamp')             
+    search_fields = ('shop__name',)                
+    ordering = ('-timestamp',)                      
