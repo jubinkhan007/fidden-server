@@ -5,6 +5,7 @@ from django.utils import timezone
 from django.db.models import Q
 
 
+
 class Shop(models.Model):
     STATUS_CHOICES = [
         ("pending", "Pending"),
@@ -113,6 +114,13 @@ class RatingReview(models.Model):
         null=True,
         blank=True,
         related_name="ratings"
+    )
+    booking = models.OneToOneField(
+        "payments.Booking",   # ✅ each booking can have only one review
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="review"
     )
     rating = models.PositiveSmallIntegerField(
         choices=[(1, "1 Star"), (2, "2 Stars"), (3, "3 Stars"), (4, "4 Stars"), (5, "5 Stars")],
