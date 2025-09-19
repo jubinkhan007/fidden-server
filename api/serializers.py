@@ -176,11 +176,11 @@ class RatingReviewSerializer(serializers.ModelSerializer):
         try:
             booking = Booking.objects.get(id=booking_id)
         except Booking.DoesNotExist:
-            raise serializers.ValidationError({"booking_id": "Invalid booking_id"})
+            raise serializers.ValidationError({"detail": "Invalid booking_id"})
 
         # prevent duplicate review for same booking
         if hasattr(booking, "review"):
-            raise serializers.ValidationError({"booking_id": "This booking already has a review"})
+            raise serializers.ValidationError({"detail": "You have already submitted a review for this booking."})
 
         validated_data["booking"] = booking
         return super().create(validated_data)
