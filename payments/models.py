@@ -99,7 +99,8 @@ class Booking(models.Model):
         return f"Booking {self.id} - {self.status}"
 
     def cancel_booking(self, reason="requested_by_customer"):
-        """Cancel booking and refund payment if possible"""
+        """Cancel booking, refund payment, and update linked SlotBooking"""
+
         if self.status == "cancelled":
             return False, "Booking already cancelled"
 
@@ -107,7 +108,7 @@ class Booking(models.Model):
             # 1️⃣ Refund payment via Stripe
             refund = stripe.Refund.create(
                 payment_intent=self.stripe_payment_intent_id,
-                amount=int(self.payment.amount * 100),  # Stripe works in cents
+                amount=int(self.payment.amount * 100),  # Stripe expects cents
                 reason=reason,
             )
 
@@ -120,14 +121,29 @@ class Booking(models.Model):
                 reason=reason,
             )
 
-            # 3️⃣ Update booking + payment status
+            # 3️⃣ Update booking status
             self.status = "cancelled"
             self.save(update_fields=["status", "updated_at"])
 
+            # 4️⃣ Update payment status
             self.payment.status = "refunded" if refund.status in ["succeeded", "pending"] else "failed"
             self.payment.save(update_fields=["status", "updated_at"])
 
-            return True, f"Refund {refund.status}"
+            # 5️⃣ Cancel linked SlotBooking and update capacities
+            slot_booking: SlotBooking = self.slot
+            if slot_booking.status != "cancelled":
+                slot_booking.status = "cancelled"
+                slot_booking.save(update_fields=["status"])
+
+                # Restore slot capacity
+                slot_booking.slot.capacity_left += 1
+                slot_booking.slot.save(update_fields=["capacity_left"])
+
+                # Restore shop capacity
+                slot_booking.shop.capacity += 1
+                slot_booking.shop.save(update_fields=["capacity"])
+
+            return True, f"Refund {refund.status} and booking cancelled successfully"
 
         except Exception as e:
             return False, str(e)
