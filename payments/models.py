@@ -149,7 +149,7 @@ class Booking(models.Model):
             return False, str(e)
         
 # -----------------------------
-# Transaction Log
+# Transaction Log Table
 # -----------------------------
 class TransactionLog(models.Model):
     TRANSACTION_TYPE_CHOICES = [
@@ -171,9 +171,6 @@ class TransactionLog(models.Model):
 
     def __str__(self):
         return f"{self.transaction_type.capitalize()} {self.id} - {self.status} - {self.amount} {self.currency}"
-
-    
-
 
 # -----------------------------
 # Signals
@@ -249,7 +246,6 @@ def log_successful_payment(sender, instance, created, **kwargs):
                 currency=instance.currency,
                 status=instance.status,
             )
-
 
 @receiver(post_save, sender=Refund)
 def log_successful_refund(sender, instance, created, **kwargs):
