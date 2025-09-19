@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from stripe import Source
-from .models import Payment, Booking
+from .models import Payment, Booking, Refund
 from django.db.models import Avg, Count
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -8,6 +8,11 @@ class PaymentSerializer(serializers.ModelSerializer):
         model = Payment
         fields = ['id', 'booking', 'user', 'amount', 'currency', 'status', 'stripe_payment_intent_id']
         read_only_fields = ['id', 'status', 'stripe_payment_intent_id', 'created_at', 'updated_at']
+
+class RefundSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Refund
+        fields = ["id", "amount", "status", "reason", "stripe_refund_id", "created_at"]
 
 class userBookingSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
@@ -21,6 +26,7 @@ class userBookingSerializer(serializers.ModelSerializer):
 
     avg_rating = serializers.SerializerMethodField()
     total_reviews = serializers.SerializerMethodField()
+    refund = RefundSerializer(source="payment.refund", read_only=True)  # 👈 Added
 
     class Meta:
         model = Booking
@@ -42,6 +48,7 @@ class userBookingSerializer(serializers.ModelSerializer):
             'updated_at',
             'avg_rating',
             'total_reviews',
+            "refund",
         ]
         read_only_fields = fields
 
@@ -67,6 +74,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
     slot_time = serializers.DateTimeField(source='slot.start_time', read_only=True)
     service_title = serializers.CharField(source='slot.service.title', read_only=True)
     service_duration = serializers.CharField(source='slot.service.duration', read_only=True) 
+    refund = RefundSerializer(source="payment.refund", read_only=True)  # 👈 Added
 
     class Meta:
         model = Booking
@@ -83,6 +91,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             'service_title',
             'service_duration',   
             'status',
+            'refund',
             'created_at',
             'updated_at',
         ]
@@ -93,3 +102,4 @@ class ownerBookingSerializer(serializers.ModelSerializer):
         if obj.user.profile_image:
             return request.build_absolute_uri(obj.user.profile_image.url) if request else obj.user.profile_image.url
         return None
+    

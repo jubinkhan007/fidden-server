@@ -38,6 +38,7 @@ class Payment(models.Model):
         ("pending", "Pending"),
         ("succeeded", "Succeeded"),
         ("failed", "Failed"),
+        ("refunded", "Refunded"),
     ]
 
     booking = models.OneToOneField(SlotBooking, on_delete=models.CASCADE, related_name='payment')
@@ -52,6 +53,28 @@ class Payment(models.Model):
     def __str__(self):
         return f"Payment {self.id} for {self.booking}"
 
+# -----------------------------
+# Refund Table
+# -----------------------------
+class Refund(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("succeeded", "Succeeded"),
+        ("failed", "Failed"),
+    ]
+
+    payment = models.OneToOneField(Payment, on_delete=models.CASCADE, related_name="refund")
+    stripe_refund_id = models.CharField(max_length=255, blank=True, null=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    reason = models.CharField(max_length=255, blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Refund {self.id} for Payment {self.payment_id}"
+    
 # -----------------------------
 # Booking Table
 # -----------------------------
@@ -74,6 +97,43 @@ class Booking(models.Model):
 
     def __str__(self):
         return f"Booking {self.id} - {self.status}"
+
+    def cancel_booking(self, reason="requested_by_customer"):
+        """Cancel booking and refund payment if possible"""
+        if self.status == "cancelled":
+            return False, "Booking already cancelled"
+
+        try:
+            # 1️⃣ Refund payment via Stripe
+            refund = stripe.Refund.create(
+                payment_intent=self.stripe_payment_intent_id,
+                amount=int(self.payment.amount * 100),  # Stripe works in cents
+                reason=reason,
+            )
+
+            # 2️⃣ Save refund record
+            Refund.objects.create(
+                payment=self.payment,
+                stripe_refund_id=refund.id,
+                amount=self.payment.amount,
+                status=refund.status,
+                reason=reason,
+            )
+
+            # 3️⃣ Update booking + payment status
+            self.status = "cancelled"
+            self.save(update_fields=["status", "updated_at"])
+
+            self.payment.status = "refunded" if refund.status in ["succeeded", "pending"] else "failed"
+            self.payment.save(update_fields=["status", "updated_at"])
+
+            return True, f"Refund {refund.status}"
+
+        except Exception as e:
+            return False, str(e)
+
+    
+
 
 # -----------------------------
 # Signals

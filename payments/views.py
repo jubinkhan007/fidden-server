@@ -252,3 +252,26 @@ class BookingListView(APIView):
         page = paginator.paginate_queryset(bookings_queryset, request)
         serializer = serializer_class(page, many=True, context={"request": request})
         return paginator.get_paginated_response(serializer.data)
+    
+class CancelBookingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, booking_id):
+        try:
+            booking = Booking.objects.get(id=booking_id)
+        except Booking.DoesNotExist:
+            return Response({"error": "Booking not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # ✅ Check if request user is either the booker OR the shop owner
+        if booking.user != request.user and booking.shop.owner != request.user:
+            return Response({"error": "Not allowed to cancel this booking"}, status=status.HTTP_403_FORBIDDEN)
+
+        success, message = booking.cancel_booking(reason="cancelled_by_owner" if booking.shop.owner == request.user else "requested_by_customer")
+
+        if success:
+            # Use correct serializer depending on who cancelled
+            serializer_class = ownerBookingSerializer if booking.shop.owner == request.user else userBookingSerializer
+            serializer = serializer_class(booking, context={"request": request})
+            return Response({"message": message, "booking": serializer.data}, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)

@@ -4,7 +4,8 @@ from .views import (
     ShopOnboardingLinkView,
     SaveCardView,
     VerifyShopOnboardingView,
-    BookingListView
+    BookingListView,
+    CancelBookingView,
 )
 
 urlpatterns = [
@@ -13,4 +14,5 @@ urlpatterns = [
     path("save-card/", SaveCardView.as_view(), name="save-card"),
     path("shops/verify-onboarding/<int:shop_id>", VerifyShopOnboardingView.as_view(), name="verify-shop-onboarding"),
     path('bookings/', BookingListView.as_view(), name='booking-list'),
+    path("bookings/cancel/<int:booking_id>/", CancelBookingView.as_view(), name="cancel-booking"),
 ]
