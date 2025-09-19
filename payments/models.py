@@ -147,6 +147,30 @@ class Booking(models.Model):
 
         except Exception as e:
             return False, str(e)
+        
+# -----------------------------
+# Transaction Log
+# -----------------------------
+class TransactionLog(models.Model):
+    TRANSACTION_TYPE_CHOICES = [
+        ("payment", "Payment"),
+        ("refund", "Refund"),
+    ]
+
+    transaction_type = models.CharField(max_length=10, choices=TRANSACTION_TYPE_CHOICES)
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="transaction_logs")
+    refund = models.ForeignKey(Refund, on_delete=models.CASCADE, null=True, blank=True, related_name="transaction_logs")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE)
+    slot = models.ForeignKey('api.SlotBooking', on_delete=models.CASCADE, null=True, blank=True)
+    service = models.ForeignKey('api.Service', on_delete=models.CASCADE, null=True, blank=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=10, default="usd")
+    status = models.CharField(max_length=20)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.transaction_type.capitalize()} {self.id} - {self.status} - {self.amount} {self.currency}"
 
     
 
@@ -208,3 +232,39 @@ def create_booking_on_payment_success(sender, instance, created, **kwargs):
                 )
             except Exception as e:
                 print(f"Booking creation failed for payment {instance.id}: {e}")
+
+@receiver(post_save, sender=Payment)
+def log_successful_payment(sender, instance, created, **kwargs):
+    """Create a transaction log automatically for successful payments."""
+    if instance.status == "succeeded":
+        if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
+            TransactionLog.objects.create(
+                transaction_type="payment",
+                payment=instance,
+                user=instance.user,
+                shop=instance.booking.shop if hasattr(instance, "booking") else None,
+                slot=instance.booking if hasattr(instance, "booking") else None,
+                service=instance.booking.service if hasattr(instance, "booking") else None,
+                amount=instance.amount,
+                currency=instance.currency,
+                status=instance.status,
+            )
+
+
+@receiver(post_save, sender=Refund)
+def log_successful_refund(sender, instance, created, **kwargs):
+    """Create a transaction log automatically for successful refunds."""
+    if instance.status == "succeeded":
+        if not TransactionLog.objects.filter(refund=instance, transaction_type="refund").exists():
+            TransactionLog.objects.create(
+                transaction_type="refund",
+                payment=instance.payment,
+                refund=instance,
+                user=instance.payment.user,
+                shop=instance.payment.booking.shop if hasattr(instance.payment, "booking") else None,
+                slot=instance.payment.booking if hasattr(instance.payment, "booking") else None,
+                service=instance.payment.booking.service if hasattr(instance.payment, "booking") else None,
+                amount=instance.amount,
+                currency=instance.payment.currency,
+                status=instance.status,
+            )
