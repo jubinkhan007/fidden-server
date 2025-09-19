@@ -11,9 +11,9 @@ from django.conf import settings
 
 from api.models import Shop, SlotBooking
 from accounts.models import User
-from .models import Payment, UserStripeCustomer, ShopStripeAccount, Booking
-from .serializers import userBookingSerializer, ownerBookingSerializer
-from .pagination import BookingCursorPagination
+from .models import Payment, UserStripeCustomer, ShopStripeAccount, Booking, TransactionLog
+from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer
+from .pagination import BookingCursorPagination, TransactionCursorPagination
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
@@ -275,3 +275,38 @@ class CancelBookingView(APIView):
             return Response({"message": message, "booking": serializer.data}, status=status.HTTP_200_OK)
         else:
             return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+        
+class TransactionLogListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        shop_id = request.query_params.get('shop')
+        user_email = request.query_params.get('email')
+
+        # Start with all transactions
+        transactions = TransactionLog.objects.all()
+
+        # Filter by shop if provided
+        if shop_id:
+            transactions = transactions.filter(shop_id=shop_id)
+
+        # Filter by user email if provided
+        if user_email:
+            try:
+                user = User.objects.get(email=user_email)
+                transactions = transactions.filter(user=user)
+            except User.DoesNotExist:
+                return Response(
+                    {"status": "error", "message": "User with this email does not exist"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+        # Paginate the queryset
+        paginator = TransactionCursorPagination()
+        page = paginator.paginate_queryset(transactions, request)
+        serializer = TransactionLogSerializer(page, many=True)
+
+        return paginator.get_paginated_response({
+            "status": "success",
+            "data": serializer.data
+        })

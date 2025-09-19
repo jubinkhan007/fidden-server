@@ -6,6 +6,7 @@ from .views import (
     VerifyShopOnboardingView,
     BookingListView,
     CancelBookingView,
+    TransactionLogListView,
 )
 
 urlpatterns = [
@@ -15,4 +16,5 @@ urlpatterns = [
     path("shops/verify-onboarding/<int:shop_id>", VerifyShopOnboardingView.as_view(), name="verify-shop-onboarding"),
     path('bookings/', BookingListView.as_view(), name='booking-list'),
     path("bookings/cancel/<int:booking_id>/", CancelBookingView.as_view(), name="cancel-booking"),
+    path('transactions/', TransactionLogListView.as_view(), name='transaction-list'),
 ]

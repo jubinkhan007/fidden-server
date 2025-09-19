@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from stripe import Source
-from .models import Payment, Booking, Refund
+from .models import Payment, Booking, Refund, TransactionLog
 from django.db.models import Avg, Count
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -101,5 +101,24 @@ class ownerBookingSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if obj.user.profile_image:
             return request.build_absolute_uri(obj.user.profile_image.url) if request else obj.user.profile_image.url
+        return None
+    
+class TransactionLogSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source='user.username', read_only=True)
+    shop_name = serializers.CharField(source='shop.name', read_only=True)
+    slot_time = serializers.SerializerMethodField()
+    service_title = serializers.CharField(source='service.title', read_only=True)
+
+    class Meta:
+        model = TransactionLog
+        fields = [
+            'id', 'transaction_type', 'payment', 'refund', 'user', 'user_name',
+            'shop', 'shop_name', 'slot', 'slot_time', 'service', 'service_title',
+            'amount', 'currency', 'status', 'created_at'
+        ]
+
+    def get_slot_time(self, obj):
+        if obj.slot:
+            return f"{obj.slot.start_time} - {obj.slot.end_time}"
         return None
     
