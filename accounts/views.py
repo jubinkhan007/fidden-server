@@ -14,7 +14,8 @@ from .serializers import (
     RequestPasswordResetSerializer,
     VerifyResetOTPSerializer,
     ResetPasswordSerializer,
-    ProfileSerializer
+    ProfileSerializer,
+    ChangePasswordSerializer
 )
 from accounts.services.utils import send_otp_email, generate_otp
 from .services.google_auth import verify_google_token
@@ -167,4 +168,32 @@ class ProfileView(APIView):
         if serializer.is_valid():
             serializer.save()
             return Response({"message": "Profile updated successfully", "profile": serializer.data}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ChangePasswordSerializer(data=request.data)
+        if serializer.is_valid():
+            user = request.user
+            old_password = serializer.validated_data['old_password']
+            new_password = serializer.validated_data['new_password']
+
+            if not user.check_password(old_password):
+                return Response(
+                    {"detail": "Old password is incorrect"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if old_password == new_password:
+                return Response(
+                    {"detail": "New password cannot be the same as old password"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            user.set_password(new_password)
+            user.save()
+            return Response({"detail": "Password changed successfully"}, status=status.HTTP_200_OK)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

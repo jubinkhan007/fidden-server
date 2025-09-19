@@ -114,3 +114,7 @@ class ProfileSerializer(serializers.ModelSerializer):
         else:
             rep['profile_image'] = None
         return rep
+    
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, min_length=6)
