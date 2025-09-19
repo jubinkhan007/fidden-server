@@ -32,4 +32,9 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=1, minute=0),
         "args": (7, 1000),
     },
+    # Complete bookings every minute
+    "complete-bookings-every-minute": {
+        "task": "payments.tasks.complete_past_bookings",
+        "schedule": 60.0,  # every 60 seconds
+    },
 }
