@@ -141,12 +141,13 @@ class ReplySerializer(serializers.ModelSerializer):
 class RatingReviewSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField(read_only=True)
     reply = ReplySerializer(source='replies', many=True, read_only=True)
+    booking_id = serializers.IntegerField(write_only=True, required=True)
 
     class Meta:
         model = RatingReview
         fields = [
             'id', 'shop', 'service', 'user', 'user_name',
-            'rating', 'review', 'review_img', 'reply', 'created_at'
+            'booking_id', 'rating', 'review', 'review_img', 'reply', 'created_at'
         ]
         read_only_fields = ['user', 'created_at', 'user_name']
 
@@ -162,10 +163,26 @@ class RatingReviewSerializer(serializers.ModelSerializer):
             request.build_absolute_uri(instance.review_img.url)
             if instance.review_img and request else instance.review_img.url if instance.review_img else None
         )
+        # show booking id in response
+        rep['booking_id'] = instance.booking.id if instance.booking else None
         return rep
 
     def create(self, validated_data):
-        validated_data['user'] = self.context['request'].user
+        booking_id = validated_data.pop("booking_id")
+        request = self.context['request']
+        validated_data['user'] = request.user
+
+        from payments.models import Booking
+        try:
+            booking = Booking.objects.get(id=booking_id)
+        except Booking.DoesNotExist:
+            raise serializers.ValidationError({"booking_id": "Invalid booking_id"})
+
+        # prevent duplicate review for same booking
+        if hasattr(booking, "review"):
+            raise serializers.ValidationError({"booking_id": "This booking already has a review"})
+
+        validated_data["booking"] = booking
         return super().create(validated_data)
 
 class SlotSerializer(serializers.ModelSerializer):
