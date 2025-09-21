@@ -260,7 +260,7 @@ class BookingListView(APIView):
 
         stats = {
             "total_bookings": total_count,
-            "last_7_days": last_7_days_count,
+            "new_bookings": last_7_days_count,
             "cancelled": cancelled_count,
             "completed": completed_count,
         }
