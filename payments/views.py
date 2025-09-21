@@ -7,6 +7,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 import stripe
 import json
+from datetime import timedelta
+from django.utils.timezone import now
 from django.conf import settings
 
 from api.models import Shop, SlotBooking
@@ -248,10 +250,30 @@ class BookingListView(APIView):
             bookings_queryset = bookings_queryset.filter(user=target_user)
             serializer_class = userBookingSerializer
 
-        # 🔹 Common pagination + response
+        # ----------------------
+        # 📊 Stats (full queryset)
+        # ----------------------
+        total_count = bookings_queryset.count()
+        last_7_days_count = bookings_queryset.filter(created_at__gte=now() - timedelta(days=7)).count()
+        cancelled_count = bookings_queryset.filter(status="cancelled").count()
+        completed_count = bookings_queryset.filter(status="completed").count()
+
+        stats = {
+            "total_bookings": total_count,
+            "last_7_days": last_7_days_count,
+            "cancelled": cancelled_count,
+            "completed": completed_count,
+        }
+
+        # 🔹 Pagination for results
         page = paginator.paginate_queryset(bookings_queryset, request)
         serializer = serializer_class(page, many=True, context={"request": request})
-        return paginator.get_paginated_response(serializer.data)
+        paginated_response = paginator.get_paginated_response(serializer.data)
+
+        # ✅ Inject stats into paginated response
+        paginated_response.data["stats"] = stats
+
+        return paginated_response
     
 class CancelBookingView(APIView):
     permission_classes = [IsAuthenticated]

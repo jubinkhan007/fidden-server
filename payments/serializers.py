@@ -104,7 +104,8 @@ class ownerBookingSerializer(serializers.ModelSerializer):
         return None
     
 class TransactionLogSerializer(serializers.ModelSerializer):
-    user_name = serializers.CharField(source='user.username', read_only=True)
+    user_name = serializers.CharField(source='user.name', read_only=True)
+    user_email = serializers.EmailField(source='user.email', read_only=True)
     shop_name = serializers.CharField(source='shop.name', read_only=True)
     slot_time = serializers.SerializerMethodField()
     service_title = serializers.CharField(source='service.title', read_only=True)
@@ -112,7 +113,7 @@ class TransactionLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = TransactionLog
         fields = [
-            'id', 'transaction_type', 'payment', 'refund', 'user', 'user_name',
+            'id', 'transaction_type', 'payment', 'refund', 'user', 'user_name', 'user_email',
             'shop', 'shop_name', 'slot', 'slot_time', 'service', 'service_title',
             'amount', 'currency', 'status', 'created_at'
         ]
