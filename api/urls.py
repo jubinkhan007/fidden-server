@@ -26,7 +26,7 @@ from .views import (
     NotificationsView,
     NotificationDetailView,
     WeeklyShopRevenueView,
-    
+    GrowthSuggestionView,
 )
 
 urlpatterns = [
@@ -56,4 +56,5 @@ urlpatterns = [
     path("notifications/", NotificationsView.as_view(), name="user-notifications"),
     path("notifications/<int:pk>/", NotificationDetailView.as_view(), name="notification-detail"),
     path('shop/<int:shop_id>/revenues/', WeeklyShopRevenueView.as_view(), name='weekly-shop-revenues'),
+    path("growth-suggestions/", GrowthSuggestionView.as_view(), name="growth-suggestions"),
 ]

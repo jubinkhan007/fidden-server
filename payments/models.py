@@ -20,7 +20,6 @@ class ShopStripeAccount(models.Model):
     def __str__(self):
         return f"{self.shop.name} Stripe Account"
 
-
 # -----------------------------
 # User Stripe Customer
 # -----------------------------
@@ -31,7 +30,6 @@ class UserStripeCustomer(models.Model):
 
     def __str__(self):
         return f"{self.user.email} Stripe Customer"
-
 
 # -----------------------------
 # Payment for SlotBooking
@@ -56,7 +54,6 @@ class Payment(models.Model):
     def __str__(self):
         return f"Payment {self.id} for {self.booking}"
 
-
 # -----------------------------
 # Refund Table
 # -----------------------------
@@ -78,7 +75,6 @@ class Refund(models.Model):
 
     def __str__(self):
         return f"Refund {self.id} for Payment {self.payment_id}"
-
 
 # -----------------------------
 # Booking Table
@@ -149,7 +145,6 @@ class Booking(models.Model):
         except Exception as e:
             return False, str(e)
 
-
 # -----------------------------
 # Transaction Log Table
 # -----------------------------
@@ -174,7 +169,6 @@ class TransactionLog(models.Model):
     def __str__(self):
         return f"{self.transaction_type.capitalize()} {self.id} - {self.status} - {self.amount} {self.currency}"
 
-
 # -----------------------------
 # Signals
 # -----------------------------
@@ -194,7 +188,6 @@ def create_shop_stripe_account(sender, instance, created, **kwargs):
         except Exception as e:
             print(f"Stripe account creation failed for shop {instance.name}: {e}")
 
-
 @receiver(post_delete, sender=Shop)
 def delete_shop_stripe_account(sender, instance, **kwargs):
     if hasattr(instance, "stripe_account") and instance.stripe_account.stripe_account_id:
@@ -202,7 +195,6 @@ def delete_shop_stripe_account(sender, instance, **kwargs):
             stripe.Account.delete(instance.stripe_account.stripe_account_id)
         except Exception as e:
             print(f"Stripe account deletion failed for shop {instance.name}: {e}")
-
 
 # Stripe customer for User
 from accounts.models import User
@@ -214,7 +206,6 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
             stripe.Customer.delete(instance.stripe_customer.stripe_customer_id)
         except Exception as e:
             print(f"Stripe customer deletion failed for user {instance.email}: {e}")
-
 
 # Payment post_save: handle succeeded and refunded
 @receiver(post_save, sender=Payment)
@@ -272,7 +263,6 @@ def handle_payment_status(sender, instance, created, **kwargs):
     except Exception as e:
         print(f"Payment signal error for Payment {instance.id}: {e}")
 
-
 # Refund post_save (optional: for direct Stripe refunds)
 @receiver(post_save, sender=Refund)
 def log_refund_transaction(sender, instance, created, **kwargs):
@@ -290,7 +280,6 @@ def log_refund_transaction(sender, instance, created, **kwargs):
                 currency=instance.payment.currency,
                 status=instance.status,
             )
-
 
 # Update Daily Revenue
 @receiver(post_save, sender=TransactionLog)

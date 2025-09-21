@@ -42,7 +42,8 @@ from .serializers import (
     MessageSerializer, 
     DeviceSerializer,
     NotificationSerializer,
-    RevenueSerializer
+    RevenueSerializer,
+    SuggestionSerializer
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 from datetime import datetime, timedelta
@@ -59,6 +60,7 @@ from api.utils.helper_function import haversine, get_relevance
 from django.db.models import Prefetch
 from rest_framework.pagination import PageNumberPagination
 from api.utils.fcm import notify_user
+from api.utils.growth_suggestions import generate_growth_suggestions
 
 class ShopListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -1163,3 +1165,15 @@ class WeeklyShopRevenueView(APIView):
             },
             status=status.HTTP_200_OK
         )
+    
+class GrowthSuggestionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        shop_id = request.query_params.get("shop_id")
+        if not shop_id:
+            return Response({"detail": "shop_id is required"}, status=400)
+
+        suggestions = generate_growth_suggestions(shop_id=shop_id)
+        serializer = SuggestionSerializer(suggestions, many=True)
+        return Response(serializer.data)

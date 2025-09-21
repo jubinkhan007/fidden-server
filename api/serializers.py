@@ -755,4 +755,9 @@ class RevenueSerializer(serializers.ModelSerializer):
         model = Revenue
         fields = ['id', 'shop_id', 'revenue', 'timestamp']
 
+class SuggestionSerializer(serializers.Serializer):
+    suggestion_title = serializers.CharField()
+    short_description = serializers.CharField()
+    category = serializers.ChoiceField(choices=["discount", "marketing", "operational"])
+
 
