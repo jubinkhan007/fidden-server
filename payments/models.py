@@ -1,10 +1,11 @@
 from django.db import models
 from django.conf import settings
+from django.db.models import F
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 import stripe
 
-from api.models import Shop, SlotBooking
+from api.models import Shop, SlotBooking, Revenue
 
 stripe.api_key = settings.STRIPE_SECRET_KEY  # Set this in your environment
 
@@ -264,3 +265,35 @@ def log_successful_refund(sender, instance, created, **kwargs):
                 currency=instance.payment.currency,
                 status=instance.status,
             )
+
+@receiver(post_save, sender=TransactionLog)
+def update_daily_revenue(sender, instance, created, **kwargs):
+    """
+    Update or create daily revenue for the shop whenever a transaction log is added.
+    - Payment -> add amount
+    - Refund -> subtract amount
+    - One row per shop per day
+    """
+    if not created:
+        return  # Only act on newly created transaction logs
+
+    shop = instance.shop
+    transaction_date = instance.created_at.date()
+    amount = instance.amount
+
+    # Determine revenue delta
+    delta = amount if instance.transaction_type == "payment" else -amount
+
+    # Try to update existing revenue row; if not exists, create it
+    revenue_obj, created_revenue = Revenue.objects.update_or_create(
+        shop=shop,
+        timestamp=transaction_date,
+        defaults={},  # We'll handle revenue separately
+    )
+
+    # Update revenue safely using F() to handle concurrent transactions
+    if not created_revenue:
+        Revenue.objects.filter(pk=revenue_obj.pk).update(revenue=F('revenue') + delta)
+    else:
+        revenue_obj.revenue = delta
+        revenue_obj.save()
