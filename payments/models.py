@@ -7,7 +7,7 @@ import stripe
 
 from api.models import Shop, SlotBooking, Revenue
 
-stripe.api_key = settings.STRIPE_SECRET_KEY  # Set this in your environment
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 # -----------------------------
 # Shop Stripe Account
@@ -20,6 +20,7 @@ class ShopStripeAccount(models.Model):
     def __str__(self):
         return f"{self.shop.name} Stripe Account"
 
+
 # -----------------------------
 # User Stripe Customer
 # -----------------------------
@@ -30,6 +31,7 @@ class UserStripeCustomer(models.Model):
 
     def __str__(self):
         return f"{self.user.email} Stripe Customer"
+
 
 # -----------------------------
 # Payment for SlotBooking
@@ -54,6 +56,7 @@ class Payment(models.Model):
     def __str__(self):
         return f"Payment {self.id} for {self.booking}"
 
+
 # -----------------------------
 # Refund Table
 # -----------------------------
@@ -75,7 +78,8 @@ class Refund(models.Model):
 
     def __str__(self):
         return f"Refund {self.id} for Payment {self.payment_id}"
-    
+
+
 # -----------------------------
 # Booking Table
 # -----------------------------
@@ -101,7 +105,6 @@ class Booking(models.Model):
 
     def cancel_booking(self, reason="requested_by_customer"):
         """Cancel booking, refund payment, and update linked SlotBooking"""
-
         if self.status == "cancelled":
             return False, "Booking already cancelled"
 
@@ -109,7 +112,7 @@ class Booking(models.Model):
             # 1️⃣ Refund payment via Stripe
             refund = stripe.Refund.create(
                 payment_intent=self.stripe_payment_intent_id,
-                amount=int(self.payment.amount * 100),  # Stripe expects cents
+                amount=int(self.payment.amount * 100),
                 reason=reason,
             )
 
@@ -136,19 +139,17 @@ class Booking(models.Model):
                 slot_booking.status = "cancelled"
                 slot_booking.save(update_fields=["status"])
 
-                # Restore slot capacity
                 slot_booking.slot.capacity_left += 1
                 slot_booking.slot.save(update_fields=["capacity_left"])
 
-                # Restore shop capacity
                 slot_booking.shop.capacity += 1
                 slot_booking.shop.save(update_fields=["capacity"])
 
             return True, f"Refund {refund.status} and booking cancelled successfully"
-
         except Exception as e:
             return False, str(e)
-        
+
+
 # -----------------------------
 # Transaction Log Table
 # -----------------------------
@@ -173,10 +174,12 @@ class TransactionLog(models.Model):
     def __str__(self):
         return f"{self.transaction_type.capitalize()} {self.id} - {self.status} - {self.amount} {self.currency}"
 
+
 # -----------------------------
 # Signals
 # -----------------------------
-# Create Stripe account when Shop is created
+
+# Stripe account for Shop
 @receiver(post_save, sender=Shop)
 def create_shop_stripe_account(sender, instance, created, **kwargs):
     if created:
@@ -185,16 +188,13 @@ def create_shop_stripe_account(sender, instance, created, **kwargs):
                 type="express",
                 email=instance.owner.email,
                 business_type="individual",
-                capabilities={
-                    "card_payments": {"requested": True},
-                    "transfers": {"requested": True},
-                },
+                capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
             )
             ShopStripeAccount.objects.create(shop=instance, stripe_account_id=account.id)
         except Exception as e:
             print(f"Stripe account creation failed for shop {instance.name}: {e}")
 
-# Delete Stripe account when Shop is deleted
+
 @receiver(post_delete, sender=Shop)
 def delete_shop_stripe_account(sender, instance, **kwargs):
     if hasattr(instance, "stripe_account") and instance.stripe_account.stripe_account_id:
@@ -203,8 +203,10 @@ def delete_shop_stripe_account(sender, instance, **kwargs):
         except Exception as e:
             print(f"Stripe account deletion failed for shop {instance.name}: {e}")
 
-# Delete Stripe customer when User is deleted
+
+# Stripe customer for User
 from accounts.models import User
+
 @receiver(post_delete, sender=User)
 def delete_user_stripe_customer(sender, instance, **kwargs):
     if hasattr(instance, "stripe_customer") and instance.stripe_customer.stripe_customer_id:
@@ -213,44 +215,67 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
         except Exception as e:
             print(f"Stripe customer deletion failed for user {instance.email}: {e}")
 
-# Create Booking when Payment succeeds
+
+# Payment post_save: handle succeeded and refunded
 @receiver(post_save, sender=Payment)
-def create_booking_on_payment_success(sender, instance, created, **kwargs):
-    if instance.status == "succeeded":
-        # Ensure Booking not already created
-        if not hasattr(instance, "booking_record"):
-            try:
+def handle_payment_status(sender, instance, created, **kwargs):
+    try:
+        # ---------------- Payment Succeeded ----------------
+        if instance.status == "succeeded":
+            # Create Booking if not exists
+            if not hasattr(instance, "booking_record"):
                 Booking.objects.create(
                     payment=instance,
                     user=instance.user,
-                    shop=instance.booking.shop,  # SlotBooking has relation with Shop
+                    shop=instance.booking.shop,
                     slot=instance.booking,
                     status="active",
                     stripe_payment_intent_id=instance.stripe_payment_intent_id
                 )
-            except Exception as e:
-                print(f"Booking creation failed for payment {instance.id}: {e}")
 
-@receiver(post_save, sender=Payment)
-def log_successful_payment(sender, instance, created, **kwargs):
-    """Create a transaction log automatically for successful payments."""
-    if instance.status == "succeeded":
-        if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
-            TransactionLog.objects.create(
-                transaction_type="payment",
-                payment=instance,
-                user=instance.user,
-                shop=instance.booking.shop if hasattr(instance, "booking") else None,
-                slot=instance.booking if hasattr(instance, "booking") else None,
-                service=instance.booking.service if hasattr(instance, "booking") else None,
-                amount=instance.amount,
-                currency=instance.currency,
-                status=instance.status,
-            )
+            # Create payment TransactionLog if not exists
+            if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
+                TransactionLog.objects.create(
+                    transaction_type="payment",
+                    payment=instance,
+                    user=instance.user,
+                    shop=instance.booking.shop,
+                    slot=instance.booking,
+                    service=instance.booking.service,
+                    amount=instance.amount,
+                    currency=instance.currency,
+                    status=instance.status,
+                )
 
+        # ---------------- Payment Refunded ----------------
+        elif instance.status == "refunded":
+            if hasattr(instance, "booking_record"):
+                booking = instance.booking_record
+                if booking.status != "cancelled":
+                    booking.status = "cancelled"
+                    booking.save(update_fields=["status", "updated_at"])
+
+            refund = getattr(instance, "refund", None)
+            if refund and not TransactionLog.objects.filter(refund=refund, transaction_type="refund").exists():
+                TransactionLog.objects.create(
+                    transaction_type="refund",
+                    payment=instance,
+                    refund=refund,
+                    user=instance.user,
+                    shop=instance.booking.shop if hasattr(instance, "booking_record") else None,
+                    slot=instance.booking if hasattr(instance, "booking_record") else None,
+                    service=instance.booking.service if hasattr(instance, "booking_record") else None,
+                    amount=refund.amount,
+                    currency=instance.currency,
+                    status=refund.status,
+                )
+    except Exception as e:
+        print(f"Payment signal error for Payment {instance.id}: {e}")
+
+
+# Refund post_save (optional: for direct Stripe refunds)
 @receiver(post_save, sender=Refund)
-def log_successful_refund(sender, instance, created, **kwargs):
-    """Create a transaction log automatically for successful refunds."""
+def log_refund_transaction(sender, instance, created, **kwargs):
     if instance.status == "succeeded":
         if not TransactionLog.objects.filter(refund=instance, transaction_type="refund").exists():
             TransactionLog.objects.create(
@@ -258,40 +283,31 @@ def log_successful_refund(sender, instance, created, **kwargs):
                 payment=instance.payment,
                 refund=instance,
                 user=instance.payment.user,
-                shop=instance.payment.booking.shop if hasattr(instance.payment, "booking") else None,
-                slot=instance.payment.booking if hasattr(instance.payment, "booking") else None,
-                service=instance.payment.booking.service if hasattr(instance.payment, "booking") else None,
+                shop=instance.payment.booking_record.shop if hasattr(instance.payment, "booking_record") else None,
+                slot=instance.payment.booking_record.slot if hasattr(instance.payment, "booking_record") else None,
+                service=instance.payment.booking_record.slot.service if hasattr(instance.payment, "booking_record") and instance.payment.booking_record.slot else None,
                 amount=instance.amount,
                 currency=instance.payment.currency,
                 status=instance.status,
             )
 
+
+# Update Daily Revenue
 @receiver(post_save, sender=TransactionLog)
 def update_daily_revenue(sender, instance, created, **kwargs):
-    """
-    Update or create daily revenue for the shop whenever a transaction log is added.
-    - Payment -> add amount
-    - Refund -> subtract amount
-    - One row per shop per day
-    """
     if not created:
-        return  # Only act on newly created transaction logs
+        return
 
     shop = instance.shop
     transaction_date = instance.created_at.date()
-    amount = instance.amount
+    delta = instance.amount if instance.transaction_type == "payment" else -instance.amount
 
-    # Determine revenue delta
-    delta = amount if instance.transaction_type == "payment" else -amount
-
-    # Try to update existing revenue row; if not exists, create it
     revenue_obj, created_revenue = Revenue.objects.update_or_create(
         shop=shop,
         timestamp=transaction_date,
-        defaults={},  # We'll handle revenue separately
+        defaults={},
     )
 
-    # Update revenue safely using F() to handle concurrent transactions
     if not created_revenue:
         Revenue.objects.filter(pk=revenue_obj.pk).update(revenue=F('revenue') + delta)
     else:
