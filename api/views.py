@@ -1140,7 +1140,7 @@ class WeeklyShopRevenueView(APIView):
                 )
             # Calculate the date from which to filter
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
+            start_date = end_date - timedelta(days=days - 1)
             # Make timezone aware if your project uses timezone-aware datetimes
             start_date = make_aware(start_date)
             end_date = make_aware(end_date)
