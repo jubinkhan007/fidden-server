@@ -332,9 +332,9 @@ class Revenue(models.Model):
         decimal_places=2,
         help_text="Total revenue amount"
     )
-    timestamp = models.DateTimeField(
+    timestamp = models.DateField(  # Changed from DateTimeField
         auto_now_add=True,
-        help_text="When this revenue record was created"
+        help_text="Revenue record date"
     )
 
     class Meta:
