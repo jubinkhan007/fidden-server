@@ -295,21 +295,28 @@ def log_refund_transaction(sender, instance, created, **kwargs):
 # Update Daily Revenue
 @receiver(post_save, sender=TransactionLog)
 def update_daily_revenue(sender, instance, created, **kwargs):
+    """
+    Update or create daily revenue for the shop whenever a transaction log is added.
+    - Payment -> add amount
+    - Refund -> subtract amount
+    - One row per shop per day
+    """
     if not created:
-        return
+        return  # Only act on newly created transaction logs
 
     shop = instance.shop
     transaction_date = instance.created_at.date()
-    delta = instance.amount if instance.transaction_type == "payment" else -instance.amount
+    amount = instance.amount
 
-    revenue_obj, created_revenue = Revenue.objects.update_or_create(
-        shop=shop,
-        timestamp=transaction_date,
-        defaults={},
-    )
+    # Determine revenue delta: + for payment, - for refund
+    delta = amount if instance.transaction_type == "payment" else -amount
 
-    if not created_revenue:
+    # Try to get today's revenue row
+    revenue_obj = Revenue.objects.filter(shop=shop, timestamp=transaction_date).first()
+
+    if revenue_obj:
+        # Update existing revenue
         Revenue.objects.filter(pk=revenue_obj.pk).update(revenue=F('revenue') + delta)
     else:
-        revenue_obj.revenue = delta
-        revenue_obj.save()
+        # Create new revenue row for today
+        Revenue.objects.create(shop=shop, timestamp=transaction_date, revenue=delta)
