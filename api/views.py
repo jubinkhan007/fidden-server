@@ -62,6 +62,8 @@ from rest_framework.pagination import PageNumberPagination
 from api.utils.fcm import notify_user
 from api.utils.growth_suggestions import generate_growth_suggestions
 from .tasks import auto_cancel_booking
+import logging
+logger = logging.getLogger(__name__)
 
 class ShopListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -305,8 +307,11 @@ class SlotBookingView(APIView):
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
 
-        # Schedule auto-cancel task after 5 minutes
-        auto_cancel_booking.apply_async((booking.id,), countdown=5 * 60)
+        # Schedule auto-cancel task after 5 minutes (best-effort)
+        try:
+            auto_cancel_booking.apply_async((booking.id,), countdown=5 * 60)
+        except Exception as exc:
+            logger.exception("Failed to enqueue auto_cancel_booking for booking_id=%s: %s", booking.id, exc)
 
         return Response(SlotBookingSerializer(booking).data, status=status.HTTP_201_CREATED)
 
