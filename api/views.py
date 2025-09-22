@@ -305,8 +305,8 @@ class SlotBookingView(APIView):
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
 
-        # # Schedule auto-cancel task after 5 minutes
-        # auto_cancel_booking.apply_async((booking.id,), countdown=5 * 60)
+        # Schedule auto-cancel task after 5 minutes
+        auto_cancel_booking.apply_async((booking.id,), countdown=5 * 60)
 
         return Response(SlotBookingSerializer(booking).data, status=status.HTTP_201_CREATED)
 
