@@ -203,16 +203,13 @@ CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS', '')
 # ==============================
 # Celery Configuration
 # ==============================
-# Prefer REDIS_URL if provided, default to docker network host "redis"
-_default_redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
-CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', _default_redis_url)
-CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', _default_redis_url)
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = os.getenv('CELERY_TIMEZONE', TIME_ZONE)
 CELERY_ENABLE_UTC = True
-CELERY_TASK_IGNORE_RESULT = True
 
 
 FCM_SERVER_KEY = os.getenv("FCM_SERVER_KEY", "")

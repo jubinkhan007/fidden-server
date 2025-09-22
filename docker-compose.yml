@@ -75,8 +75,8 @@ services:
   redis:
     image: redis:8
     container_name: fidden_redis
-    ports:
-      - "6385:6379"
+    # ports:
+    #   - "6379:6379"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
