@@ -266,7 +266,7 @@ class SlotBooking(models.Model):
     def save(self, *args, **kwargs):
         # Auto-fill end_time from slot/service duration
         if not self.end_time:
-            duration_minutes = self.slot.service.duration or 30
+            duration_minutes = self.slot.service.duration or 0
             self.end_time = self.start_time + timedelta(minutes=duration_minutes)
 
         is_new = self.pk is None
