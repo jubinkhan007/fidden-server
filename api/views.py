@@ -61,6 +61,7 @@ from django.db.models import Prefetch
 from rest_framework.pagination import PageNumberPagination
 from api.utils.fcm import notify_user
 from api.utils.growth_suggestions import generate_growth_suggestions
+from .tasks import auto_cancel_booking
 
 class ShopListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -303,6 +304,10 @@ class SlotBookingView(APIView):
         serializer = SlotBookingSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
+
+        # Schedule auto-cancel task after 5 minutes
+        auto_cancel_booking.apply_async((booking.id,), countdown=5 * 60)
+        
         return Response(SlotBookingSerializer(booking).data, status=status.HTTP_201_CREATED)
 
 class CancelSlotBookingView(APIView):

@@ -3,7 +3,7 @@ from django.conf import settings
 from datetime import timedelta
 from django.utils import timezone
 from django.db.models import Q
-from threading import Timer
+
 
 
 class Shop(models.Model):
@@ -216,28 +216,12 @@ class SlotBooking(models.Model):
         ('success', 'Success'),
     ]
 
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, 
-        on_delete=models.CASCADE, 
-        related_name='slot_bookings'
-    )
-    shop = models.ForeignKey(
-        Shop, 
-        on_delete=models.CASCADE, 
-        related_name='slot_bookings'
-    )
-    service = models.ForeignKey(
-        Service, 
-        on_delete=models.CASCADE, 
-        related_name='slot_bookings'
-    )
-    slot = models.ForeignKey(
-        Slot, 
-        on_delete=models.CASCADE, 
-        related_name='bookings'
-    )
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='slot_bookings')
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='slot_bookings')
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='slot_bookings')
+    slot = models.ForeignKey(Slot, on_delete=models.CASCADE, related_name='bookings')
     start_time = models.DateTimeField(db_index=True)
-    end_time = models.DateTimeField(blank=True, null=True)
+    end_time = models.DateTimeField()
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='confirmed')
     payment_status = models.CharField(
         max_length=10,
@@ -260,61 +244,9 @@ class SlotBooking(models.Model):
             )
         ]
 
+
     def __str__(self):
         return f"{self.user} → {self.service.title} @ {self.shop.name} ({timezone.localtime(self.start_time)})"
-
-    def save(self, *args, **kwargs):
-        # Auto-fill end_time from slot/service duration
-        if not self.end_time:
-            duration_minutes = self.slot.service.duration or 0
-            self.end_time = self.start_time + timedelta(minutes=duration_minutes)
-
-        is_new = self.pk is None
-        super().save(*args, **kwargs)
-
-        # Reduce slot capacity on new booking
-        if is_new and self.status == 'confirmed':
-            if self.slot.capacity_left > 0:
-                self.slot.capacity_left -= 1
-                self.slot.save(update_fields=['capacity_left'])
-            if self.shop.capacity > 0:
-                self.shop.capacity -= 1
-                self.shop.save(update_fields=['capacity'])
-
-            # Start auto-cancel timer for pending payments
-            if self.payment_status == 'pending':
-                self.auto_cancel_if_pending()
-
-    def auto_cancel_if_pending(self, delay_minutes=5):
-        """Auto-cancel booking if payment stays pending after X minutes"""
-        def cancel_booking():
-            booking = SlotBooking.objects.filter(pk=self.pk).first()
-            if booking and booking.payment_status != 'success' and booking.status != 'cancelled':
-                booking.status = 'cancelled'
-                booking.save(update_fields=['status'])
-                # Restore slot and shop capacity
-                booking.slot.capacity_left += 1
-                booking.slot.save(update_fields=['capacity_left'])
-                booking.shop.capacity += 1
-                booking.shop.save(update_fields=['capacity'])
-
-        Timer(delay_minutes * 60, cancel_booking).start()
-
-    def cancel_booking(self):
-        """Manual cancellation of booking"""
-        if self.status == 'cancelled':
-            return False, "Booking already cancelled"
-
-        self.status = 'cancelled'
-        self.save(update_fields=['status'])
-
-        # Restore capacities
-        self.slot.capacity_left += 1
-        self.slot.save(update_fields=['capacity_left'])
-        self.shop.capacity += 1
-        self.shop.save(update_fields=['capacity'])
-
-        return True, "Booking cancelled successfully"
 
 class FavoriteShop(models.Model):
     user = models.ForeignKey(

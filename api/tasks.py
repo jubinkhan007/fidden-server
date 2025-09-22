@@ -127,3 +127,29 @@ def cleanup_old_cancelled_bookings(self, days=7, batch_size=1000):
     except Exception as e:
         logger.error(f"[Cleanup Task] Error: {e}", exc_info=True)
         raise self.retry(exc=e)
+
+@shared_task
+def auto_cancel_booking(booking_id):
+    try:
+        booking = SlotBooking.objects.select_related("slot", "shop").get(id=booking_id)
+    except SlotBooking.DoesNotExist:
+        return f"Booking {booking_id} does not exist."
+
+    # ✅ Correct check
+    if booking.payment_status == "pending" and booking.status != "cancelled":
+        booking.status = "cancelled"
+        booking.save(update_fields=["status"])
+
+        # Restore slot capacity
+        if booking.slot.capacity_left is not None:
+            booking.slot.capacity_left += 1
+            booking.slot.save(update_fields=["capacity_left"])
+
+        # Restore shop capacity
+        if booking.shop.capacity is not None:
+            booking.shop.capacity += 1
+            booking.shop.save(update_fields=["capacity"])
+
+        return f"Booking {booking_id} auto-cancelled due to payment timeout."
+
+    return f"Booking {booking_id} not cancelled (already paid or cancelled)."
