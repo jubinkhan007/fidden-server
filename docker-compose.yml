@@ -34,7 +34,7 @@ services:
     build: .
     container_name: fidden_celery
     working_dir: /app
-    command: sh -c "./wait-for-redis.sh redis celery -A fidden worker --loglevel=info"
+    command: sh -c "celery -A fidden worker --loglevel=info"
     volumes:
       - ./:/app
     depends_on:
@@ -43,7 +43,9 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "celery -A fidden status || exit 1"]
@@ -55,7 +57,7 @@ services:
     build: .
     container_name: fidden_celery_beat
     working_dir: /app
-    command:  sh -c "./wait-for-redis.sh redis sh -c 'until python manage.py migrate; do echo Waiting for DB; sleep 3; done; celery -A fidden beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler'"
+    command:  sh -c "until python manage.py migrate; do echo Waiting for DB; sleep 3; done; celery -A fidden beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     volumes:
       - ./:/app
     depends_on:
@@ -64,7 +66,9 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "ps aux | grep '[c]elery beat' || exit 1"]
