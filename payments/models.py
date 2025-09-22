@@ -211,8 +211,16 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
 @receiver(post_save, sender=Payment)
 def handle_payment_status(sender, instance, created, **kwargs):
     try:
+        slot_booking = instance.booking  # Direct OneToOne relation
+
         # ---------------- Payment Succeeded ----------------
         if instance.status == "succeeded":
+            if instance.status == "succeeded":
+                # Update SlotBooking payment status
+                if slot_booking.payment_status != "success":
+                    slot_booking.payment_status = "success"
+                    slot_booking.save(update_fields=["payment_status"])
+                    
             # Create Booking if not exists
             if not hasattr(instance, "booking_record"):
                 Booking.objects.create(

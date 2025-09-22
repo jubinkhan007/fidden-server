@@ -88,7 +88,7 @@ class SlotAdmin(admin.ModelAdmin):
 # ✅ Slot Bookings
 @admin.register(SlotBooking)
 class SlotBookingAdmin(admin.ModelAdmin):
-    list_display = ("user", "shop", "service", "slot", "status", "start_time", "end_time")
+    list_display = ("user", "shop", "service", "slot", "status", "payment_status", "start_time", "end_time")
     list_filter = ("status", "shop", "service", "start_time")
     search_fields = ("user__username", "shop__name", "service__title")
     ordering = ("-start_time",)

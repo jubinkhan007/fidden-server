@@ -207,7 +207,15 @@ class Slot(models.Model):
         return f"{self.shop.name} · {self.service.title} · {timezone.localtime(self.start_time)}"
 
 class SlotBooking(models.Model):
-    STATUS_CHOICES = [('confirmed', 'Confirmed'), ('cancelled', 'Cancelled')]
+    STATUS_CHOICES = [
+        ('confirmed', 'Confirmed'), 
+        ('cancelled', 'Cancelled')
+    ]
+    PAYMENT_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('success', 'Success'),
+    ]
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='slot_bookings')
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='slot_bookings')
     service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='slot_bookings')
@@ -215,6 +223,11 @@ class SlotBooking(models.Model):
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField()
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='confirmed')
+    payment_status = models.CharField(
+        max_length=10,
+        choices=PAYMENT_STATUS_CHOICES,
+        default='pending'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
