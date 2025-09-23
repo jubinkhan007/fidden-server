@@ -15,13 +15,15 @@ from .models import (
     Message, 
     Notification,
     Device,
-    Revenue
+    Revenue,
+    Coupon
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
 from django.db.models import Avg, Count, Q, Value, FloatField
 from api.utils.helper_function import get_distance
 from django.db import transaction
+from django.utils import timezone
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -760,4 +762,61 @@ class SuggestionSerializer(serializers.Serializer):
     short_description = serializers.CharField()
     category = serializers.ChoiceField(choices=["discount", "marketing", "operational"])
 
+class CouponSerializer(serializers.ModelSerializer):
+    # Use PrimaryKeyRelatedField for multiple services
+    services = serializers.PrimaryKeyRelatedField(
+        queryset=Service.objects.all(),
+        many=True
+    )
 
+    class Meta:
+        model = Coupon
+        fields = [
+            'id', 'code', 'description', 'amount', 'in_percentage', 
+            'discount_type', 'shop', 'services', 'validity_date', 
+            'is_active', 'max_usage_per_user', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'code', 'discount_type', 'is_active', 'created_at', 'updated_at']
+
+    def validate_validity_date(self, value):
+        if value < timezone.now().date():
+            raise serializers.ValidationError("Validity date cannot be in the past")
+        return value
+
+    def create(self, validated_data):
+        services = validated_data.pop('services', [])
+        coupon = super().create(validated_data)
+        if services:
+            coupon.services.set(services)
+        return coupon
+
+    def update(self, instance, validated_data):
+        services = validated_data.pop('services', None)
+        coupon = super().update(instance, validated_data)
+        if services is not None:
+            coupon.services.set(services)
+        return coupon
+
+class UserCouponRetrieveSerializer(serializers.Serializer):
+    shop_id = serializers.IntegerField()
+    service_id = serializers.IntegerField()
+
+    def validate(self, attrs):
+        shop_id = attrs.get('shop_id')
+        service_id = attrs.get('service_id')
+
+        # Fetch all active coupons for this shop and service
+        coupon_qs = Coupon.objects.filter(
+            shop_id=shop_id,
+            services__id=service_id,  # ManyToManyField
+            is_active=True
+        )
+
+        if not coupon_qs.exists():
+            raise serializers.ValidationError(
+                "No active coupon found for this shop and service."
+            )
+
+        # Attach all matching coupons
+        attrs['coupons'] = coupon_qs
+        return attrs

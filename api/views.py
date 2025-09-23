@@ -21,7 +21,8 @@ from .models import (
     Message, 
     Device,
     Notification,
-    Revenue
+    Revenue,
+    Coupon
 )
 from .serializers import (
     ShopSerializer, 
@@ -43,7 +44,9 @@ from .serializers import (
     DeviceSerializer,
     NotificationSerializer,
     RevenueSerializer,
-    SuggestionSerializer
+    SuggestionSerializer,
+    CouponSerializer,
+    UserCouponRetrieveSerializer,
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 from datetime import datetime, timedelta
@@ -1187,3 +1190,91 @@ class GrowthSuggestionView(APIView):
         suggestions = generate_growth_suggestions(shop_id=shop_id)
         serializer = SuggestionSerializer(suggestions, many=True)
         return Response(serializer.data)
+
+class CouponListCreateAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsOwnerRole]  # Only owners
+
+    def get(self, request):
+        # Get coupons only for shops owned by the logged-in user
+        coupons = Coupon.objects.filter(shop__owner=request.user)
+        serializer = CouponSerializer(coupons, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = CouponSerializer(data=request.data)
+        if serializer.is_valid():
+            shop = serializer.validated_data.get('shop')
+            # Verify shop belongs to this owner
+            if shop.owner != request.user:
+                return Response(
+                    {"detail": "You can only create coupons for your own shop."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class CouponRetrieveUpdateDestroyAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+
+    def get_object(self, coupon_id):
+        try:
+            return Coupon.objects.get(id=coupon_id)
+        except Coupon.DoesNotExist:
+            return None
+
+    def get(self, request, coupon_id):
+        coupon = self.get_object(coupon_id)
+        if not coupon:
+            return Response({"detail": "Coupon not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if coupon.shop.owner != request.user:
+            return Response(
+                {"detail": "You can only view coupons from your own shop."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = CouponSerializer(coupon)
+        return Response(serializer.data)
+
+    def patch(self, request, coupon_id):
+        coupon = self.get_object(coupon_id)
+        if not coupon:
+            return Response({"detail": "Coupon not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if coupon.shop.owner != request.user:
+            return Response(
+                {"detail": "You can only update coupons for your own shop."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = CouponSerializer(coupon, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, coupon_id):
+        coupon = self.get_object(coupon_id)
+        if not coupon:
+            return Response({"detail": "Coupon not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if coupon.shop.owner != request.user:
+            return Response(
+                {"detail": "You can only delete coupons for your own shop."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        coupon.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class UserCouponRetrieveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = UserCouponRetrieveSerializer(data=request.query_params)
+        if serializer.is_valid():
+            coupons = serializer.validated_data['coupons']
+            output_serializer = CouponSerializer(coupons, many=True)
+            return Response(output_serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

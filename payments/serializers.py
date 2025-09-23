@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from stripe import Source
-from .models import Payment, Booking, Refund, TransactionLog
+from .models import Payment, Booking, Refund, TransactionLog, CouponUsage, can_use_coupon
+from api.models import Coupon
 from django.db.models import Avg, Count
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -65,7 +66,6 @@ class userBookingSerializer(serializers.ModelSerializer):
     def get_total_reviews(self, obj):
         return obj.shop.ratings.count()
 
-
 class ownerBookingSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     user_name = serializers.CharField(source='user.name', read_only=True)
@@ -122,4 +122,38 @@ class TransactionLogSerializer(serializers.ModelSerializer):
         if obj.slot:
             return f"{obj.slot.start_time} - {obj.slot.end_time}"
         return None
-    
+
+# serializers.py
+from rest_framework import serializers
+from .models import Coupon, CouponUsage, can_use_coupon
+
+class ApplyCouponSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Coupon
+        fields = ['id', 'code', 'description', 'discount_type', 'amount', 'validity_date']
+
+    def validate(self, attrs):
+        """
+        Validate coupon:
+        - Is active
+        - User has not exceeded usage limit
+        """
+        user = self.context['request'].user
+        coupon = self.instance  # The coupon instance is passed via view
+        
+        if not coupon.is_active:
+            raise serializers.ValidationError("Coupon is inactive.")
+        
+        if not can_use_coupon(user, coupon):
+            raise serializers.ValidationError("Coupon usage limit reached for this user.")
+        
+        return attrs
+
+    def create_usage(self):
+        """
+        Record coupon usage for this user.
+        """
+        user = self.context['request'].user
+        CouponUsage.objects.create(user=user, coupon=self.instance)
+        return self.instance

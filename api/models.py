@@ -3,6 +3,7 @@ from django.conf import settings
 from datetime import timedelta
 from django.utils import timezone
 from django.db.models import Q
+import uuid
 
 
 
@@ -80,7 +81,7 @@ class Service(models.Model):
     category = models.ForeignKey(ServiceCategory, on_delete=models.CASCADE, related_name='services')
     title = models.CharField(max_length=255)
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    discount_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
+    discount_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True,  default=0)
     description = models.TextField(blank=True, null=True)
     service_img = models.ImageField(upload_to='services/', blank=True, null=True)
     duration = models.PositiveIntegerField(
@@ -214,6 +215,7 @@ class SlotBooking(models.Model):
     PAYMENT_STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('success', 'Success'),
+        ('refund', 'Refund'),
     ]
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='slot_bookings')
@@ -357,3 +359,52 @@ class Revenue(models.Model):
 
     def __str__(self):
         return f"{self.shop.name} – {self.revenue} at {self.timestamp:%Y-%m-%d}"
+
+class Coupon(models.Model):
+    code = models.CharField(max_length=50, unique=True)
+    description = models.TextField(blank=True, null=True)
+    amount = models.DecimalField(
+        max_digits=10, decimal_places=2, blank=True, null=True,
+        help_text="Discount value. Flat or percentage depending on in_percentage"
+    )
+    in_percentage = models.BooleanField(
+        default=False,
+        help_text="If True, discount is percentage-based"
+    )
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='shop_coupons')
+    services = models.ManyToManyField(Service, related_name='service_coupons')  # <-- Multiple services
+    validity_date = models.DateField()
+    is_active = models.BooleanField(default=True)
+    max_usage_per_user = models.PositiveIntegerField(
+        blank=True, null=True,
+        help_text="Max times a user can use this coupon"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.code
+
+    @property
+    def discount_type(self):
+        return 'percentage' if self.in_percentage else 'amount'
+
+    def save(self, *args, **kwargs):
+        # Auto-generate code if empty
+        if not self.code:
+            shop_initial = self.shop.name[0].upper() if self.shop and self.shop.name else "S"
+            service_initial = ""
+            # If multiple services exist, take first service's title initial
+            if self.pk:  # When updating, services already linked
+                first_service = self.services.first()
+                service_initial = first_service.title[0].upper() if first_service else "X"
+            else:
+                service_initial = "X"  # Temporary placeholder for new object
+            self.code = f"{shop_initial}{service_initial}{int(timezone.now().timestamp())}"
+        # Auto-disable expired coupon
+        if self.validity_date < timezone.now().date():
+            self.is_active = False
+        super().save(*args, **kwargs)

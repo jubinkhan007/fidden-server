@@ -3,9 +3,10 @@ from django.conf import settings
 from django.db.models import F
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
+from django.utils import timezone
 import stripe
 
-from api.models import Shop, SlotBooking, Revenue
+from api.models import Shop, SlotBooking, Revenue, Coupon
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -32,7 +33,7 @@ class UserStripeCustomer(models.Model):
         return f"{self.user.email} Stripe Customer"
 
 # -----------------------------
-# Payment for SlotBooking
+# Payment Table
 # -----------------------------
 class Payment(models.Model):
     STATUS_CHOICES = [
@@ -46,6 +47,12 @@ class Payment(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, blank=True, null=True, related_name='payment_coupon',
+        help_text="Coupon applied to this payment"
+    )
+    coupon_amount = models.DecimalField( max_digits=10, decimal_places=2, blank=True, null=True,
+        help_text="Amount after applying coupon discount (if any)"
+    )
     currency = models.CharField(max_length=10, default="usd")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -135,6 +142,9 @@ class Booking(models.Model):
                 slot_booking.status = "cancelled"
                 slot_booking.save(update_fields=["status"])
 
+                slot_booking.payment_status = "refund"
+                slot_booking.save(update_fields=["payment_status"])
+
                 slot_booking.slot.capacity_left += 1
                 slot_booking.slot.save(update_fields=["capacity_left"])
 
@@ -168,6 +178,38 @@ class TransactionLog(models.Model):
 
     def __str__(self):
         return f"{self.transaction_type.capitalize()} {self.id} - {self.status} - {self.amount} {self.currency}"
+
+# -----------------------------
+# CouponUsage Table
+# -----------------------------
+class CouponUsage(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='coupon_usages')
+    coupon = models.ForeignKey(Coupon, on_delete=models.CASCADE, related_name='usages')
+    used_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-used_at']
+        indexes = [
+            models.Index(fields=['user', 'coupon']),
+        ]
+
+    def __str__(self):
+        return f"{self.user} used {self.coupon.code} at {self.used_at}"
+
+# -----------------------------
+# Helper Function
+# -----------------------------
+def can_use_coupon(user, coupon):
+    """
+    Check if a user can use the coupon based on max_usage_per_user.
+    Returns True if allowed, False otherwise.
+    """
+    used_count = CouponUsage.objects.filter(user=user, coupon=coupon).count()
+    if not coupon.is_active:
+        return False
+    if coupon.max_usage_per_user is None:
+        return True  # unlimited usage
+    return used_count < coupon.max_usage_per_user
 
 # -----------------------------
 # Signals

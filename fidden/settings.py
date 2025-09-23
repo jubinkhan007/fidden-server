@@ -21,9 +21,9 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # Django Security
 # ==============================
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-default-key')
-DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 'yes')
+DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 't')
 
-ALLOWED_HOSTS = ["*"] #os.getenv('ALLOWED_HOSTS', '*').split(',')
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost').split(',')
 
 # ==============================
 # Installed Apps
@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'payments',
     'django_celery_beat',
     'channels',
+    'drf_yasg',
     # 'django_crontab',
 ]
 

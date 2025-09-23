@@ -27,6 +27,9 @@ from .views import (
     NotificationDetailView,
     WeeklyShopRevenueView,
     GrowthSuggestionView,
+    CouponListCreateAPIView,
+    CouponRetrieveUpdateDestroyAPIView,
+    UserCouponRetrieveAPIView,
 )
 
 urlpatterns = [
@@ -57,4 +60,7 @@ urlpatterns = [
     path("notifications/<int:pk>/", NotificationDetailView.as_view(), name="notification-detail"),
     path('shop/<int:shop_id>/revenues/', WeeklyShopRevenueView.as_view(), name='weekly-shop-revenues'),
     path("growth-suggestions/", GrowthSuggestionView.as_view(), name="growth-suggestions"),
+    path('coupons/', CouponListCreateAPIView.as_view(), name='coupon-list-create'),
+    path('coupons/<int:coupon_id>/', CouponRetrieveUpdateDestroyAPIView.as_view(), name='coupon-detail'),
+    path('users/coupons/', UserCouponRetrieveAPIView.as_view(), name='user-get-coupon'),
 ]

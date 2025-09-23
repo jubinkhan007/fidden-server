@@ -1,3 +1,4 @@
+import os
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -11,11 +12,11 @@ from datetime import timedelta
 from django.utils.timezone import now
 from django.conf import settings
 
-from api.models import Shop, SlotBooking, Slot
+from api.models import Shop, Coupon
 from api.serializers import SlotBookingSerializer
 from accounts.models import User
-from .models import Payment, UserStripeCustomer, ShopStripeAccount, Booking, TransactionLog
-from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer
+from .models import Payment, UserStripeCustomer, Booking, TransactionLog, CouponUsage, can_use_coupon
+from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
 from .pagination import BookingCursorPagination, TransactionCursorPagination
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -99,15 +100,18 @@ class ShopOnboardingLinkView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, shop_id):
+        
         shop = get_object_or_404(Shop, id=shop_id)
         user = request.user
         if getattr(user, "role", None) != "owner":
             return Response({"detail": "Only owner can view services."}, status=status.HTTP_403_FORBIDDEN)
 
+        base_url = os.getenv("BASE_URL", "https://yourdomain.com")
+
         account_link = stripe.AccountLink.create(
             account=shop.stripe_account.stripe_account_id,
-            refresh_url="https://yourdomain.com/stripe/refresh",
-            return_url="https://yourdomain.com/stripe/return",
+            refresh_url=f"{base_url}/stripe/refresh",
+            return_url=f"{base_url}/stripe/return",
             type="account_onboarding"
         )
         return Response({"url": account_link.url})
@@ -345,3 +349,25 @@ class TransactionLogListView(APIView):
             "status": "success",
             "data": serializer.data
         })
+
+class ApplyCouponAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, coupon_id):
+        try:
+            coupon = Coupon.objects.get(id=coupon_id)
+        except Coupon.DoesNotExist:
+            return Response({"detail": "Coupon not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ApplyCouponSerializer(instance=coupon, context={"request": request})
+        
+        # Validate coupon
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Record usage
+        serializer.create_usage()
+        
+        return Response(serializer.data, status=status.HTTP_200_OK)
