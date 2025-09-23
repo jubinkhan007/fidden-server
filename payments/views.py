@@ -12,6 +12,7 @@ from django.utils.timezone import now
 from django.conf import settings
 
 from api.models import Shop, SlotBooking, Slot
+from api.serializers import SlotBookingSerializer
 from accounts.models import User
 from .models import Payment, UserStripeCustomer, ShopStripeAccount, Booking, TransactionLog
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer
@@ -24,36 +25,30 @@ class CreatePaymentIntentView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, slot_id):
-        # 1. Validate slot
-        slot = get_object_or_404(Slot, id=slot_id, is_available=True)
-
-        # 2. Create SlotBooking
-        booking = SlotBooking.objects.create(
-            user=request.user,
-            shop=slot.shop,
-            service=slot.service,
-            slot=slot,
-            start_time=slot.start_time,
-            end_time=slot.end_time,
-            status="confirmed",
-            payment_status="pending"
+        # 1. Create SlotBooking via serializer (handles validation + capacity checks)
+        serializer = SlotBookingSerializer(
+            data={"slot_id": slot_id}, 
+            context={"request": request}
         )
+        serializer.is_valid(raise_exception=True)
+        booking = serializer.save()
 
-        # 3. Ensure User Stripe Customer exists
         user = request.user
+
+        # 2. Ensure User Stripe Customer exists
         user_customer, _ = UserStripeCustomer.objects.get_or_create(user=user)
         if not user_customer.stripe_customer_id:
             stripe_customer = stripe.Customer.create(email=user.email)
             user_customer.stripe_customer_id = stripe_customer.id
             user_customer.save()
 
-        # 4. Ensure Shop Stripe Account exists
+        # 3. Ensure Shop Stripe Account exists
         shop = booking.shop
-        shop_account = getattr(shop, 'stripe_account', None)
+        shop_account = getattr(shop, "stripe_account", None)
         if not shop_account:
             return Response({"error": "Shop Stripe account not found"}, status=400)
 
-        # 5. Create PaymentIntent
+        # 4. Create PaymentIntent
         amount_cents = int(booking.service.price * 100)
         try:
             intent = stripe.PaymentIntent.create(
@@ -65,35 +60,39 @@ class CreatePaymentIntentView(APIView):
                 metadata={"booking_id": booking.id}
             )
         except Exception as e:
+            # rollback booking if PaymentIntent fails
+            booking.delete()
             return Response({"error": f"PaymentIntent creation failed: {str(e)}"}, status=500)
 
-        # 6. Save Payment record
+        # 5. Save Payment record
         Payment.objects.update_or_create(
             booking=booking,
             defaults={
                 "user": user,
                 "amount": booking.service.price,
                 "stripe_payment_intent_id": intent.id,
-                "status": "pending"
-            }
+                "status": "pending",
+            },
         )
 
-        # 7. Create Ephemeral Key for the frontend
+        # 6. Create Ephemeral Key for the frontend
         try:
             ephemeral_key = stripe.EphemeralKey.create(
                 customer=user_customer.stripe_customer_id,
                 stripe_version="2024-04-10"
             )
         except Exception as e:
+            # rollback booking if ephemeral key fails
+            booking.delete()
             return Response({"error": f"Ephemeral key creation failed: {str(e)}"}, status=500)
 
-        # 8. Return response
+        # 7. Return response
         return Response({
             "booking_id": booking.id,
             "client_secret": intent.client_secret,
             "payment_intent_id": intent.id,
             "ephemeral_key": ephemeral_key.secret,
-            "customer_id": user_customer.stripe_customer_id
+            "customer_id": user_customer.stripe_customer_id,
         }, status=status.HTTP_200_OK)
 
 class ShopOnboardingLinkView(APIView):
