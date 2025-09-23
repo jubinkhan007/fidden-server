@@ -123,37 +123,27 @@ class TransactionLogSerializer(serializers.ModelSerializer):
             return f"{obj.slot.start_time} - {obj.slot.end_time}"
         return None
 
-# serializers.py
-from rest_framework import serializers
-from .models import Coupon, CouponUsage, can_use_coupon
+class ApplyCouponSerializer(serializers.Serializer):
+    coupon_id = serializers.IntegerField()
 
-class ApplyCouponSerializer(serializers.ModelSerializer):
-
-    class Meta:
-        model = Coupon
-        fields = ['id', 'code', 'description', 'discount_type', 'amount', 'validity_date']
-
-    def validate(self, attrs):
-        """
-        Validate coupon:
-        - Is active
-        - User has not exceeded usage limit
-        """
+    def validate_coupon_id(self, value):
         user = self.context['request'].user
-        coupon = self.instance  # The coupon instance is passed via view
-        
+        try:
+            coupon = Coupon.objects.get(id=value)
+        except Coupon.DoesNotExist:
+            raise serializers.ValidationError("Coupon not found.")
+
         if not coupon.is_active:
             raise serializers.ValidationError("Coupon is inactive.")
-        
+
         if not can_use_coupon(user, coupon):
             raise serializers.ValidationError("Coupon usage limit reached for this user.")
-        
-        return attrs
+
+        self.instance = coupon  # store instance for usage recording
+        return value
 
     def create_usage(self):
-        """
-        Record coupon usage for this user.
-        """
+        """Record coupon usage for this user"""
         user = self.context['request'].user
         CouponUsage.objects.create(user=user, coupon=self.instance)
         return self.instance

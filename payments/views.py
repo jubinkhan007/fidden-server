@@ -13,7 +13,7 @@ from django.utils.timezone import now
 from django.conf import settings
 
 from api.models import Shop, Coupon
-from api.serializers import SlotBookingSerializer
+from api.serializers import SlotBookingSerializer, CouponSerializer
 from accounts.models import User
 from .models import Payment, UserStripeCustomer, Booking, TransactionLog, CouponUsage, can_use_coupon
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
@@ -353,21 +353,14 @@ class TransactionLogListView(APIView):
 class ApplyCouponAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, coupon_id):
-        try:
-            coupon = Coupon.objects.get(id=coupon_id)
-        except Coupon.DoesNotExist:
-            return Response({"detail": "Coupon not found"}, status=status.HTTP_404_NOT_FOUND)
+    def post(self, request):
+        serializer = ApplyCouponSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
 
-        serializer = ApplyCouponSerializer(instance=coupon, context={"request": request})
-        
-        # Validate coupon
-        try:
-            serializer.is_valid(raise_exception=True)
-        except Exception as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        
         # Record usage
         serializer.create_usage()
-        
-        return Response(serializer.data, status=status.HTTP_200_OK)
+
+        # Return coupon info
+        coupon_data = CouponSerializer(serializer.instance).data
+        return Response(coupon_data, status=status.HTTP_200_OK)
+
