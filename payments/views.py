@@ -18,7 +18,6 @@ from accounts.models import User
 from .models import Payment, UserStripeCustomer, Booking, TransactionLog, CouponUsage, can_use_coupon
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
 from .pagination import BookingCursorPagination, TransactionCursorPagination
-from api.tasks import auto_cancel_booking
 from .utils.helper_function import extract_validation_error_message
 import logging
 logger = logging.getLogger(__name__)
@@ -33,12 +32,26 @@ class CreatePaymentIntentView(APIView):
         user = request.user
         coupon_id = request.data.get("coupon_id", None)
 
-        # 1. Create Booking
+        coupon = None
+        discount = 0
+
+        # 1. Apply Coupon first (before booking creation)
+        if coupon_id:
+            coupon_serializer = ApplyCouponSerializer(
+                data={"coupon_id": coupon_id},
+                context={"request": request}
+            )
+            try:
+                coupon_serializer.is_valid(raise_exception=True)
+                coupon = coupon_serializer.instance
+            except ValidationError as e:
+                return Response({"detail": extract_validation_error_message(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Create Booking
         serializer = SlotBookingSerializer(
             data={"slot_id": slot_id},
             context={"request": request}
         )
-
         try:
             serializer.is_valid(raise_exception=True)
         except ValidationError as e:
@@ -47,52 +60,36 @@ class CreatePaymentIntentView(APIView):
         booking = serializer.save()
 
         try:
-            # 2. Ensure Stripe Customer exists
+            # 3. Ensure Stripe Customer exists
             user_customer, _ = UserStripeCustomer.objects.get_or_create(user=user)
             if not user_customer.stripe_customer_id:
                 stripe_customer = stripe.Customer.create(email=user.email)
                 user_customer.stripe_customer_id = stripe_customer.id
                 user_customer.save()
 
-            # 3. Ensure Shop Stripe Account exists
+            # 4. Ensure Shop Stripe Account exists
             shop = booking.shop
             shop_account = getattr(shop, "stripe_account", None)
             if not shop_account:
-                self._schedule_auto_cancel(booking.id)
                 return Response({"detail": "Shop Stripe account not found"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 4. Calculate price
+            # 5. Calculate price
             total_amount = (
                 booking.service.discount_price
                 if booking.service.discount_price > 0
                 else booking.service.price
             )
 
-            coupon = None
-            discount = 0
+            # Apply coupon discount if available
+            if coupon:
+                if coupon.in_percentage:
+                    discount = (total_amount * coupon.amount) / 100
+                else:
+                    discount = coupon.amount
+                total_amount = max(total_amount - discount, 0)
 
-            # 5. Apply Coupon
-            if coupon_id:
-                coupon_serializer = ApplyCouponSerializer(
-                    data={"coupon_id": coupon_id},
-                    context={"request": request}
-                )
-
-                try:
-                    coupon_serializer.is_valid(raise_exception=True)
-                    coupon = coupon_serializer.instance
-
-                    if coupon.in_percentage:
-                        discount = (total_amount * coupon.amount) / 100
-                    else:
-                        discount = coupon.amount
-
-                    total_amount = max(total_amount - discount, 0)
-                    coupon_serializer.create_usage()
-
-                except ValidationError as e:
-                    self._schedule_auto_cancel(booking.id)
-                    return Response({"detail": extract_validation_error_message(e)}, status=status.HTTP_400_BAD_REQUEST)
+                # Record coupon usage
+                coupon_serializer.create_usage()
 
             # 6. Create PaymentIntent
             amount_cents = int(total_amount * 100)
@@ -135,16 +132,7 @@ class CreatePaymentIntentView(APIView):
 
         except Exception as e:
             logger.exception("Error in CreatePaymentIntentView: %s", str(e))
-            self._schedule_auto_cancel(booking.id)
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    def _schedule_auto_cancel(self, booking_id):
-        try:
-            auto_cancel_booking.apply_async((booking_id,), countdown=5 * 60)
-        except Exception as exc:
-            logger.exception(
-                "Failed to enqueue auto_cancel_booking for booking_id=%s: %s", booking_id, exc
-            )
 
 class ShopOnboardingLinkView(APIView):
     permission_classes = [IsAuthenticated]
