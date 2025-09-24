@@ -776,7 +776,7 @@ class CouponSerializer(serializers.ModelSerializer):
             'discount_type', 'shop', 'services', 'validity_date', 
             'is_active', 'max_usage_per_user', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'code', 'discount_type', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'code', 'discount_type', 'created_at', 'updated_at']
 
     def validate_validity_date(self, value):
         if value < timezone.now().date():
