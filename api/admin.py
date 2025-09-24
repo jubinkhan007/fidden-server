@@ -14,7 +14,8 @@ from .models import (
     Message, 
     Device, 
     Notification,
-    Revenue
+    Revenue,
+    Coupon
 )
 
 
@@ -133,4 +134,38 @@ class RevenueAdmin(admin.ModelAdmin):
     list_display = ('shop', 'revenue', 'timestamp')
     list_filter = ('shop', 'timestamp')             
     search_fields = ('shop__name',)                
-    ordering = ('-timestamp',)                      
+    ordering = ('-timestamp',)         
+
+@admin.register(Coupon)
+class CouponAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", "code", "shop", "display_services", 
+        "amount", "discount_type", "validity_date", 
+        "is_active", "max_usage_per_user", "created_at"
+    )
+    list_filter = ("shop", "in_percentage", "is_active", "validity_date", "created_at")
+    search_fields = ("code", "shop__name", "services__title")
+    ordering = ("-created_at",)
+    filter_horizontal = ("services",)  # nice UI for ManyToMany
+
+    readonly_fields = ("created_at", "updated_at", "discount_type")
+
+    fieldsets = (
+        ("Coupon Details", {
+            "fields": ("code", "description", "shop", "services")
+        }),
+        ("Discount Settings", {
+            "fields": ("amount", "in_percentage", "discount_type")
+        }),
+        ("Validity", {
+            "fields": ("validity_date", "is_active", "max_usage_per_user")
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at")
+        }),
+    )
+
+    def display_services(self, obj):
+        """Show related services as comma-separated titles."""
+        return ", ".join(service.title for service in obj.services.all())
+    display_services.short_description = "Services"             
