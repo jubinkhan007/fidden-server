@@ -52,7 +52,7 @@ class CreatePaymentIntentView(APIView):
             shop = booking.shop
             shop_account = getattr(shop, "stripe_account", None)
             if not shop_account:
-                self._cancel_booking(booking.id)
+                self._schedule_auto_cancel(booking.id)
                 return Response({"error": "Shop Stripe account not found"}, status=400)
 
             # 4. Calculate price
@@ -80,7 +80,7 @@ class CreatePaymentIntentView(APIView):
                     total_amount = max(total_amount - discount, 0)
                     coupon_serializer.create_usage()
                 else:
-                    self._cancel_booking(booking.id)
+                    self._schedule_auto_cancel(booking.id)
                     return Response({"error": coupon_serializer.errors}, status=400)
 
             # 6. Create PaymentIntent
@@ -124,14 +124,16 @@ class CreatePaymentIntentView(APIView):
 
         except Exception as e:
             logger.exception("Error in CreatePaymentIntentView: %s", str(e))
-            self._cancel_booking(booking.id)
+            self._schedule_auto_cancel(booking.id)
             return Response({"error": str(e)}, status=500)
 
-    def _cancel_booking(self, booking_id):
+    def _schedule_auto_cancel(self, booking_id):
         try:
-            auto_cancel_booking.apply_async((booking_id,), countdown=5 * 60)  # 5 mins
+            auto_cancel_booking.apply_async((booking_id,), countdown=5 * 60)
         except Exception as exc:
-            logger.exception("Failed to enqueue auto_cancel_booking for booking_id=%s: %s", booking_id, exc)
+            logger.exception(
+                "Failed to enqueue auto_cancel_booking for booking_id=%s: %s", booking_id, exc
+            )
 
 class ShopOnboardingLinkView(APIView):
     permission_classes = [IsAuthenticated]
