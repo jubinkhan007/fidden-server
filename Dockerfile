@@ -40,6 +40,6 @@ EXPOSE 8090
 # Run Uvicorn (ASGI server for Django + Channels)
 # CMD ["uvicorn", "fidden.asgi:application", "--host", "0.0.0.0", "--port", "8090", "--ws", "websockets"]
 
-CMD ["sh", "-c", "sleep 2 && uvicorn fidden.asgi:application --host 0.0.0.0 --port $PORT --ws websockets"]
+CMD ["sh", "-c", "sleep 2 && uvicorn fidden.asgi:application --host 0.0.0.0 --port ${PORT:-8090} --ws websockets"]
 
 # CMD ["sh", "-c", "uvicorn fidden.asgi:application --host 0.0.0.0 --port ${PORT:-8080} --ws websockets"]
