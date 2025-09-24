@@ -1,5 +1,4 @@
-from rest_framework import serializers, status
-from rest_framework.exceptions import APIException
+from rest_framework import serializers
 from stripe import Source
 from .models import Payment, Booking, Refund, TransactionLog, CouponUsage, can_use_coupon
 from api.models import Coupon
@@ -125,12 +124,6 @@ class TransactionLogSerializer(serializers.ModelSerializer):
             return f"{obj.slot.start_time} - {obj.slot.end_time}"
         return None
 
-class CouponValidationError(APIException):
-    """Custom exception for coupon validation errors with 403 status."""
-    status_code = status.HTTP_403_FORBIDDEN
-    default_detail = "Coupon validation failed."
-    default_code = "invalid_coupon"
-
 class ApplyCouponSerializer(serializers.Serializer):
     coupon_id = serializers.IntegerField()
 
@@ -139,19 +132,18 @@ class ApplyCouponSerializer(serializers.Serializer):
         try:
             coupon = Coupon.objects.get(id=value)
         except Coupon.DoesNotExist:
-            raise CouponValidationError({"detail": "Coupon not found."})
+            raise serializers.ValidationError("Coupon not found.")
 
         if not coupon.is_active:
-            raise CouponValidationError({"detail": "Coupon is inactive."})
+            raise serializers.ValidationError("Coupon is inactive.")
 
-        # ✅ Added validity date check here
         if coupon.validity_date and coupon.validity_date < now().date():
-            raise CouponValidationError({"detail": "Coupon has expired."})
+            raise serializers.ValidationError("Coupon has expired.")
 
         if not can_use_coupon(user, coupon):
-            raise CouponValidationError({"detail": "Coupon usage limit reached for this user."})
+            raise serializers.ValidationError("Coupon usage limit reached for this user.")
 
-        self.instance = coupon  # store instance for usage recording
+        self.instance = coupon
         return value
 
     def create_usage(self):

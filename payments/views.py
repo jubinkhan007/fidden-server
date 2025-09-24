@@ -11,7 +11,7 @@ import json
 from datetime import timedelta
 from django.utils.timezone import now
 from django.conf import settings
-
+from rest_framework.exceptions import ValidationError
 from api.models import Shop, Coupon
 from api.serializers import SlotBookingSerializer, CouponSerializer
 from accounts.models import User
@@ -19,6 +19,7 @@ from .models import Payment, UserStripeCustomer, Booking, TransactionLog, Coupon
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
 from .pagination import BookingCursorPagination, TransactionCursorPagination
 from api.tasks import auto_cancel_booking
+from .utils.helper_function import extract_validation_error_message
 import logging
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,12 @@ class CreatePaymentIntentView(APIView):
             data={"slot_id": slot_id},
             context={"request": request}
         )
-        serializer.is_valid(raise_exception=True)
+
+        try:
+            serializer.is_valid(raise_exception=True)
+        except ValidationError as e:
+            return Response({"detail": extract_validation_error_message(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         booking = serializer.save()
 
         try:
@@ -53,7 +59,7 @@ class CreatePaymentIntentView(APIView):
             shop_account = getattr(shop, "stripe_account", None)
             if not shop_account:
                 self._schedule_auto_cancel(booking.id)
-                return Response({"error": "Shop Stripe account not found"}, status=400)
+                return Response({"detail": "Shop Stripe account not found"}, status=status.HTTP_400_BAD_REQUEST)
 
             # 4. Calculate price
             total_amount = (
@@ -71,17 +77,22 @@ class CreatePaymentIntentView(APIView):
                     data={"coupon_id": coupon_id},
                     context={"request": request}
                 )
-                if coupon_serializer.is_valid():
+
+                try:
+                    coupon_serializer.is_valid(raise_exception=True)
                     coupon = coupon_serializer.instance
+
                     if coupon.in_percentage:
                         discount = (total_amount * coupon.amount) / 100
                     else:
                         discount = coupon.amount
+
                     total_amount = max(total_amount - discount, 0)
                     coupon_serializer.create_usage()
-                else:
+
+                except ValidationError as e:
                     self._schedule_auto_cancel(booking.id)
-                    return Response({"error": coupon_serializer.errors}, status=400)
+                    return Response({"detail": extract_validation_error_message(e)}, status=status.HTTP_400_BAD_REQUEST)
 
             # 6. Create PaymentIntent
             amount_cents = int(total_amount * 100)
@@ -94,7 +105,7 @@ class CreatePaymentIntentView(APIView):
                 metadata={"booking_id": booking.id}
             )
 
-            # 7. Save Payment
+            # 7. Save Payment record
             Payment.objects.update_or_create(
                 booking=booking,
                 defaults={
@@ -125,7 +136,7 @@ class CreatePaymentIntentView(APIView):
         except Exception as e:
             logger.exception("Error in CreatePaymentIntentView: %s", str(e))
             self._schedule_auto_cancel(booking.id)
-            return Response({"error": str(e)}, status=500)
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def _schedule_auto_cancel(self, booking_id):
         try:
