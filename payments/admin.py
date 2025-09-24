@@ -7,7 +7,8 @@ from .models import (
     Payment, 
     Booking,
     Refund,
-    TransactionLog
+    TransactionLog,
+    CouponUsage
 )
 
 # -----------------------------
@@ -88,3 +89,10 @@ class TransactionLogAdmin(admin.ModelAdmin):
         "service__title",
     )
     readonly_fields = ("created_at",)
+
+@admin.register(CouponUsage)
+class CouponUsageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'coupon', 'used_at')
+    list_filter = ('coupon', 'used_at')
+    search_fields = ('user__username', 'coupon__code')
+    ordering = ('-used_at',)
