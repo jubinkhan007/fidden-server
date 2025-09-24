@@ -129,6 +129,7 @@ class ApplyCouponSerializer(serializers.Serializer):
 
     def validate_coupon_id(self, value):
         user = self.context['request'].user
+
         try:
             coupon = Coupon.objects.get(id=value)
         except Coupon.DoesNotExist:
@@ -143,11 +144,17 @@ class ApplyCouponSerializer(serializers.Serializer):
         if not can_use_coupon(user, coupon):
             raise serializers.ValidationError("Coupon usage limit reached for this user.")
 
-        self.instance = coupon
+        self._validated_coupon = coupon  # ✅ store safely
         return value
+
+    @property
+    def coupon(self):
+        return getattr(self, "_validated_coupon", None)
 
     def create_usage(self):
         """Record coupon usage for this user"""
         user = self.context['request'].user
-        CouponUsage.objects.create(user=user, coupon=self.instance)
-        return self.instance
+        if not self.coupon:
+            raise serializers.ValidationError("No coupon available to use.")
+        CouponUsage.objects.create(user=user, coupon=self.coupon)
+        return self.coupon

@@ -19,8 +19,7 @@ from .models import Payment, UserStripeCustomer, Booking, TransactionLog, Coupon
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
 from .pagination import BookingCursorPagination, TransactionCursorPagination
 from .utils.helper_function import extract_validation_error_message
-import logging
-logger = logging.getLogger(__name__)
+
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
@@ -43,7 +42,7 @@ class CreatePaymentIntentView(APIView):
             )
             try:
                 coupon_serializer.is_valid(raise_exception=True)
-                coupon = coupon_serializer.instance
+                coupon =  coupon_serializer.coupon 
             except ValidationError as e:
                 return Response({"detail": extract_validation_error_message(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -131,7 +130,6 @@ class CreatePaymentIntentView(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            logger.exception("Error in CreatePaymentIntentView: %s", str(e))
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ShopOnboardingLinkView(APIView):
