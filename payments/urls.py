@@ -7,7 +7,7 @@ from .views import (
     BookingListView,
     CancelBookingView,
     TransactionLogListView,
-    ApplyCouponAPIView,
+    # ApplyCouponAPIView,
 )
 
 urlpatterns = [
@@ -18,5 +18,5 @@ urlpatterns = [
     path('bookings/', BookingListView.as_view(), name='booking-list'),
     path("bookings/cancel/<int:booking_id>/", CancelBookingView.as_view(), name="cancel-booking"),
     path('transactions/', TransactionLogListView.as_view(), name='transaction-list'),
-    path('apply-coupon/', ApplyCouponAPIView.as_view(), name='apply-coupon'),
+    # path('apply-coupon/', ApplyCouponAPIView.as_view(), name='apply-coupon'),
 ]

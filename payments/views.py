@@ -18,6 +18,9 @@ from accounts.models import User
 from .models import Payment, UserStripeCustomer, Booking, TransactionLog, CouponUsage, can_use_coupon
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
 from .pagination import BookingCursorPagination, TransactionCursorPagination
+from api.tasks import auto_cancel_booking
+import logging
+logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
@@ -27,9 +30,9 @@ class CreatePaymentIntentView(APIView):
 
     def post(self, request, slot_id):
         user = request.user
-        coupon_id = request.data.get("coupon_id", None)  # can be None
+        coupon_id = request.data.get("coupon_id", None)
 
-        # 1. Create SlotBooking via serializer
+        # 1. Create Booking
         serializer = SlotBookingSerializer(
             data={"slot_id": slot_id},
             context={"request": request}
@@ -37,55 +40,51 @@ class CreatePaymentIntentView(APIView):
         serializer.is_valid(raise_exception=True)
         booking = serializer.save()
 
-        # 2. Ensure User Stripe Customer exists
-        user_customer, _ = UserStripeCustomer.objects.get_or_create(user=user)
-        if not user_customer.stripe_customer_id:
-            stripe_customer = stripe.Customer.create(email=user.email)
-            user_customer.stripe_customer_id = stripe_customer.id
-            user_customer.save()
-
-        # 3. Ensure Shop Stripe Account exists
-        shop = booking.shop
-        shop_account = getattr(shop, "stripe_account", None)
-        if not shop_account:
-            booking.delete()
-            return Response({"error": "Shop Stripe account not found"}, status=400)
-
-        # 4. Base price
-        total_amount = (
-            booking.service.discount_price
-            if booking.service.discount_price > 0
-            else booking.service.price
-        )
-
-        coupon = None
-        discount = 0
-
-        # 5. Apply Coupon (only check validity date)
-        if coupon_id:
-            try:
-                coupon = Coupon.objects.get(id=coupon_id)
-
-                # Check validity date only
-                if coupon.validity_date < now().date():
-                    booking.delete()
-                    return Response({"error": "Coupon has expired"}, status=400)
-
-                # Apply discount
-                if coupon.in_percentage:
-                    discount = (total_amount * coupon.amount) / 100
-                else:
-                    discount = coupon.amount
-
-                total_amount = max(total_amount - discount, 0)
-
-            except Coupon.DoesNotExist:
-                booking.delete()
-                return Response({"error": "Invalid coupon"}, status=400)
-
-        # 6. Create PaymentIntent
-        amount_cents = int(total_amount * 100)
         try:
+            # 2. Ensure Stripe Customer exists
+            user_customer, _ = UserStripeCustomer.objects.get_or_create(user=user)
+            if not user_customer.stripe_customer_id:
+                stripe_customer = stripe.Customer.create(email=user.email)
+                user_customer.stripe_customer_id = stripe_customer.id
+                user_customer.save()
+
+            # 3. Ensure Shop Stripe Account exists
+            shop = booking.shop
+            shop_account = getattr(shop, "stripe_account", None)
+            if not shop_account:
+                self._cancel_booking(booking.id)
+                return Response({"error": "Shop Stripe account not found"}, status=400)
+
+            # 4. Calculate price
+            total_amount = (
+                booking.service.discount_price
+                if booking.service.discount_price > 0
+                else booking.service.price
+            )
+
+            coupon = None
+            discount = 0
+
+            # 5. Apply Coupon
+            if coupon_id:
+                coupon_serializer = ApplyCouponSerializer(
+                    data={"coupon_id": coupon_id},
+                    context={"request": request}
+                )
+                if coupon_serializer.is_valid():
+                    coupon = coupon_serializer.instance
+                    if coupon.in_percentage:
+                        discount = (total_amount * coupon.amount) / 100
+                    else:
+                        discount = coupon.amount
+                    total_amount = max(total_amount - discount, 0)
+                    coupon_serializer.create_usage()
+                else:
+                    self._cancel_booking(booking.id)
+                    return Response({"error": coupon_serializer.errors}, status=400)
+
+            # 6. Create PaymentIntent
+            amount_cents = int(total_amount * 100)
             intent = stripe.PaymentIntent.create(
                 amount=amount_cents,
                 currency="usd",
@@ -94,42 +93,45 @@ class CreatePaymentIntentView(APIView):
                 transfer_data={"destination": shop_account.stripe_account_id},
                 metadata={"booking_id": booking.id}
             )
-        except Exception as e:
-            booking.delete()
-            return Response({"error": f"PaymentIntent creation failed: {str(e)}"}, status=500)
 
-        # 7. Save Payment record with coupon info
-        Payment.objects.update_or_create(
-            booking=booking,
-            defaults={
-                "user": user,
-                "amount": total_amount,
-                "coupon": coupon,
-                "coupon_amount": discount if coupon else None,
-                "stripe_payment_intent_id": intent.id,
-                "status": "pending",
-            },
-        )
+            # 7. Save Payment
+            Payment.objects.update_or_create(
+                booking=booking,
+                defaults={
+                    "user": user,
+                    "amount": total_amount,
+                    "coupon": coupon,
+                    "coupon_amount": discount if coupon else None,
+                    "stripe_payment_intent_id": intent.id,
+                    "status": "pending",
+                },
+            )
 
-        # 8. Create Ephemeral Key
-        try:
+            # 8. Create Ephemeral Key
             ephemeral_key = stripe.EphemeralKey.create(
                 customer=user_customer.stripe_customer_id,
                 stripe_version="2024-04-10"
             )
-        except Exception as e:
-            booking.delete()
-            return Response({"error": f"Ephemeral key creation failed: {str(e)}"}, status=500)
 
-        # 9. Return response
-        return Response({
-            "booking_id": booking.id,
-            "client_secret": intent.client_secret,
-            "payment_intent_id": intent.id,
-            "ephemeral_key": ephemeral_key.secret,
-            "customer_id": user_customer.stripe_customer_id,
-            "coupon_applied": bool(coupon),
-        }, status=status.HTTP_200_OK)
+            return Response({
+                "booking_id": booking.id,
+                "client_secret": intent.client_secret,
+                "payment_intent_id": intent.id,
+                "ephemeral_key": ephemeral_key.secret,
+                "customer_id": user_customer.stripe_customer_id,
+                "coupon_applied": bool(coupon)
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.exception("Error in CreatePaymentIntentView: %s", str(e))
+            self._cancel_booking(booking.id)
+            return Response({"error": str(e)}, status=500)
+
+    def _cancel_booking(self, booking_id):
+        try:
+            auto_cancel_booking.apply_async((booking_id,), countdown=5 * 60)  # 5 mins
+        except Exception as exc:
+            logger.exception("Failed to enqueue auto_cancel_booking for booking_id=%s: %s", booking_id, exc)
 
 class ShopOnboardingLinkView(APIView):
     permission_classes = [IsAuthenticated]
@@ -385,17 +387,17 @@ class TransactionLogListView(APIView):
             "data": serializer.data
         })
 
-class ApplyCouponAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+# class ApplyCouponAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        serializer = ApplyCouponSerializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
+#     def post(self, request):
+#         serializer = ApplyCouponSerializer(data=request.data, context={"request": request})
+#         serializer.is_valid(raise_exception=True)
 
-        # Record usage
-        serializer.create_usage()
+#         # Record usage
+#         serializer.create_usage()
 
-        # Return coupon info
-        coupon_data = CouponSerializer(serializer.instance).data
-        return Response(coupon_data, status=status.HTTP_200_OK)
+#         # Return coupon info
+#         coupon_data = CouponSerializer(serializer.instance).data
+#         return Response(coupon_data, status=status.HTTP_200_OK)
 

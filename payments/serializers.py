@@ -3,6 +3,7 @@ from stripe import Source
 from .models import Payment, Booking, Refund, TransactionLog, CouponUsage, can_use_coupon
 from api.models import Coupon
 from django.db.models import Avg, Count
+from django.utils.timezone import now
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -135,6 +136,10 @@ class ApplyCouponSerializer(serializers.Serializer):
 
         if not coupon.is_active:
             raise serializers.ValidationError("Coupon is inactive.")
+
+        # ✅ Added validity date check here
+        if coupon.validity_date and coupon.validity_date < now().date():
+            raise serializers.ValidationError("Coupon has expired.")
 
         if not can_use_coupon(user, coupon):
             raise serializers.ValidationError("Coupon usage limit reached for this user.")
