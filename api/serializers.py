@@ -24,6 +24,7 @@ from django.db.models import Avg, Count, Q, Value, FloatField
 from api.utils.helper_function import get_distance
 from django.db import transaction
 from django.utils import timezone
+from accounts.serializers import UserSerializer
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -746,9 +747,34 @@ class NotificationSerializer(serializers.ModelSerializer):
         fields = ["id", "message", "notification_type", "data", "is_read", "created_at"]
 
 class DeviceSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+
     class Meta:
         model = Device
-        fields = ["fcm_token", "device_token", "device_type"]
+        fields = ["user", "fcm_token", "device_token", "device_type"]
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        device_token = validated_data['device_token']
+
+        # Try to find a device with same token for the logged-in user
+        try:
+            device = Device.objects.get(device_token=device_token, user=user)
+            device.fcm_token = validated_data.get('fcm_token', device.fcm_token)
+            device.device_type = validated_data.get('device_type', device.device_type)
+            device.save()
+            self.instance = device
+            return device
+        except Device.DoesNotExist:
+            # Create new device if not found for this user
+            device = Device.objects.create(
+                user=user,
+                device_token=device_token,
+                fcm_token=validated_data.get('fcm_token'),
+                device_type=validated_data.get('device_type', 'android')
+            )
+            self.instance = device
+            return device
 
 class RevenueSerializer(serializers.ModelSerializer):
     shop_id = serializers.ReadOnlyField(source='shop.id')
