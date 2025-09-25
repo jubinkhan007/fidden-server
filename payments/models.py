@@ -407,5 +407,6 @@ def send_shop_owner_booking_email(sender, instance, created, **kwargs):
             subject_owner,
             message_owner,
             settings.DEFAULT_FROM_EMAIL,
-            [shop.owner.email]
+            [shop.owner.email],
+            fail_silently=False
         )
