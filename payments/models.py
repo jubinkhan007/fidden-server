@@ -7,6 +7,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 import stripe
 from django.core.mail import send_mail
+from accounts.models import User
 from api.models import Shop, SlotBooking, Revenue, Coupon
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -239,9 +240,6 @@ def delete_shop_stripe_account(sender, instance, **kwargs):
         except Exception as e:
             print(f"Stripe account deletion failed for shop {instance.name}: {e}")
 
-# Stripe customer for User
-from accounts.models import User
-
 @receiver(post_delete, sender=User)
 def delete_user_stripe_customer(sender, instance, **kwargs):
     if hasattr(instance, "stripe_customer") and instance.stripe_customer.stripe_customer_id:
@@ -254,7 +252,7 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
 @receiver(post_save, sender=Payment)
 def handle_payment_status(sender, instance, created, **kwargs):
     try:
-        slot_booking = instance.booking  # Direct OneToOne relation
+        slot_booking = instance.booking 
         shop = slot_booking.shop
 
         # ---------------- Payment Succeeded ----------------
@@ -313,7 +311,6 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     currency=instance.currency,
                     status=instance.status,
                 )
-
         # ---------------- Payment Refunded ----------------
         elif instance.status == "refunded":
             if hasattr(instance, "booking_record"):
