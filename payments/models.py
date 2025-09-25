@@ -8,6 +8,7 @@ from django.utils import timezone
 import stripe
 from django.core.mail import send_mail
 from api.models import Shop, SlotBooking, Revenue, Coupon
+import time
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -314,7 +315,7 @@ def handle_payment_status(sender, instance, created, **kwargs):
                 )
                 # Send confirmation email to user
                 send_user_confirmation_email(slot_booking, user)
-
+                time.sleep(1)
                 # Send email to shop owner
                 send_shop_owner_email(slot_booking, user)
 
