@@ -31,9 +31,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
     def create_message(self, sender, thread_id, content):
         thread = ChatThread.objects.get(id=thread_id)
         message = Message.objects.create(thread=thread, sender=sender, content=content)
-        # Notify recipient
-        recipient = thread.shop.owner if sender != thread.shop.owner else thread.user
-        notify_user(recipient, f"New message from {sender.email}", data={"thread_id": thread.id})
+
+        # Correct recipient: if sender == thread.user → notify shop.owner, else notify user
+        if sender == thread.user:
+            recipient = thread.shop.owner
+        else:
+            recipient = thread.user
+        # Send notification only to recipient
+        notify_user(
+            recipient,
+            f"New message from {sender.name or sender.email}",
+            data={"thread_id": thread.id, "message": content},
+        )
         return MessageSerializer(message).data, recipient.id
 
     async def handle_send_message(self, data):
