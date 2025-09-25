@@ -313,9 +313,9 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     status="active",
                     stripe_payment_intent_id=instance.stripe_payment_intent_id
                 )
-                # Send confirmation email to user
-                send_user_confirmation_email(slot_booking, user)
-                time.sleep(1)
+                # # Send confirmation email to user
+                # send_user_confirmation_email(slot_booking, user)
+                # time.sleep(1)
                 # Send email to shop owner
                 send_shop_owner_email(slot_booking, user)
 
