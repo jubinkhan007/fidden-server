@@ -6,9 +6,8 @@ from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 import stripe
-from django.core.mail import get_connection, EmailMessage
+from django.core.mail import send_mail
 from api.models import Shop, SlotBooking, Revenue, Coupon
-import time
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -213,58 +212,6 @@ def can_use_coupon(user, coupon):
         return True  # unlimited usage
     return used_count < coupon.max_usage_per_user
 
-def send_user_confirmation_email(slot_booking, user, connection=None):
-    if not user.email:
-        return None
-
-    start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
-    end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
-
-    subject = "Appointment Confirmation"
-    message = (
-        f"Hello {user.name or user.email},\n\n"
-        f"This is a confirmation for your upcoming appointment:\n\n"
-        f"🏬 Shop: {slot_booking.shop.name}\n"
-        f"💆 Service: {slot_booking.service.title}\n"
-        f"🗓 Date & Time: {start_time} – {end_time}\n\n"
-        f"Thank you for booking with us!"
-    )
-
-    return EmailMessage(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], connection=connection)
-
-
-def send_shop_owner_email(slot_booking, user, connection=None):
-    shop = slot_booking.shop
-    if not hasattr(shop, "owner") or not shop.owner.email:
-        return None
-
-    start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
-    end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
-
-    subject = "New Booking Received"
-    message = (
-        f"Hello {shop.owner.name or shop.name},\n\n"
-        f"You have received a new booking:\n\n"
-        f"👤 Customer: {user.name or user.email}\n"
-        f"💆 Service: {slot_booking.service.title}\n"
-        f"🗓 Date & Time: {start_time} – {end_time}\n\n"
-        f"Please prepare accordingly."
-    )
-
-    return EmailMessage(subject, message, settings.DEFAULT_FROM_EMAIL, [shop.owner.email], connection=connection)
-
-
-def send_booking_emails(slot_booking, user):
-    """
-    Send both user confirmation + shop owner email in one SMTP connection.
-    """
-    with get_connection() as connection:
-        user_email = send_user_confirmation_email(slot_booking, user, connection)
-        owner_email = send_shop_owner_email(slot_booking, user, connection)
-
-        messages = [m for m in [user_email, owner_email] if m]
-        if messages:
-            connection.send_messages(messages)
 # -----------------------------
 # Signals
 # -----------------------------
@@ -308,7 +255,8 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
 def handle_payment_status(sender, instance, created, **kwargs):
     try:
         slot_booking = instance.booking  # Direct OneToOne relation
-        user = instance.user
+        user=instance.user
+
         # ---------------- Payment Succeeded ----------------
         if instance.status == "succeeded":
             if instance.status == "succeeded":
@@ -327,7 +275,26 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     status="active",
                     stripe_payment_intent_id=instance.stripe_payment_intent_id
                 )
-            send_booking_emails(slot_booking, user)
+
+            # ✅ Send personalized reminder email
+            if instance.user and instance.user.email:
+                start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
+                end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
+                shop_name = slot_booking.shop.name
+                service_title = slot_booking.service.title
+
+                from_email= settings.DEFAULT_FROM_EMAIL
+                to_email = [instance.user.email]
+                subject="Appointment Confirmation"
+                reminder_message = (
+                    f"Hello {instance.user.name or instance.user.email},\n\n"
+                    f"This is a confirmation for your upcoming appointment:\n\n"
+                    f"🏬 Shop: {shop_name}\n"
+                    f"💆 Service: {service_title}\n"
+                    f"🗓 Date & Time: {start_time} – {end_time}\n\n"
+                    f"Thank you for booking with us!"
+                )
+                send_mail(subject, reminder_message, from_email, to_email)
 
             # Create payment TransactionLog if not exists
             if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
@@ -341,6 +308,30 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     amount=instance.amount,
                     currency=instance.currency,
                     status=instance.status,
+                )
+                
+                shop = slot_booking.shop
+                if not hasattr(shop, "owner") or not shop.owner.email:
+                    return
+
+                start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
+                end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
+
+                subject = "New Booking Received"
+                message = (
+                    f"Hello {shop.owner.name or shop.name},\n\n"
+                    f"You have received a new booking:\n\n"
+                    f"👤 Customer: {user.name or user.email}\n"
+                    f"💆 Service: {slot_booking.service.title}\n"
+                    f"🗓 Date & Time: {start_time} – {end_time}\n\n"
+                    f"Please prepare accordingly."
+                )
+
+                send_mail(
+                    subject,
+                    message,
+                    settings.DEFAULT_FROM_EMAIL,   # From
+                    [shop.owner.email]            # To
                 )
 
         # ---------------- Payment Refunded ----------------
