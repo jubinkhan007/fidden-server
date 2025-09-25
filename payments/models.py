@@ -6,7 +6,7 @@ from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 import stripe
-from django.core.mail import send_mail
+from django.core.mail import get_connection, EmailMessage
 from api.models import Shop, SlotBooking, Revenue, Coupon
 import time
 
@@ -213,9 +213,9 @@ def can_use_coupon(user, coupon):
         return True  # unlimited usage
     return used_count < coupon.max_usage_per_user
 
-def send_user_confirmation_email(slot_booking, user):
+def send_user_confirmation_email(slot_booking, user, connection=None):
     if not user.email:
-        return
+        return None
 
     start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
     end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
@@ -229,13 +229,14 @@ def send_user_confirmation_email(slot_booking, user):
         f"🗓 Date & Time: {start_time} – {end_time}\n\n"
         f"Thank you for booking with us!"
     )
-    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email])
+
+    return EmailMessage(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], connection=connection)
 
 
-def send_shop_owner_email(slot_booking, user):
+def send_shop_owner_email(slot_booking, user, connection=None):
     shop = slot_booking.shop
     if not hasattr(shop, "owner") or not shop.owner.email:
-        return
+        return None
 
     start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
     end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
@@ -249,8 +250,21 @@ def send_shop_owner_email(slot_booking, user):
         f"🗓 Date & Time: {start_time} – {end_time}\n\n"
         f"Please prepare accordingly."
     )
-    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [shop.owner.email])
 
+    return EmailMessage(subject, message, settings.DEFAULT_FROM_EMAIL, [shop.owner.email], connection=connection)
+
+
+def send_booking_emails(slot_booking, user):
+    """
+    Send both user confirmation + shop owner email in one SMTP connection.
+    """
+    with get_connection() as connection:
+        user_email = send_user_confirmation_email(slot_booking, user, connection)
+        owner_email = send_shop_owner_email(slot_booking, user, connection)
+
+        messages = [m for m in [user_email, owner_email] if m]
+        if messages:
+            connection.send_messages(messages)
 # -----------------------------
 # Signals
 # -----------------------------
@@ -313,11 +327,7 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     status="active",
                     stripe_payment_intent_id=instance.stripe_payment_intent_id
                 )
-            # Send confirmation email to user
-            send_user_confirmation_email(slot_booking, user)
-            time.sleep(5)
-            # Send email to shop owner
-            send_shop_owner_email(slot_booking, user)
+            send_booking_emails(slot_booking, user)
 
             # Create payment TransactionLog if not exists
             if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
