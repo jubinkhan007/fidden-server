@@ -5,7 +5,7 @@ from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 import stripe
-
+from .utils.helper_function import send_reminder_email
 from api.models import Shop, SlotBooking, Revenue, Coupon
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -273,6 +273,27 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     status="active",
                     stripe_payment_intent_id=instance.stripe_payment_intent_id
                 )
+                # ✅ Send personalized reminder email
+                if instance.user and instance.user.email:
+                    start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
+                    end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
+                    shop_name = slot_booking.shop.name
+                    service_title = slot_booking.service.title
+
+                    reminder_message = (
+                        f"Hello {instance.user.name or instance.user.email},\n\n"
+                        f"This is a reminder for your upcoming appointment:\n\n"
+                        f"🏬 Shop: {shop_name}\n"
+                        f"💆 Service: {service_title}\n"
+                        f"🗓 Date & Time: {start_time} – {end_time}\n\n"
+                        f"Thank you for booking with us!"
+                    )
+
+                    send_reminder_email(
+                        user_email=instance.user.email,
+                        reminder_message=reminder_message,
+                        subject="Appointment Reminder"
+                    )
 
             # Create payment TransactionLog if not exists
             if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():

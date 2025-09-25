@@ -1,3 +1,5 @@
+from django.core.mail import send_mail
+
 def extract_validation_error_message(error):
     """
     Extract single error message from DRF ValidationError
@@ -14,3 +16,17 @@ def extract_validation_error_message(error):
             return str(messages)
         return str(error.detail)
     return str(error)
+
+def send_reminder_email(user_email, reminder_message, subject="Reminder Notification"):
+    """
+    Send a reminder email to the user.
+    
+    Args:
+        user_email (str): Recipient's email address
+        reminder_message (str): Body text of the reminder
+        subject (str): Email subject (default: "Reminder Notification")
+    """
+    from_email = "no-reply@example.com"
+    recipient_list = [user_email]
+
+    send_mail(subject, reminder_message, from_email, recipient_list)
