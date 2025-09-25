@@ -255,6 +255,7 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
 def handle_payment_status(sender, instance, created, **kwargs):
     try:
         slot_booking = instance.booking  # Direct OneToOne relation
+        shop = slot_booking.shop
 
         # ---------------- Payment Succeeded ----------------
         if instance.status == "succeeded":
@@ -275,25 +276,29 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     stripe_payment_intent_id=instance.stripe_payment_intent_id
                 )
                 
-            # ✅ Send personalized reminder email
-            if instance.user and instance.user.email:
+            # ✅ Send personalized reminder email to SHOP OWNER
+            if shop and shop.owner and shop.owner.email:
                 start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
                 end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
-                shop_name = slot_booking.shop.name
+                shop_name = shop.name
                 service_title = slot_booking.service.title
+                customer_name = instance.user.name or instance.user.email
 
-                from_email= settings.DEFAULT_FROM_EMAIL
-                to_email = [instance.user.email]
-                subject="Appointment Confirmation"
-                reminder_message = (
-                    f"Hello {instance.user.name or instance.user.email},\n\n"
-                    f"This is a confirmation for your upcoming appointment:\n\n"
+                from_email = settings.DEFAULT_FROM_EMAIL
+                to_email = [slot_booking.shop.owner.email]
+                subject = "New Appointment Booked"
+
+                owner_message = (
+                    f"Hello {slot_booking.shop.owner.name or 'Shop Owner'},\n\n"
+                    f"A new appointment has been booked.\n\n"
+                    f"👤 Customer: {customer_name}\n"
                     f"🏬 Shop: {shop_name}\n"
                     f"💆 Service: {service_title}\n"
                     f"🗓 Date & Time: {start_time} – {end_time}\n\n"
-                    f"Thank you for booking with us!"
+                    f"Please prepare accordingly."
                 )
-                send_mail(subject, reminder_message, from_email, to_email)
+
+                send_mail(subject, owner_message, from_email, to_email)
 
             # Create payment TransactionLog if not exists
             if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
@@ -381,32 +386,3 @@ def update_daily_revenue(sender, instance, created, **kwargs):
         # Create new revenue row for today
         Revenue.objects.create(shop=shop, timestamp=transaction_date, revenue=delta)
 
-@receiver(post_save, sender=Booking)
-def send_shop_owner_booking_email(sender, instance, created, **kwargs):
-    if not created:
-        return  # Only send email when a new booking is created
-
-    slot_booking = instance.slot
-    user = instance.user
-    shop = instance.shop
-
-    start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
-    end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
-
-    if hasattr(shop, "owner") and shop.owner.email:
-        subject_owner = "New Booking Received"
-        message_owner = (
-            f"Hello {shop.owner.name or shop.name},\n\n"
-            f"You have received a new booking:\n\n"
-            f"👤 Customer: {user.name or user.email}\n"
-            f"💆 Service: {slot_booking.service.title}\n"
-            f"🗓 Date & Time: {start_time} – {end_time}\n\n"
-            f"Please prepare accordingly."
-        )
-        send_mail(
-            subject_owner,
-            message_owner,
-            settings.DEFAULT_FROM_EMAIL,
-            [shop.owner.email],
-            fail_silently=False
-        )
