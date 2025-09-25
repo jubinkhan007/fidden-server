@@ -150,7 +150,7 @@ class ResetPasswordView(APIView):
             user.set_password(serializer.validated_data['new_password'])
             user.otp = None
             user.otp_created_at = None
-            user.is_verified = False
+            # user.is_verified = False
             user.save()
             return Response({"success": True, 'message': 'Password reset successful'}, status=status.HTTP_200_OK)
         except User.DoesNotExist:
