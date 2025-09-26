@@ -35,10 +35,10 @@ app.conf.beat_schedule = {
     # Complete bookings every minute
     "complete-bookings-every-minute": {
         "task": "payments.tasks.complete_past_bookings",
-        "schedule": 60.0,  # every 60 seconds
+        "schedule": crontab(minute="*/5"),  # every 5 minutes
     },
     "send-booking-reminders": {
         "task": "payments.tasks.send_booking_reminders",
-        "schedule": crontab(minute="*/5"),  # every 5 minutes
+        "schedule": 60.0,  # every 60 seconds
     },
 }
