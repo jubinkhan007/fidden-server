@@ -19,4 +19,5 @@ urlpatterns = [
     path("bookings/cancel/<int:booking_id>/", CancelBookingView.as_view(), name="cancel-booking"),
     path('transactions/', TransactionLogListView.as_view(), name='transaction-list'),
     # path('apply-coupon/', ApplyCouponAPIView.as_view(), name='apply-coupon'),
+    
 ]

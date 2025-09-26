@@ -24,6 +24,7 @@ from .models import (
     Revenue,
     Coupon
 )
+from payments.models import Booking
 from .serializers import (
     ShopSerializer, 
     ServiceSerializer, 
@@ -1263,3 +1264,31 @@ class UserCouponRetrieveAPIView(APIView):
             output_serializer = CouponSerializer(coupons, many=True)
             return Response(output_serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class BestServicePerShopView(APIView):
+    def get(self, request, shop_id):
+        # Find service with most completed bookings for given shop
+        best_service_data = (
+            Booking.objects
+            .filter(status="completed", shop_id=shop_id)
+            .values('slot__service_id')
+            .annotate(total_bookings=Count('id'))
+            .order_by('-total_bookings')
+            .first()
+        )
+
+        if not best_service_data:
+            return Response({"detail": "No completed bookings found for this shop."}, status=status.HTTP_404_NOT_FOUND)
+
+        service_id = best_service_data['slot__service_id']
+
+        try:
+            service = Service.objects.get(id=service_id)
+        except Service.DoesNotExist:
+            return Response({"detail": "Service not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ServiceSerializer(service, context={"request": request})
+        result = serializer.data
+        result['total_bookings'] = best_service_data['total_bookings']  # add bookings count
+
+        return Response(result, status=status.HTTP_200_OK)

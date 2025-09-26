@@ -30,6 +30,7 @@ from .views import (
     CouponListCreateAPIView,
     CouponRetrieveUpdateDestroyAPIView,
     UserCouponRetrieveAPIView,
+    BestServicePerShopView,
 )
 
 urlpatterns = [
@@ -63,4 +64,5 @@ urlpatterns = [
     path('coupons/', CouponListCreateAPIView.as_view(), name='coupon-list-create'),
     path('coupons/<int:coupon_id>/', CouponRetrieveUpdateDestroyAPIView.as_view(), name='coupon-detail'),
     path('users/coupons/', UserCouponRetrieveAPIView.as_view(), name='user-get-coupon'),
+    path('best-service/<int:shop_id>/', BestServicePerShopView.as_view(), name="best-service-per-shop"),
 ]

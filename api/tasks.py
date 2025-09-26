@@ -15,7 +15,7 @@ def _aware(dt):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def prefill_slots(self, days_ahead=7):
+def prefill_slots(self, days_ahead=14):
     """
     Prefill slots for next `days_ahead` per shop/service.
     - Idempotent: skips dates that already have slots

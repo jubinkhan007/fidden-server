@@ -9,6 +9,11 @@ import stripe
 from django.core.mail import send_mail
 from accounts.models import User
 from api.models import Shop, SlotBooking, Revenue, Coupon
+from api.utils.fcm import notify_user
+import logging
+import traceback
+
+logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -274,8 +279,7 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     stripe_payment_intent_id=instance.stripe_payment_intent_id
                 )
                 
-            # ✅ Send personalized reminder email to SHOP OWNER
-            if shop and shop.owner and shop.owner.email:
+            try:
                 start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
                 end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
                 shop_name = shop.name
@@ -297,7 +301,39 @@ def handle_payment_status(sender, instance, created, **kwargs):
                 )
 
                 send_mail(subject, owner_message, from_email, to_email)
+            except Exception as email_error:
+                logger.error(
+                    "Failed to send email to shop owner %s: %s\n%s",
+                    shop.owner.id if shop.owner else "unknown",
+                    str(email_error),
+                    traceback.format_exc()
+                )
 
+            try:
+                # ✅ Push notification to shop owner
+                notify_user(
+                    shop.owner,
+                    message=(
+                        f"New appointment from {customer_name} for {service_title} "
+                        f"on {start_time}."
+                    ),
+                    notification_type="booking",
+                    data={
+                        "shop_id": shop.id,
+                        "booking_id": slot_booking.id,
+                        "service": service_title,
+                        "start_time": str(slot_booking.start_time),
+                        "end_time": str(slot_booking.end_time),
+                    },
+                    debug=True
+                )
+            except Exception as notify_error:
+                logger.error(
+                    "Failed to send push notification to shop owner %s: %s\n%s",
+                    shop.owner.id if shop.owner else "unknown",
+                    str(notify_error),
+                    traceback.format_exc()
+                )
             # Create payment TransactionLog if not exists
             if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
                 TransactionLog.objects.create(
@@ -334,7 +370,12 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     status=refund.status,
                 )
     except Exception as e:
-        print(f"Payment signal error for Payment {instance.id}: {e}")
+        logger.error(
+            "Payment signal error for Payment %s: %s\n%s",
+            instance.id,
+            str(e),
+            traceback.format_exc()
+        )
 
 # Refund post_save (optional: for direct Stripe refunds)
 @receiver(post_save, sender=Refund)
