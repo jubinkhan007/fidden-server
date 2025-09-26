@@ -39,6 +39,6 @@ app.conf.beat_schedule = {
     },
     "send-booking-reminders": {
         "task": "payments.tasks.send_booking_reminders",
-        "schedule": 60.0,  # every 60 seconds
+        "schedule": crontab(minute="*"),  # every 60 seconds
     },
 }
