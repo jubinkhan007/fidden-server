@@ -65,10 +65,19 @@ def _android_config() -> Dict[str, Any]:
         },
     }
 
-def _apns_config() -> Dict[str, Any]:
+def _apns_config(title: str, body: str) -> Dict[str, Any]:
     return {
         "headers": {"apns-push-type": "alert", "apns-priority": "10"},
-        "payload": {"aps": {"alert": {}, "sound": "default", "badge": 1}},
+        "payload": {
+            "aps": {
+                "alert": {
+                    "title": title,
+                    "body": body
+                }, 
+                "sound": "default", 
+                "badge": 1
+            }
+        },
     }
 
 def _is_valid_fcm_token(token: str) -> bool:
@@ -107,7 +116,7 @@ def send_push_notification(
     payload_data.setdefault("body", message)
 
     android_cfg = _android_config()
-    apns_cfg = _apns_config()
+    apns_cfg = _apns_config(title, message)
 
     for token in tokens:
         try:
