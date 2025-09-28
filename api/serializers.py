@@ -700,12 +700,13 @@ class MessageSerializer(serializers.ModelSerializer):
         return obj.sender_id
 
 class ChatThreadSerializer(serializers.ModelSerializer):
-    messages = MessageSerializer(many=True, read_only=True)
+    last_message = serializers.SerializerMethodField()
     shop_name = serializers.CharField(source="shop.name", read_only=True)
     user_email = serializers.CharField(source="user.email", read_only=True)
     user_name = serializers.CharField(source="user.name", read_only=True)
     user_img = serializers.ImageField(source="user.profile_image", read_only=True)
     shop_img = serializers.ImageField(source="shop.shop_img", read_only=True)
+
     class Meta:
         model = ChatThread
         fields = [
@@ -717,15 +718,24 @@ class ChatThreadSerializer(serializers.ModelSerializer):
             "user_email",
             "user_name",
             "user_img",
-            "messages",
+            "last_message",
             "created_at",
         ]
+
+    def get_last_message(self, obj):
+        request = self.context.get('request')
+        last_message_only = self.context.get('last_message_only', False)
+
+        if last_message_only:
+            last_message = obj.messages.order_by('-timestamp').first()
+            if last_message:
+                return MessageSerializer(last_message, context={'request': request}).data
+        return None
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
         request = self.context.get('request')
 
-        # Absolute URLs for images if request available
         if instance.shop and instance.shop.shop_img:
             rep['shop_img'] = (
                 request.build_absolute_uri(instance.shop.shop_img.url)
@@ -740,6 +750,7 @@ class ChatThreadSerializer(serializers.ModelSerializer):
                 )
 
         return rep
+
 
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:

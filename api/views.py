@@ -52,9 +52,9 @@ from .serializers import (
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 from datetime import datetime, timedelta
 from django.utils import timezone
-from django.db.models import Avg, Count, Q, Value, FloatField
+from django.db.models import Avg, Count, Q, Value, FloatField, OuterRef, Subquery
 from django.db.models.functions import Coalesce
-from .pagination import ServicesCursorPagination, ReviewCursorPagination
+from .pagination import ServicesCursorPagination, ReviewCursorPagination, MessageCursorPagination
 from urllib.parse import urlencode
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -1063,14 +1063,52 @@ class ThreadListView(APIView):
 
     def get(self, request):
         user = request.user
-        # Return only threads that belong to the authenticated user
-        # - as a customer (thread.user == request.user)
-        # - or as a shop owner (thread.shop.owner == request.user)
+
+        # Filter threads belonging to the user or as shop owner
         threads = ChatThread.objects.filter(
             Q(user=user) | Q(shop__owner=user)
         ).order_by("-created_at")
-        serializer = ChatThreadSerializer(threads, many=True, context={'request': request})
+
+        # Annotate last message
+        last_message_subquery = Message.objects.filter(
+            thread=OuterRef('pk')
+        ).order_by('-timestamp')
+
+        threads = threads.annotate(
+            last_message_id=Subquery(last_message_subquery.values('id')[:1])
+        )
+
+        serializer = ChatThreadSerializer(
+            threads,
+            many=True,
+            context={'request': request, 'last_message_only': True}
+        )
         return Response(serializer.data)
+
+class ThreadDetailsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, thread_id):
+        user = request.user
+
+        # Get thread and check permissions
+        thread = ChatThread.objects.filter(
+            id=thread_id
+        ).filter(
+            Q(user=user) | Q(shop__owner=user)
+        ).first()
+
+        if not thread:
+            return Response({"detail": "Thread not found or access denied."}, status=404)
+
+        queryset = Message.objects.filter(thread=thread).order_by('-timestamp')
+
+        # Apply cursor pagination manually
+        paginator = MessageCursorPagination()
+        page = paginator.paginate_queryset(queryset, request)
+
+        serializer = MessageSerializer(page, many=True, context={"request": request})
+        return paginator.get_paginated_response(serializer.data)
 
 class NotificationsView(APIView):
     """

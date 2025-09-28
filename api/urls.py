@@ -31,6 +31,7 @@ from .views import (
     CouponRetrieveUpdateDestroyAPIView,
     UserCouponRetrieveAPIView,
     BestServicePerShopView,
+    ThreadDetailsView,
 )
 
 urlpatterns = [
@@ -54,6 +55,7 @@ urlpatterns = [
     path('create-reply/<int:rating_review_id>/', ReplyCreateView.as_view(), name='reply-create'),
     path('shops/rating-reviews/<int:shop_id>/', ShopRatingReviewsView.as_view(), name='shop-rating-reviews'),
     path("threads/", ThreadListView.as_view(), name="thread-list"),
+    path("threads/<int:thread_id>/", ThreadDetailsView.as_view(), name="thread-detail"),
     path("threads/<int:shop_id>/send/", UserMessageView.as_view(), name="user-send-message"),
     path("threads/<int:thread_id>/reply/", OwnerMessageView.as_view(), name="owner-reply-message"),
     path('register-device/', RegisterDeviceView.as_view(), name='register-device'),

@@ -25,3 +25,7 @@ class GlobalSearchCursorPagination(CursorPagination):
 class ReviewCursorPagination(CursorPagination):
     page_size = 10
     ordering = "-created_at"  # newest first
+
+class MessageCursorPagination(CursorPagination):
+    page_size = 10
+    ordering = '-timestamp'
