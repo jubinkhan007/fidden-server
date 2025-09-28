@@ -303,11 +303,13 @@ class BookingListView(APIView):
             bookings_queryset = bookings_queryset.filter(user=target_user)
             serializer_class = userBookingSerializer
 
-            # ✅ Optional multiple status filters
-            status_list = request.query_params.getlist("status")
-            exclude_active = request.query_params.get('exclude_active')
-            if status_list:
+            # ✅ Support comma-separated status values
+            status_param = request.query_params.get("status")
+            if status_param:
+                status_list = [s.strip() for s in status_param.split(",") if s.strip()]
                 bookings_queryset = bookings_queryset.filter(status__in=status_list)
+
+            exclude_active = request.query_params.get('exclude_active')
             if exclude_active and exclude_active.lower() == "true":
                 bookings_queryset = bookings_queryset.exclude(status="active")
 
