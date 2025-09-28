@@ -146,8 +146,8 @@ class ShopOnboardingLinkView(APIView):
 
         account_link = stripe.AccountLink.create(
             account=shop.stripe_account.stripe_account_id,
-            refresh_url=f"{base_url}/stripe/refresh",
-            return_url=f"{base_url}/stripe/return",
+            refresh_url=f"myapp://stripe/return?result=success",
+            return_url=f"myapp://stripe/return?result=success",
             type="account_onboarding"
         )
         return Response({"url": account_link.url})

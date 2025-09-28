@@ -25,6 +25,9 @@ class Shop(models.Model):
     capacity = models.PositiveIntegerField()
     start_at = models.TimeField()
     close_at = models.TimeField()
+    # 🆕 Break time fields
+    break_start_time = models.TimeField(blank=True, null=True)
+    break_end_time = models.TimeField(blank=True, null=True)
     about_us = models.TextField(blank=True, null=True)
     shop_img = models.ImageField(upload_to='shop/', blank=True, null=True)
 

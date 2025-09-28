@@ -117,7 +117,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
         shop = self.get_object(pk)
         serializer = ShopSerializer(shop, data=request.data, context={'request': request})
         if serializer.is_valid():
-            shop = serializer.save(owner=request.user)
+            shop = serializer.save()
             return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -125,7 +125,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
         shop = self.get_object(pk)
         serializer = ShopSerializer(shop, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
-            shop = serializer.save(owner=request.user)
+            shop = serializer.save()
             return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
