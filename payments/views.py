@@ -140,24 +140,27 @@ APP_HOST   = getattr(settings, "APP_URL_HOST",   "stripe")
 class StripeReturnView(APIView):
     authentication_classes = []
     permission_classes = []
+
     def get(self, request):
         qp = request.GET.dict()
         qp.setdefault("result", "success")
-        deeplink = f"{APP_SCHEME}://{APP_HOST}/return"
-        return HttpResponseRedirect(
-            f"{deeplink}?{urlencode(qp)}"
-        )
+        deeplink = f"{APP_SCHEME}://{APP_HOST}/return?{urlencode(qp)}"
+        resp = HttpResponse(status=302)
+        resp["Location"] = deeplink
+        return resp
+
 
 class StripeRefreshView(APIView):
     authentication_classes = []
     permission_classes = []
+
     def get(self, request):
         qp = request.GET.dict()
         qp.setdefault("result", "refresh")
-        deeplink = f"{APP_SCHEME}://{APP_HOST}/refresh"
-        return HttpResponseRedirect(
-            f"{deeplink}?{urlencode(qp)}"
-        )
+        deeplink = f"{APP_SCHEME}://{APP_HOST}/refresh?{urlencode(qp)}"
+        resp = HttpResponse(status=302)
+        resp["Location"] = deeplink
+        return resp
 
 
 class ShopOnboardingLinkView(APIView):
