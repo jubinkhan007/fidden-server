@@ -8,6 +8,8 @@ from .views import (
     CancelBookingView,
     TransactionLogListView,
     # ApplyCouponAPIView,
+        StripeReturnView,     # <-- add
+    StripeRefreshView,    # <-- add
 )
 
 urlpatterns = [
@@ -18,6 +20,8 @@ urlpatterns = [
     path('bookings/', BookingListView.as_view(), name='booking-list'),
     path("bookings/cancel/<int:booking_id>/", CancelBookingView.as_view(), name="cancel-booking"),
     path('transactions/', TransactionLogListView.as_view(), name='transaction-list'),
+    path("stripe/return/", StripeReturnView.as_view(), name="stripe-return"),
+    path("stripe/refresh/", StripeRefreshView.as_view(), name="stripe-refresh"),
     # path('apply-coupon/', ApplyCouponAPIView.as_view(), name='apply-coupon'),
     
 ]
