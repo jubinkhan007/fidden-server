@@ -135,34 +135,38 @@ class CreatePaymentIntentView(APIView):
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
 APP_SCHEME = getattr(settings, "APP_URL_SCHEME", "myapp")
-APP_HOST   = getattr(settings, "APP_URL_HOST",   "stripe")  # myapp://stripe/...
+APP_HOST   = getattr(settings, "APP_URL_HOST",   "stripe") 
 
 class StripeReturnView(APIView):
-    authentication_classes = []  # Stripe hits this
+    authentication_classes = []
     permission_classes = []
-
     def get(self, request):
-        # You can forward any Stripe query params if you want
         qp = request.GET.dict()
         qp.setdefault("result", "success")
         deeplink = f"{APP_SCHEME}://{APP_HOST}/return"
-        return HttpResponseRedirect(f"{deeplink}?{urlencode(qp)}")
+        return HttpResponseRedirect(
+            f"{deeplink}?{urlencode(qp)}",
+            allowed_schemes=("http", "https", "myapp"),
+        )
 
 class StripeRefreshView(APIView):
     authentication_classes = []
     permission_classes = []
-
     def get(self, request):
         qp = request.GET.dict()
         qp.setdefault("result", "refresh")
         deeplink = f"{APP_SCHEME}://{APP_HOST}/refresh"
-        return HttpResponseRedirect(f"{deeplink}?{urlencode(qp)}")
+        return HttpResponseRedirect(
+            f"{deeplink}?{urlencode(qp)}",
+            allowed_schemes=("http", "https", "myapp"), 
+        )
 
 
 class ShopOnboardingLinkView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, shop_id):
+        print("[onboarding] v2 view active")
         shop = get_object_or_404(Shop, id=shop_id)
         user = request.user
         if getattr(user, "role", None) != "owner":
