@@ -19,7 +19,7 @@ from .models import Payment, UserStripeCustomer, Booking, TransactionLog, Coupon
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
 from .pagination import BookingCursorPagination, TransactionCursorPagination
 from .utils.helper_function import extract_validation_error_message
-from django.http import HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect
 from urllib.parse import urlencode, urljoin
 
 
