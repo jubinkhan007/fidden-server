@@ -119,28 +119,37 @@ class Booking(models.Model):
             return False, "Booking already cancelled"
 
         try:
-            # 1️⃣ Refund payment via Stripe
-            refund = stripe.Refund.create(
-                payment_intent=self.stripe_payment_intent_id,
-                amount=int(self.payment.amount * 100),
-                reason=reason,
-            )
+            # Calculate refund amount based on cancellation policy
+            hours_before_booking = (self.slot.start_time - timezone.now()).total_seconds() / 3600
+            refund_amount = 0
+            if hours_before_booking > self.shop.free_cancellation_hours:
+                refund_amount = self.payment.amount
+            elif hours_before_booking > self.shop.no_refund_hours:
+                refund_amount = self.payment.amount * (100 - self.shop.cancellation_fee_percentage) / 100
 
-            # 2️⃣ Save refund record
-            Refund.objects.create(
-                payment=self.payment,
-                stripe_refund_id=refund.id,
-                amount=self.payment.amount,
-                status=refund.status,
-                reason=reason,
-            )
+            # 1️⃣ Refund payment via Stripe
+            if refund_amount > 0:
+                refund = stripe.Refund.create(
+                    payment_intent=self.stripe_payment_intent_id,
+                    amount=int(refund_amount * 100),
+                    reason=reason,
+                )
+
+                # 2️⃣ Save refund record
+                Refund.objects.create(
+                    payment=self.payment,
+                    stripe_refund_id=refund.id,
+                    amount=refund_amount,
+                    status=refund.status,
+                    reason=reason,
+                )
 
             # 3️⃣ Update booking status
             self.status = "cancelled"
             self.save(update_fields=["status", "updated_at"])
 
             # 4️⃣ Update payment status
-            self.payment.status = "refunded" if refund.status in ["succeeded", "pending"] else "failed"
+            self.payment.status = "refunded" if refund_amount > 0 else "failed"
             self.payment.save(update_fields=["status", "updated_at"])
 
             # 5️⃣ Cancel linked SlotBooking and update capacities
@@ -158,7 +167,7 @@ class Booking(models.Model):
                 slot_booking.shop.capacity += 1
                 slot_booking.shop.save(update_fields=["capacity"])
 
-            return True, f"Refund {refund.status} and booking cancelled successfully"
+            return True, f"Refund processed and booking cancelled successfully"
         except Exception as e:
             return False, str(e)
 

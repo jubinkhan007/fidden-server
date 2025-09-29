@@ -91,7 +91,8 @@ class ShopSerializer(serializers.ModelSerializer):
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
             'shop_img', 'close_days', 'owner_id', 'is_verified', 'status', 
-            'verification_files', 'uploaded_files'
+            'verification_files', 'uploaded_files', 'free_cancellation_hours',
+            'cancellation_fee_percentage', 'no_refund_hours'
         ]
         read_only_fields = ('owner_id','is_verified', 'uploaded_files')
 

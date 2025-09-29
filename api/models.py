@@ -43,6 +43,10 @@ class Shop(models.Model):
         choices=STATUS_CHOICES,
         default="pending"
     )
+    free_cancellation_hours = models.PositiveIntegerField(default=24)
+    cancellation_fee_percentage = models.PositiveIntegerField(default=50)
+    no_refund_hours = models.PositiveIntegerField(default=4)
+
 
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
 
