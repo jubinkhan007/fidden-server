@@ -24,6 +24,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-default-key')
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 't')
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost').split(',')
+SAFE_REDIRECT_SCHEMES = ["http", "https", "myapp"]
 
 # ==============================
 # Installed Apps
