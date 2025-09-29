@@ -145,8 +145,7 @@ class StripeReturnView(APIView):
         qp.setdefault("result", "success")
         deeplink = f"{APP_SCHEME}://{APP_HOST}/return"
         return HttpResponseRedirect(
-            f"{deeplink}?{urlencode(qp)}",
-            allowed_schemes=("http", "https", "myapp"),
+            f"{deeplink}?{urlencode(qp)}"
         )
 
 class StripeRefreshView(APIView):
@@ -157,8 +156,7 @@ class StripeRefreshView(APIView):
         qp.setdefault("result", "refresh")
         deeplink = f"{APP_SCHEME}://{APP_HOST}/refresh"
         return HttpResponseRedirect(
-            f"{deeplink}?{urlencode(qp)}",
-            allowed_schemes=("http", "https", "myapp"), 
+            f"{deeplink}?{urlencode(qp)}"
         )
 
 
