@@ -19,6 +19,8 @@ from .models import Payment, UserStripeCustomer, Booking, TransactionLog, Coupon
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
 from .pagination import BookingCursorPagination, TransactionCursorPagination
 from .utils.helper_function import extract_validation_error_message
+from django.http import HttpResponseRedirect
+from urllib.parse import urlencode, urljoin
 
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -131,24 +133,62 @@ class CreatePaymentIntentView(APIView):
 
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+APP_SCHEME = getattr(settings, "APP_URL_SCHEME", "myapp")
+APP_HOST   = getattr(settings, "APP_URL_HOST",   "stripe")  # myapp://stripe/...
+
+class StripeReturnView(APIView):
+    authentication_classes = []  # Stripe hits this
+    permission_classes = []
+
+    def get(self, request):
+        # You can forward any Stripe query params if you want
+        qp = request.GET.dict()
+        qp.setdefault("result", "success")
+        deeplink = f"{APP_SCHEME}://{APP_HOST}/return"
+        return HttpResponseRedirect(f"{deeplink}?{urlencode(qp)}")
+
+class StripeRefreshView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        qp = request.GET.dict()
+        qp.setdefault("result", "refresh")
+        deeplink = f"{APP_SCHEME}://{APP_HOST}/refresh"
+        return HttpResponseRedirect(f"{deeplink}?{urlencode(qp)}")
+
 
 class ShopOnboardingLinkView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, shop_id):
-        
         shop = get_object_or_404(Shop, id=shop_id)
         user = request.user
         if getattr(user, "role", None) != "owner":
             return Response({"detail": "Only owner can view services."}, status=status.HTTP_403_FORBIDDEN)
 
-        base_url = os.getenv("BASE_URL", "https://yourdomain.com")
+        if not hasattr(shop, "stripe_account") or not shop.stripe_account.stripe_account_id:
+            return Response({"detail": "Shop Stripe account not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+        base_url = getattr(settings, "BASE_URL", "https://yourdomain.com").rstrip("/")
+        # build HTTPS callbacks that Stripe accepts
+        default_return  = urljoin(base_url + "/", "payments/stripe/return/")
+        default_refresh = urljoin(base_url + "/", "payments/stripe/refresh/")
+
+        # allow optional overrides (?return_url=...&refresh_url=...) – must be HTTPS
+        return_url  = request.query_params.get("return_url",  default_return)
+        refresh_url = request.query_params.get("refresh_url", default_refresh)
+
+        # Hard-check: reject non-HTTPS to avoid “Not a valid URL”
+        if not (return_url.startswith("https://") and refresh_url.startswith("https://")):
+            return Response({"detail":"return_url and refresh_url must be https URLs"}, status=400)
 
         account_link = stripe.AccountLink.create(
             account=shop.stripe_account.stripe_account_id,
-            refresh_url=f"myapp://stripe/return?result=success",
-            return_url=f"myapp://stripe/return?result=success",
-            type="account_onboarding"
+            refresh_url=refresh_url,
+            return_url=return_url,
+            type="account_onboarding",
         )
         return Response({"url": account_link.url})
 
