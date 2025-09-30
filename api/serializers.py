@@ -318,8 +318,10 @@ class ShopDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id',
-            'avg_rating', 'review_count', 'distance', 'services', 'reviews'
+            'avg_rating', 'review_count', 'distance', 'services', 'reviews',
+            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         ]
+
 
     def get_services(self, obj):
         request = self.context.get('request')
