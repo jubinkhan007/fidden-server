@@ -6,7 +6,7 @@ from .views import (
     ServiceRetrieveUpdateDestroyView,
     UserRatingReviewView,
     ServiceCategoryListView,
-    SlotListView,
+    # SlotListView,
     SlotBookingView,
     CancelSlotBookingView,
     AllShopsListView,
@@ -33,6 +33,7 @@ from .views import (
     BestServicePerShopView,
     ThreadDetailsView,
 )
+from payments.views import ShopSlotsView
 
 urlpatterns = [
     path('shop/', ShopListCreateView.as_view(), name='shop-list-create'),
@@ -41,7 +42,7 @@ urlpatterns = [
     path('services/<int:pk>/', ServiceRetrieveUpdateDestroyView.as_view(), name='service-detail'),
     path('reviews/', UserRatingReviewView.as_view(), name='user-reviews'),
     path('categories/', ServiceCategoryListView.as_view(), name='category-list'),
-    path('shops/<int:shop_id>/slots/', SlotListView.as_view(), name='slot-list'),
+    path('shops/<int:shop_id>/slots/', ShopSlotsView.as_view(), name='slot-list'),
     path('slot-booking/', SlotBookingView.as_view(), name='slot-booking-create'),
     path('slot-booking/<int:booking_id>/cancel/', CancelSlotBookingView.as_view(), name='slot-booking-cancel'),
     path('users/shops/', AllShopsListView.as_view(), name='all-shops-list-user'),

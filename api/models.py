@@ -216,7 +216,7 @@ class Slot(models.Model):
 
 class SlotBooking(models.Model):
     STATUS_CHOICES = [
-        ('confirmed', 'Confirmed'), 
+        ('confirmed', 'Confirmed'),
         ('cancelled', 'Cancelled')
     ]
     PAYMENT_STATUS_CHOICES = [
@@ -232,11 +232,7 @@ class SlotBooking(models.Model):
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField()
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='confirmed')
-    payment_status = models.CharField(
-        max_length=10,
-        choices=PAYMENT_STATUS_CHOICES,
-        default='pending'
-    )
+    payment_status = models.CharField(max_length=10, choices=PAYMENT_STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -253,9 +249,23 @@ class SlotBooking(models.Model):
             )
         ]
 
-
     def __str__(self):
         return f"{self.user} → {self.service.title} @ {self.shop.name} ({timezone.localtime(self.start_time)})"
+
+
+# NEW: only time-of-day per service to disable across ALL dates
+class ServiceDisabledTime(models.Model):
+    service = models.ForeignKey(
+        Service, on_delete=models.CASCADE, related_name="disabled_times"
+    )
+    start_time = models.TimeField(db_index=True)  # time-of-day
+
+    class Meta:
+        unique_together = ('service', 'start_time')
+        ordering = ['start_time']
+
+    def __str__(self):
+        return f"{self.service.title} @ {self.start_time}"
 
 class FavoriteShop(models.Model):
     user = models.ForeignKey(

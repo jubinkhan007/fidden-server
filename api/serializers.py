@@ -16,7 +16,8 @@ from .models import (
     Notification,
     Device,
     Revenue,
-    Coupon
+    Coupon,
+    ServiceDisabledTime,
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -51,23 +52,102 @@ class ServiceSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(required=False)
     category = serializers.PrimaryKeyRelatedField(queryset=ServiceCategory.objects.all())
 
+    # ⬇️ owners POST/PUT/PATCH: list of "HH:MM" strings
+    disabled_start_times = serializers.ListField(
+        child=serializers.CharField(),
+        write_only=True,
+        required=False
+    )
+    # ⬇️ GET: returns normalized "HH:MM" list
+    disabled_times = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = Service
         fields = [
             'id', 'title', 'price', 'discount_price', 'description',
-            'service_img', 'category', 'duration', 'capacity', 'is_active'
+            'service_img', 'category', 'duration', 'capacity', 'is_active',
+            'disabled_start_times',   # write
+            'disabled_times',         # read
         ]
         read_only_fields = ('shop',)
+
+    def get_disabled_times(self, instance):
+        return [t.start_time.strftime('%H:%M') for t in instance.disabled_times.all().order_by('start_time')]
+
+    def _parse_times(self, raw_list):
+        """
+        Accepts items like '10:00', '10:00:00', '10.00', '10-00'
+        and returns list[datetime.time]. Raises ValidationError on bad values.
+        """
+        import re
+        from datetime import time
+        parsed = []
+        for s in raw_list or []:
+            val = (s or '').strip()
+            if not val:
+                continue
+            # normalize separators to ':'
+            v = re.sub(r'[.\-]', ':', val)
+            parts = v.split(':')
+            if not (1 <= len(parts) <= 3):
+                raise serializers.ValidationError(f"Invalid time: {s}")
+            try:
+                h = int(parts[0]); m = int(parts[1]) if len(parts) >= 2 else 0
+                sec = int(parts[2]) if len(parts) == 3 else 0
+                if not (0 <= h < 24 and 0 <= m < 60 and 0 <= sec < 60):
+                    raise ValueError
+                parsed.append(time(hour=h, minute=m, second=sec))
+            except Exception:
+                raise serializers.ValidationError(f"Invalid time: {s}")
+        return parsed
+
+    def _sync_disabled_times(self, service, raw_list):
+        """Idempotently replace the ServiceDisabledTime rows for this service."""
+        times = self._parse_times(raw_list)
+        # build a set for quick compare
+        wanted = {(t.hour, t.minute, t.second) for t in times}
+
+        # current rows
+        existing = list(service.disabled_times.all())
+        existing_set = {(dt.start_time.hour, dt.start_time.minute, dt.start_time.second) for dt in existing}
+
+        # delete removed
+        for dt in existing:
+            key = (dt.start_time.hour, dt.start_time.minute, dt.start_time.second)
+            if key not in wanted:
+                dt.delete()
+
+        # add new
+        from datetime import time
+        to_add = wanted - existing_set
+        ServiceDisabledTime.objects.bulk_create([
+            ServiceDisabledTime(service=service, start_time=time(h, m, s))
+            for (h, m, s) in to_add
+        ])
+
+    def create(self, validated_data):
+        disabled_raw = validated_data.pop('disabled_start_times', None)
+        service = super().create(validated_data)
+        if disabled_raw is not None:
+            self._sync_disabled_times(service, disabled_raw)
+        return service
+
+    def update(self, instance, validated_data):
+        disabled_raw = validated_data.pop('disabled_start_times', None)
+        service = super().update(instance, validated_data)
+        if disabled_raw is not None:
+            self._sync_disabled_times(service, disabled_raw)
+        return service
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
         request = self.context.get('request')
-        # Return full URL if request is available
         rep['service_img'] = (
             request.build_absolute_uri(instance.service_img.url)
             if instance.service_img and request else instance.service_img.url if instance.service_img else None
         )
         return rep
+
 
 class VerificationFileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -190,21 +270,37 @@ class RatingReviewSerializer(serializers.ModelSerializer):
         validated_data["booking"] = booking
         return super().create(validated_data)
 
+# api/serializers.py  (SlotSerializer)
 class SlotSerializer(serializers.ModelSerializer):
     available = serializers.SerializerMethodField()
+    disabled_by_service = serializers.SerializerMethodField()
 
     class Meta:
         model = Slot
-        fields = ['id', 'shop', 'service', 'start_time', 'end_time', 'capacity_left', 'available']
+        fields = [
+            'id', 'shop', 'service', 'start_time', 'end_time',
+            'capacity_left', 'available', 'disabled_by_service'
+        ]
+
+    def _local_tod(self, dt):
+        # Convert the aware datetime to local timezone, then take the time-of-day
+        return timezone.localtime(dt, timezone.get_default_timezone()).time()
+
+    def _disabled_set(self, obj):
+        # Set of time-of-day values (datetime.time) configured as disabled for this service
+        return set(obj.service.disabled_times.values_list('start_time', flat=True))
 
     def get_available(self, obj):
-        # Service-level capacity check
         service_capacity_ok = obj.capacity_left > 0
-
-        # Shop-level capacity check
         shop_capacity_ok = obj.service.shop.capacity > 0
+        local_tod = self._local_tod(obj.start_time)
+        not_disabled = (local_tod not in self._disabled_set(obj))
+        return service_capacity_ok and shop_capacity_ok and not_disabled
 
-        return service_capacity_ok and shop_capacity_ok
+    def get_disabled_by_service(self, obj):
+        local_tod = self._local_tod(obj.start_time)
+        return local_tod in self._disabled_set(obj)
+
 
 class SlotBookingSerializer(serializers.ModelSerializer):
     slot_id = serializers.PrimaryKeyRelatedField(

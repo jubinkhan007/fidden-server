@@ -21,6 +21,11 @@ from .pagination import BookingCursorPagination, TransactionCursorPagination
 from .utils.helper_function import extract_validation_error_message
 from django.http import HttpResponse, HttpResponseRedirect
 from urllib.parse import urlencode, urljoin
+# views.py
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from api.models import Slot
+from api.serializers import SlotSerializer
 
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -161,6 +166,23 @@ class StripeRefreshView(APIView):
         resp = HttpResponse(status=302)
         resp["Location"] = deeplink
         return resp
+
+
+
+
+class ShopSlotsView(APIView):
+    def get(self, request, shop_id):
+        service_id = request.query_params.get('service')
+        date_str   = request.query_params.get('date')  # YYYY-MM-DD
+
+        qs = (Slot.objects
+              .filter(shop_id=shop_id, service_id=service_id, start_time__date=date_str)
+              .select_related('service', 'service__shop')
+              .prefetch_related('service__disabled_times'))
+
+        data = SlotSerializer(qs, many=True, context={'request': request}).data
+        return Response({'slots': data})
+
 
 
 class ShopOnboardingLinkView(APIView):
