@@ -47,6 +47,7 @@ urlpatterns = [
     path('accounts/', include('accounts.urls')),
     path('api/', include('api.urls')),
     path('payments/', include('payments.urls')),
+    path('subscriptions/', include('subscriptions.urls')),
 
     # Health check
     path('health/', health, name='health'),

@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'accounts',
     'api',
     'payments',
+    'subscriptions',
     'django_celery_beat',
     'channels',
     'drf_yasg',
@@ -220,3 +221,7 @@ FCM_SERVICE_ACCOUNT_FILE = os.environ.get("FCM_SERVICE_ACCOUNT_JSON")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")  # sk_test_...
 STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY")  # pk_test_...
 STRIPE_ENDPOINT_SECRET = os.environ.get("STRIPE_ENDPOINT_SECRET")  # webhook secret
+
+
+STRIPE_SUCCESS_URL = os.getenv('STRIPE_SUCCESS_URL', 'http://localhost:3000/subscription/success')
+STRIPE_CANCEL_URL = os.getenv('STRIPE_CANCEL_URL', 'http://localhost:3000/subscription/cancel')

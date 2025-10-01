@@ -48,7 +48,42 @@ class Shop(models.Model):
     no_refund_hours = models.PositiveIntegerField(default=4)
 
 
+    is_deposit_required = models.BooleanField(default=False, help_text="Is a deposit required for booking?")
+    deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
+    free_cancellation_hours = models.PositiveIntegerField(default=24)
+    cancellation_fee_percentage = models.PositiveIntegerField(default=50)
+    no_refund_hours = models.PositiveIntegerField(default=4)
+    # --- End of New Fields ---
+
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
+
+    @property
+    def subscription_features(self):
+        """
+        Returns a dictionary of feature flags for the shop's current plan.
+        Returns default (most restrictive) values if no active subscription.
+        """
+        if hasattr(self, 'subscription') and self.subscription.is_active:
+            plan = self.subscription.plan
+            return {
+                'deposit_customization': plan.deposit_customization,
+                'priority_marketplace_ranking': plan.priority_marketplace_ranking,
+                'advanced_calendar_tools': plan.advanced_calendar_tools,
+                'auto_followups': plan.auto_followups,
+                'ai_assistant': plan.ai_assistant,
+                'performance_analytics': plan.performance_analytics,
+                'ghost_client_reengagement': plan.ghost_client_reengagement,
+            }
+        # Default features for inactive/no subscription
+        return {
+            'deposit_customization': 'default',
+            'priority_marketplace_ranking': False,
+            'advanced_calendar_tools': False,
+            'auto_followups': False,
+            'ai_assistant': 'addon',
+            'performance_analytics': 'none',
+            'ghost_client_reengagement': False,
+        }
 
     def save(self, *args, **kwargs):
         # Auto-update is_verified based on status

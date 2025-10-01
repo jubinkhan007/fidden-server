@@ -1,4 +1,6 @@
 from rest_framework import serializers
+
+from subscriptions.models import SubscriptionPlan
 from .models import (
     Shop, 
     Service, 
@@ -171,8 +173,8 @@ class ShopSerializer(serializers.ModelSerializer):
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
             'shop_img', 'close_days', 'owner_id', 'is_verified', 'status', 
-            'verification_files', 'uploaded_files', 'free_cancellation_hours',
-            'cancellation_fee_percentage', 'no_refund_hours'
+            'verification_files', 'uploaded_files', 'is_deposit_required', 'deposit_amount',
+            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         ]
         read_only_fields = ('owner_id','is_verified', 'uploaded_files')
 
@@ -201,10 +203,42 @@ class ShopSerializer(serializers.ModelSerializer):
         return shop
 
     def update(self, instance, validated_data):
+        """
+        Custom update logic to enforce subscription-based feature gating
+        for deposit and cancellation policies.
+        """
+        plan_name = instance.subscription.plan.name
+        
+        policy_fields = {
+            'is_deposit_required', 'deposit_amount', 'free_cancellation_hours',
+            'cancellation_fee_percentage', 'no_refund_hours'
+        }
+        
+        # --- Foundation Plan ---
+        # Cannot change any policy fields.
+        if plan_name == SubscriptionPlan.FOUNDATION:
+            for field in policy_fields:
+                if field in validated_data:
+                    raise serializers.ValidationError(
+                        f"Your current '{plan_name}' plan does not allow customizing the {field}. Please upgrade your plan."
+                    )
+        
+        # --- Momentum Plan ---
+        # Can only change deposit and cancellation fee amount.
+        elif plan_name == SubscriptionPlan.MOMENTUM:
+            allowed_fields = {'is_deposit_required', 'deposit_amount', 'cancellation_fee_percentage'}
+            for field in policy_fields:
+                if field in validated_data and field not in allowed_fields:
+                    raise serializers.ValidationError(
+                        f"Your current '{plan_name}' plan does not allow customizing the {field}. Please upgrade to the 'Icon' plan."
+                    )
+        
+        # --- Icon Plan ---
+        # Can change all policy fields. No checks needed.
+
         # Reset status to pending on update
         instance.status = "pending"
 
-        # ⚡ optional: allow uploading new verification files during update
         files = validated_data.pop("verification_files", None)  
 
         for attr, value in validated_data.items():

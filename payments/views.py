@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 import stripe
+import logging
 import json
 from datetime import timedelta
 from django.utils.timezone import now
@@ -16,6 +17,7 @@ from api.models import Shop, Coupon
 from api.serializers import SlotBookingSerializer, CouponSerializer
 from accounts.models import User
 from .models import Payment, UserStripeCustomer, Booking, TransactionLog, CouponUsage, can_use_coupon
+from subscriptions.models import SubscriptionPlan, ShopSubscription
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
 from .pagination import BookingCursorPagination, TransactionCursorPagination
 from .utils.helper_function import extract_validation_error_message
@@ -27,6 +29,10 @@ from rest_framework.response import Response
 from api.models import Slot
 from api.serializers import SlotSerializer
 
+from dateutil.relativedelta import relativedelta
+from django.utils import timezone
+import datetime
+logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
@@ -37,11 +43,10 @@ class CreatePaymentIntentView(APIView):
     def post(self, request, slot_id):
         user = request.user
         coupon_id = request.data.get("coupon_id", None)
-
         coupon = None
         discount = 0
 
-        # 1. Apply Coupon first (before booking creation)
+        # 1. Apply Coupon if provided
         if coupon_id:
             coupon_serializer = ApplyCouponSerializer(
                 data={"coupon_id": coupon_id},
@@ -49,20 +54,17 @@ class CreatePaymentIntentView(APIView):
             )
             try:
                 coupon_serializer.is_valid(raise_exception=True)
-                coupon =  coupon_serializer.coupon 
+                coupon = coupon_serializer.coupon
             except ValidationError as e:
                 return Response({"detail": extract_validation_error_message(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         # 2. Create Booking
-        serializer = SlotBookingSerializer(
-            data={"slot_id": slot_id},
-            context={"request": request}
-        )
+        serializer = SlotBookingSerializer(data={"slot_id": slot_id}, context={"request": request})
         try:
             serializer.is_valid(raise_exception=True)
         except ValidationError as e:
             return Response({"detail": extract_validation_error_message(e)}, status=status.HTTP_400_BAD_REQUEST)
-
+        
         booking = serializer.save()
 
         try:
@@ -73,42 +75,49 @@ class CreatePaymentIntentView(APIView):
                 user_customer.stripe_customer_id = stripe_customer.id
                 user_customer.save()
 
-            # 4. Ensure Shop Stripe Account exists
+            # 4. Get Shop Stripe Account and Subscription Plan
             shop = booking.shop
             shop_account = getattr(shop, "stripe_account", None)
-            if not shop_account:
+            if not shop_account or not shop_account.stripe_account_id:
                 return Response({"detail": "Shop Stripe account not found"}, status=status.HTTP_400_BAD_REQUEST)
+            
+            shop_subscription = getattr(shop, "subscription", None)
+            if not shop_subscription or not shop_subscription.is_active:
+                return Response({"detail": "Shop does not have an active subscription."}, status=status.HTTP_400_BAD_REQUEST)
+            plan = shop_subscription.plan
 
-            # 5. Calculate price
-            total_amount = (
-                booking.service.discount_price
-                if booking.service.discount_price > 0
-                else booking.service.price
-            )
-
-            # Apply coupon discount if available
+            # 5. Calculate final price after coupon
+            total_amount = booking.service.discount_price if booking.service.discount_price > 0 else booking.service.price
             if coupon:
                 if coupon.in_percentage:
                     discount = (total_amount * coupon.amount) / 100
                 else:
                     discount = coupon.amount
                 total_amount = max(total_amount - discount, 0)
-
-                # Record coupon usage
                 coupon_serializer.create_usage()
 
-            # 6. Create PaymentIntent
+            # 6. Calculate application fee (commission)
+            application_fee_cents = 0
+            if plan.commission_rate > 0:
+                commission = (total_amount * plan.commission_rate) / 100
+                application_fee_cents = int(commission * 100)
+            
+            # 7. Create PaymentIntent
             amount_cents = int(total_amount * 100)
-            intent = stripe.PaymentIntent.create(
-                amount=amount_cents,
-                currency="usd",
-                customer=user_customer.stripe_customer_id,
-                payment_method_types=["card"],
-                transfer_data={"destination": shop_account.stripe_account_id},
-                metadata={"booking_id": booking.id}
-            )
+            payment_intent_params = {
+                'amount': amount_cents,
+                'currency': 'usd',
+                'customer': user_customer.stripe_customer_id,
+                'payment_method_types': ['card'],
+                'transfer_data': {'destination': shop_account.stripe_account_id},
+                'metadata': {'booking_id': booking.id}
+            }
+            if application_fee_cents > 0:
+                payment_intent_params['application_fee_amount'] = application_fee_cents
+            
+            intent = stripe.PaymentIntent.create(**payment_intent_params)
 
-            # 7. Save Payment record
+            # 8. Save Payment record
             Payment.objects.update_or_create(
                 booking=booking,
                 defaults={
@@ -121,11 +130,8 @@ class CreatePaymentIntentView(APIView):
                 },
             )
 
-            # 8. Create Ephemeral Key
-            ephemeral_key = stripe.EphemeralKey.create(
-                customer=user_customer.stripe_customer_id,
-                stripe_version="2024-04-10"
-            )
+            # 9. Create Ephemeral Key
+            ephemeral_key = stripe.EphemeralKey.create(customer=user_customer.stripe_customer_id, stripe_version="2024-04-10")
 
             return Response({
                 "booking_id": booking.id,
@@ -137,6 +143,7 @@ class CreatePaymentIntentView(APIView):
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
+            # The auto_cancel_booking Celery task will handle cleanup for failed payments
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
 APP_SCHEME = getattr(settings, "APP_URL_SCHEME", "myapp")
@@ -243,6 +250,7 @@ class SaveCardView(APIView):
 class StripeWebhookView(APIView):
     authentication_classes = []  # Disable authentication for webhook
     permission_classes = []      # Disable permission checks
+    
 
     def post(self, request, *args, **kwargs):
         payload = request.body
@@ -283,6 +291,136 @@ class StripeWebhookView(APIView):
         elif event_type.startswith("transfer."):
             # TODO: Update your transfer table if you have one
             print("🔄 Transfer event:", event_type, data["id"])
+        
+        elif event_type == "checkout.session.completed":
+            try:
+                session = data
+                shop_ref = session.get("client_reference_id")
+                stripe_subscription_id = session.get("subscription")
+
+                if not shop_ref or not stripe_subscription_id:
+                    logger.warning("checkout.session.completed missing client_reference_id/subscription: %r", session)
+                    return Response(status=200)  # ACK, don't retry
+
+                # 1) Load full subscription from Stripe
+                stripe_sub = stripe.Subscription.retrieve(stripe_subscription_id)
+
+                # 2) Compute period end safely (classic + flexible)
+                period_end_ts = stripe_sub.get("current_period_end")
+
+                if not period_end_ts:
+                    items = (stripe_sub.get("items") or {}).get("data") or []
+                    per_item = []
+                    for it in items:
+                        ts = it.get("current_period_end")
+                        if not ts:
+                            curr = it.get("current_period")
+                            if curr:
+                                ts = curr.get("end")
+                        if ts:
+                            per_item.append(ts)
+                    if per_item:
+                        period_end_ts = max(per_item)
+
+                if not period_end_ts:
+                    latest_inv_id = stripe_sub.get("latest_invoice")
+                    if latest_inv_id:
+                        inv = stripe.Invoice.retrieve(latest_inv_id)
+                        period_end_ts = inv.get("period_end")
+
+                if period_end_ts:
+                    period_end_dt = datetime.datetime.fromtimestamp(period_end_ts, tz=datetime.timezone.utc)
+                else:
+                    period_end_dt = timezone.now() + relativedelta(months=1)  # last resort
+                    logger.warning("No period_end found for %s; defaulting to +1 month", stripe_subscription_id)
+
+                # 3) Map Stripe price -> local plan
+                items = (stripe_sub.get("items") or {}).get("data") or []
+                if not items:
+                    logger.error("Subscription %s has no items; cannot determine price/plan", stripe_subscription_id)
+                    return Response(status=200)
+
+                price = items[0].get("price") or {}
+                stripe_price_id = price.get("id")
+                if not stripe_price_id:
+                    logger.error("Subscription %s item has no price.id", stripe_subscription_id)
+                    return Response(status=200)
+
+                try:
+                    plan = SubscriptionPlan.objects.get(stripe_price_id=stripe_price_id)
+                except SubscriptionPlan.DoesNotExist:
+                    logger.error("No local SubscriptionPlan with stripe_price_id=%s", stripe_price_id)
+                    return Response(status=200)
+
+                # 4) Resolve shop and upsert
+                try:
+                    shop_id = int(shop_ref)
+                except (TypeError, ValueError):
+                    logger.error("Invalid client_reference_id (not int): %r", shop_ref)
+                    return Response(status=200)
+
+                try:
+                    shop = Shop.objects.get(id=shop_id)
+                except Shop.DoesNotExist:
+                    logger.error("Shop id=%s not found", shop_id)
+                    return Response(status=200)
+
+                ShopSubscription.objects.update_or_create(
+                    shop=shop,
+                    defaults={
+                        "plan": plan,
+                        "status": ShopSubscription.STATUS_ACTIVE,
+                        "stripe_subscription_id": stripe_subscription_id,
+                        "start_date": timezone.now(),
+                        "end_date": period_end_dt,
+                    },
+                )
+                logger.info("✅ Shop %s moved to plan %s (until %s)", shop.id, plan.name, period_end_dt.isoformat())
+                return Response(status=200)
+
+            except Exception as e:
+                logger.exception("checkout.session.completed handler error: %r", e)
+                return Response(status=200)
+
+
+        elif event_type == "invoice.payment_succeeded":
+            invoice = data
+            sub_id = invoice.get("subscription")
+            if not sub_id:
+                return Response(status=200)
+
+            try:
+                stripe_sub = stripe.Subscription.retrieve(sub_id)
+                items = (stripe_sub.get("items") or {}).get("data") or []
+                stripe_price_id = items and (items[0].get("price") or {}).get("id")
+                plan = stripe_price_id and SubscriptionPlan.objects.get(stripe_price_id=stripe_price_id)
+                shop_sub = ShopSubscription.objects.get(stripe_subscription_id=sub_id)
+                if plan and shop_sub.plan_id != plan.id:
+                    shop_sub.plan = plan
+                # keep it active and bump end_date from the invoice
+                pe = invoice.get("period_end")
+                if pe:
+                    shop_sub.end_date = datetime.datetime.fromtimestamp(invoice['period_end'], tz=datetime.timezone.utc)
+                shop_sub.status = ShopSubscription.STATUS_ACTIVE
+                shop_sub.save()
+            except (ShopSubscription.DoesNotExist, SubscriptionPlan.DoesNotExist):
+                pass
+            return Response(status=200)
+
+
+        elif event_type == "customer.subscription.deleted":
+            stripe_sub = data
+            try:
+                shop_sub = ShopSubscription.objects.get(stripe_subscription_id=stripe_sub['id'])
+                foundation_plan = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                
+                shop_sub.plan = foundation_plan
+                shop_sub.status = ShopSubscription.STATUS_ACTIVE
+                shop_sub.stripe_subscription_id = None
+                shop_sub.end_date = timezone.now() + relativedelta(years=100)
+                shop_sub.save()
+            except ShopSubscription.DoesNotExist:
+                pass # Subscription not tracked
 
         else:
             # Log unhandled events for debugging
