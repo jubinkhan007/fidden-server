@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
+import json
 
 
 # Load .env file
@@ -227,7 +228,14 @@ CELERY_ENABLE_UTC = True
 
 
 FCM_SERVER_KEY = os.getenv("FCM_SERVER_KEY", "")
-FCM_SERVICE_ACCOUNT_FILE = os.environ.get("FCM_SERVICE_ACCOUNT_JSON")
+FCM_SERVICE_ACCOUNT_FILE = os.environ.get("FCM_SERVICE_ACCOUNT_JSON", "{}")
+#laod FCM from config env variable
+try:
+    FCM_SERVICE_ACCOUNT_JSON = json.loads(FCM_SERVICE_ACCOUNT_FILE)
+    print("Fcm config loaded from env")
+except json.JSONDecodeError:
+    FCM_SERVICE_ACCOUNT_JSON= {}
+    print("Missing the json file")
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")  # sk_test_...
 STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY")  # pk_test_...

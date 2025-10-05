@@ -14,33 +14,26 @@ def _init_firebase() -> None:
         svc = getattr(settings, "FCM_SERVICE_ACCOUNT_JSON", None)
 
         if not svc:
-            print("FCM_SERVICE_ACCOUNT_JSON not found in settings.")
+            print("❌ FCM_SERVICE_ACCOUNT_JSON not found in settings.")
             return
 
-        try:
-            # If it's a string, parse it as JSON
-            if isinstance(svc, str):
-                svc = json.loads(svc)
+        print("🔍 Attempting to initialize Firebase with config...")
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(svc, f)
+            temp_path = f.name
 
-            # If it's already a dict, use it directly
-            if isinstance(svc, dict):
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                    json.dump(svc, f)
-                    temp_path = f.name
-                cred = credentials.Certificate(temp_path)
-                firebase_admin.initialize_app(cred)
-                os.unlink(temp_path)  # Clean up
-                return
-            else:
-                print("FCM_SERVICE_ACCOUNT_JSON is not a valid JSON object.")
-        except json.JSONDecodeError as e:
-            print(f"Invalid JSON in FCM_SERVICE_ACCOUNT_JSON: {e}")
-            print(f"Content: {str(svc)[:200]}...")  # Print first 200 chars
-        except Exception as e:
-            print(f"Error initializing Firebase: {e}")
-            traceback.print_exc()
+        try:
+            cred = credentials.Certificate(temp_path)
+            firebase_admin.initialize_app(cred)
+            print("✅ Firebase initialized successfully!")
+        finally:
+            try:
+                os.unlink(temp_path)  # Clean up temp file
+            except:
+                pass
+
     except Exception as e:
-        print(f"Failed to initialize Firebase Admin: {e}")
+        print(f"❌ Failed to initialize Firebase: {e}")
         traceback.print_exc()
 
 def _stringify(d: Optional[Dict[str, Any]]) -> Dict[str, str]:
