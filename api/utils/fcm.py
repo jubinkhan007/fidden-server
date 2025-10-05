@@ -52,7 +52,10 @@ def _android_cfg() -> messaging.AndroidConfig:
 
 def _apns_cfg(title: str, body: str) -> messaging.APNSConfig:
     return messaging.APNSConfig(
-        headers={"apns-push-type": "alert", "apns-priority": "10", "apns-push-type": "background","apns-priority": "5"},
+        ##old setup##
+        # headers={"apns-push-type": "alert", "apns-priority": "10", "apns-push-type": "background","apns-priority": "5"},
+        ##new header###
+        headers={ "apns-push-type": "background", "apns-priority": "5"},
         payload=messaging.APNSPayload(
             aps=messaging.Aps(
                 alert=messaging.ApsAlert(title=title, body=body),
@@ -133,33 +136,75 @@ def send_push_notification(
         print(f"Error in send_push_notification: {e}")
         traceback.print_exc()
 
+
+##########this is the old one ###########
+
+# def notify_user(
+#     user,
+#     message: str,
+#     notification_type: str = "chat",
+#     data: Optional[Dict[str, Any]] = None,
+#     *,
+#     debug: bool = False,
+#     dry_run: bool = False,
+# ) -> None:
+#     Notification.objects.create(
+#         recipient=user,
+#         message=message,
+#         notification_type=notification_type,
+#         data=data or {},
+#     )
+#     # Give a meaningful title by type
+#     title = {
+#         "chat": "New Message",
+#         "booking": "New Booking",
+#         "booking_reminder": "Booking Reminder",
+#     }.get(notification_type, "Notification")
+#
+#     send_push_notification(
+#         user=user,
+#         title=title,
+#         message=message,
+#         data=data,
+#         debug=debug,
+#         dry_run=dry_run,
+#     )
+
+
+#########this is the new one ##########
 def notify_user(
-    user,
-    message: str,
-    notification_type: str = "chat",
-    data: Optional[Dict[str, Any]] = None,
-    *,
-    debug: bool = False,
-    dry_run: bool = False,
-) -> None:
-    Notification.objects.create(
+        user,
+        message: str,
+        notification_type: str = "chat",
+        data: Optional[Dict[str, Any]] = None,
+        *,
+        debug: bool = False,
+        dry_run: bool = False,
+):
+    # Create notification in database
+    notification = Notification.objects.create(
         recipient=user,
         message=message,
         notification_type=notification_type,
         data=data or {},
     )
-    # Give a meaningful title by type
-    title = {
-        "chat": "New Message",
-        "booking": "New Booking",
-        "booking_reminder": "Booking Reminder",
-    }.get(notification_type, "Notification")
 
+    # For iOS background notifications, ensure data payload is included
+    if data is None:
+        data = {}
+
+    # Add notification_id to data for deep linking
+    data["notification_id"] = str(notification.id)
+    data["type"] = notification_type
+    data["click_action"] = "FLUTTER_NOTIFICATION_CLICK"  # For Flutter
+
+    # Send push notification
     send_push_notification(
         user=user,
-        title=title,
+        title="New Message" if notification_type == "chat" else "Notification",
         message=message,
         data=data,
         debug=debug,
         dry_run=dry_run,
     )
+    return notification
