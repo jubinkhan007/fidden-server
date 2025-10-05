@@ -21,4 +21,4 @@ service_account_fcm.json
 
 .env
 
-/.idea*
+/.idea*/*
