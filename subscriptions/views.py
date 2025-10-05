@@ -12,7 +12,12 @@ from decimal import Decimal
 from .models import SubscriptionPlan, ShopSubscription
 from api.models import Shop
 from .serializers import SubscriptionPlanSerializer
+from payments.models import UserStripeCustomer
+import logging
+from datetime import timezone as dt_timezone
 
+
+logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 def _get_customer_id(user):
@@ -27,21 +32,13 @@ class SubscriptionDetailsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """
-        Returns the user's effective subscription:
-        - plan: SubscriptionPlan (Foundation if no active Stripe sub)
-        - status: Stripe status ('active'/'trialing'/... or 'none')
-        - renews_on: ISO8601 (next billing date) if applicable
-        - cancel_at_period_end: bool
-        - ai: {state: 'included'|'addon_active'|'not_enabled', legacy: bool}
-        - commission_rate: decimal string (effective)
-        """
         stripe.api_key = settings.STRIPE_SECRET_KEY
         ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
 
         plan = None
         status = "none"
         renews_on = None
+        expires_on = None          # 👈 NEW
         cancel_at_period_end = False
         ai_state = "not_enabled"
         ai_legacy = False
@@ -131,15 +128,13 @@ class SubscriptionDetailsView(APIView):
             "plan": SubscriptionPlanSerializer(plan).data,
             "status": status,
             "renews_on": renews_on,
+            "expires_on": expires_on,             # 👈 NEW in response
             "cancel_at_period_end": cancel_at_period_end,
             "commission_rate": str(commission),
-            "ai": {
-                "state": ai_state,            # 'included' | 'addon_active' | 'not_enabled'
-                "legacy": ai_legacy,          # True if LEGACY500
-                "price_id": ai_price_id,      # for client to upsell if needed
-            },
+            "ai": {"state": ai_state, "legacy": ai_legacy, "price_id": ai_price_id},
         }
         return Response(payload, status=200)
+
 
 class SubscriptionPlanListView(APIView):
     """
@@ -171,19 +166,20 @@ class CreateSubscriptionCheckoutSessionView(APIView):
             return Response({"error": "Invalid Plan or Shop."}, status=status.HTTP_404_NOT_FOUND)
 
         if not plan.stripe_price_id:
-            return Response({"error": "Stripe Price ID not configured for this plan."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": "Stripe Price ID not configured for this plan."},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         try:
+            # 👇 FIX: ensure & use a platform Customer for the shop owner
+            customer_id = _ensure_shop_customer_id(shop)
+
             checkout_session = stripe.checkout.Session.create(
                 mode='subscription',
-                line_items=[{
-                    'price': plan.stripe_price_id,
-                    'quantity': 1,
-                }],
+                customer=customer_id,  # 👈 was undefined before
+                line_items=[{'price': plan.stripe_price_id, 'quantity': 1}],
                 success_url=settings.STRIPE_SUCCESS_URL + '?session_id={CHECKOUT_SESSION_ID}',
                 cancel_url=settings.STRIPE_CANCEL_URL,
-                # Store shop_id to identify the user in the webhook
-                client_reference_id=shop.id,
+                client_reference_id=shop.id,   # used by your webhook to locate the shop
             )
             return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
         except Exception as e:

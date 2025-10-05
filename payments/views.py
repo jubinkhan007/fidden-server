@@ -37,6 +37,80 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
 
+
+def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
+    """
+    sub_obj: stripe.Subscription dict (may be partial)
+    shop_hint: a Shop instance if you already resolved it (optional)
+    """
+    # Ensure we have items->price populated
+    if not (sub_obj.get("items") or {}).get("data"):
+        sub_obj = stripe.Subscription.retrieve(sub_obj["id"], expand=["items.data.price"])
+
+    # Map price -> local plan
+    items = (sub_obj.get("items") or {}).get("data") or []
+    if not items:
+        logger.error("Subscription %s has no items; cannot map plan", sub_obj.get("id"))
+        return
+    price_id = (items[0].get("price") or {}).get("id")
+    if not price_id:
+        logger.error("Subscription %s missing price.id", sub_obj.get("id"))
+        return
+
+    try:
+        plan = SubscriptionPlan.objects.get(stripe_price_id=price_id)
+    except SubscriptionPlan.DoesNotExist:
+        logger.error("No SubscriptionPlan with stripe_price_id=%s", price_id)
+        return
+
+    # Resolve shop if not passed
+    shop = shop_hint
+    if not shop:
+        # 1) Try by subscription id already saved
+        ss = ShopSubscription.objects.filter(stripe_subscription_id=sub_obj["id"]).select_related("shop").first()
+        if ss:
+            shop = ss.shop
+        else:
+            # 2) Try by customer id -> Shop.stripe_customer_id
+            cust_id = sub_obj.get("customer")
+            if cust_id:
+                shop = Shop.objects.filter(stripe_customer_id=cust_id).first()
+            # 3) Last fallback: owner’s saved customer mapping
+            if not shop and cust_id:
+                from payments.models import UserStripeCustomer
+                usc = UserStripeCustomer.objects.filter(stripe_customer_id=cust_id).select_related("user").first()
+                if usc and hasattr(usc.user, "shop"):
+                    shop = usc.user.shop
+
+    if not shop:
+        logger.error("Could not resolve shop for subscription %s", sub_obj.get("id"))
+        return
+
+    # Compute period end
+    period_end_ts = sub_obj.get("current_period_end")
+    if not period_end_ts:
+        latest_inv_id = sub_obj.get("latest_invoice")
+        if latest_inv_id:
+            inv = stripe.Invoice.retrieve(latest_inv_id)
+            period_end_ts = inv.get("period_end")
+    end_dt = timezone.now() + relativedelta(months=1)
+    if period_end_ts:
+        import datetime
+        end_dt = datetime.datetime.fromtimestamp(period_end_ts, tz=datetime.timezone.utc)
+
+    ShopSubscription.objects.update_or_create(
+        shop=shop,
+        defaults={
+            "plan": plan,
+            "status": ShopSubscription.STATUS_ACTIVE,
+            "stripe_subscription_id": sub_obj.get("id"),
+            "start_date": timezone.now(),
+            "end_date": end_dt,
+        },
+    )
+    logger.info("✅ Shop %s set to plan %s via subscription %s (ends %s)",
+                shop.id, plan.name, sub_obj.get("id"), end_dt.isoformat())
+
 class CreatePaymentIntentView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -248,9 +322,8 @@ class SaveCardView(APIView):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class StripeWebhookView(APIView):
-    authentication_classes = []  # Disable authentication for webhook
-    permission_classes = []      # Disable permission checks
-    
+    authentication_classes = []
+    permission_classes = []
 
     def post(self, request, *args, **kwargs):
         payload = request.body
