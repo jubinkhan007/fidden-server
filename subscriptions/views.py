@@ -8,12 +8,138 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
-
+from decimal import Decimal
 from .models import SubscriptionPlan, ShopSubscription
 from api.models import Shop
 from .serializers import SubscriptionPlanSerializer
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+def _get_customer_id(user):
+    # Adjust to your schema
+    return (
+        getattr(user, "stripe_customer_id", None)
+        or getattr(getattr(user, "profile", None), "stripe_customer_id", None)
+    )
+
+
+class SubscriptionDetailsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """
+        Returns the user's effective subscription:
+        - plan: SubscriptionPlan (Foundation if no active Stripe sub)
+        - status: Stripe status ('active'/'trialing'/... or 'none')
+        - renews_on: ISO8601 (next billing date) if applicable
+        - cancel_at_period_end: bool
+        - ai: {state: 'included'|'addon_active'|'not_enabled', legacy: bool}
+        - commission_rate: decimal string (effective)
+        """
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+
+        plan = None
+        status = "none"
+        renews_on = None
+        cancel_at_period_end = False
+        ai_state = "not_enabled"
+        ai_legacy = False
+
+        customer_id = _get_customer_id(request.user)
+
+        # Try Stripe
+        if customer_id:
+            try:
+                subs = stripe.Subscription.list(
+                    customer=customer_id,
+                    status="all",
+                    expand=["data.items.data.price.product"],
+                    limit=20,
+                )
+
+                # Pick the most relevant subscription (active/trialing/past_due first)
+                chosen = None
+                priority = {"active": 3, "trialing": 2, "past_due": 1}
+                best_score = -1
+                for s in subs.get("data", []):
+                    sc = priority.get(s.get("status"), 0)
+                    if sc > best_score:
+                        chosen, best_score = s, sc
+
+                if chosen:
+                    status = chosen.get("status", "none")
+                    cpe = chosen.get("current_period_end")
+                    if cpe:
+                        renews_on = timezone.datetime.fromtimestamp(
+                            int(cpe), tz=timezone.utc
+                        ).isoformat()
+                    cancel_at_period_end = bool(chosen.get("cancel_at_period_end"))
+
+                    # Base plan = first recurring item that matches a plan
+                    price_ids = [it["price"]["id"] for it in chosen["items"]["data"]]
+                    base_plan = (
+                        SubscriptionPlan.objects
+                        .filter(stripe_price_id__in=price_ids)
+                        .order_by("id")
+                        .first()
+                    )
+                    if base_plan:
+                        plan = base_plan
+
+                    # AI add-on detection
+                    if ai_price_id and ai_price_id in price_ids:
+                        ai_state = "addon_active"
+
+                    # LEGACY500 promo means free-for-life → treat as included
+                    discount = chosen.get("discount")
+                    promo_id = discount.get("promotion_code") if discount else None
+                    if promo_id:
+                        try:
+                            promo = stripe.PromotionCode.retrieve(promo_id)
+                            if promo and promo.get("code") == "LEGACY500":
+                                ai_legacy = True
+                                ai_state = "included"
+                        except Exception:
+                            pass
+
+            except Exception:
+                # Stripe temporarily unreachable → fall back to Foundation
+                pass
+
+        # Fallback to Foundation if no mapped plan found
+        if plan is None:
+            plan = (
+                SubscriptionPlan.objects.filter(name__iexact="Foundation").first()
+                or SubscriptionPlan.objects.order_by("id").first()
+            )
+            status = "none"
+            renews_on = None
+            cancel_at_period_end = False
+
+        # If the selected plan already includes AI, override state
+        if getattr(plan, "ai_assistant", "") == "included":
+            ai_state = "included"
+
+        # Effective commission (stringify for client)
+        commission = getattr(plan, "commission_rate", None)
+        if commission is None:
+            # Safety default for Foundation if your model doesn't store it
+            commission = Decimal("0.10")
+
+        payload = {
+            "plan": SubscriptionPlanSerializer(plan).data,
+            "status": status,
+            "renews_on": renews_on,
+            "cancel_at_period_end": cancel_at_period_end,
+            "commission_rate": str(commission),
+            "ai": {
+                "state": ai_state,            # 'included' | 'addon_active' | 'not_enabled'
+                "legacy": ai_legacy,          # True if LEGACY500
+                "price_id": ai_price_id,      # for client to upsell if needed
+            },
+        }
+        return Response(payload, status=200)
 
 class SubscriptionPlanListView(APIView):
     """
