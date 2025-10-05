@@ -6,32 +6,41 @@ from api.models import Notification
 import firebase_admin
 from firebase_admin import credentials, messaging
 
+
 def _init_firebase() -> None:
     if firebase_admin._apps:
         return
     try:
-        svc = getattr(settings, "FCM_SERVICE_ACCOUNT_FILE", None)
-        if svc and isinstance(svc, str) and os.path.exists(svc):
-            cred = credentials.Certificate(svc)
-            firebase_admin.initialize_app(cred)
+        svc = getattr(settings, "FCM_SERVICE_ACCOUNT_JSON", None)
+
+        if not svc:
+            print("FCM_SERVICE_ACCOUNT_JSON not found in settings.")
             return
-        if svc:
-            info = json.loads(svc) if isinstance(svc, str) else dict(svc)
-            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-                json.dump(info, f)
-                cred = credentials.Certificate(f.name)
-            firebase_admin.initialize_app(cred)
-            return
-        env_json = os.environ.get("FCM_SERVICE_ACCOUNT_JSON")
-        if env_json:
-            info = json.loads(env_json)
-            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-                json.dump(info, f)
-                cred = credentials.Certificate(f.name)
-            firebase_admin.initialize_app(cred)
-            return
+
+        try:
+            # If it's a string, parse it as JSON
+            if isinstance(svc, str):
+                svc = json.loads(svc)
+
+            # If it's already a dict, use it directly
+            if isinstance(svc, dict):
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                    json.dump(svc, f)
+                    temp_path = f.name
+                cred = credentials.Certificate(temp_path)
+                firebase_admin.initialize_app(cred)
+                os.unlink(temp_path)  # Clean up
+                return
+            else:
+                print("FCM_SERVICE_ACCOUNT_JSON is not a valid JSON object.")
+        except json.JSONDecodeError as e:
+            print(f"Invalid JSON in FCM_SERVICE_ACCOUNT_JSON: {e}")
+            print(f"Content: {str(svc)[:200]}...")  # Print first 200 chars
+        except Exception as e:
+            print(f"Error initializing Firebase: {e}")
+            traceback.print_exc()
     except Exception as e:
-        print("Failed to init Firebase Admin:", e)
+        print(f"Failed to initialize Firebase Admin: {e}")
         traceback.print_exc()
 
 def _stringify(d: Optional[Dict[str, Any]]) -> Dict[str, str]:
