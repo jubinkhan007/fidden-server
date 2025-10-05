@@ -32,8 +32,6 @@ from api.serializers import SlotSerializer
 from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 import datetime
-
-
 logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -332,142 +330,190 @@ class StripeWebhookView(APIView):
         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
 
         try:
-            event = stripe.Webhook.construct_event(payload, sig_header, settings.STRIPE_ENDPOINT_SECRET)
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, STRIPE_ENDPOINT_SECRET
+            )
         except ValueError:
+            # Invalid payload
             return Response({"error": "Invalid payload"}, status=400)
         except stripe.error.SignatureVerificationError:
+            # Invalid signature
             return Response({"error": "Invalid signature"}, status=400)
 
         event_type = event["type"]
         data = event["data"]["object"]
 
-        logger.info("Stripe event: %s (livemode=%s)", event_type, bool(event.get("livemode")))
-
-        # --- payments (keep your existing handlers) ---
+        # --- Handle PaymentIntents (recommended way to track payments) ---
         if event_type == "payment_intent.succeeded":
             self._update_payment_status(data, "succeeded")
-            return Response(status=200)
+
         elif event_type == "payment_intent.payment_failed":
             self._update_payment_status(data, "failed")
-            return Response(status=200)
+
         elif event_type == "payment_intent.canceled":
             self._update_payment_status(data, "cancelled")
-            return Response(status=200)
+
+        # --- Handle Charges (optional, useful for extra logging) ---
         elif event_type == "charge.succeeded":
             self._update_payment_status(data, "succeeded")
-            return Response(status=200)
+
         elif event_type == "charge.failed":
             self._update_payment_status(data, "failed")
-            return Response(status=200)
 
-        # --- Connect transfers (optional) ---
-        if event_type.startswith("transfer."):
-            logger.info("Transfer event: %s %s", event_type, data.get("id"))
-            return Response(status=200)
-
-        # --- Checkout completion → create/attach subscription ---
-        if event_type == "checkout.session.completed":
+        # --- Handle Transfers / Payouts (if using Connect) ---
+        elif event_type.startswith("transfer."):
+            # TODO: Update your transfer table if you have one
+            print("🔄 Transfer event:", event_type, data["id"])
+        
+        elif event_type == "checkout.session.completed":
             try:
                 session = data
                 shop_ref = session.get("client_reference_id")
-                sub_id   = session.get("subscription")
+                stripe_subscription_id = session.get("subscription")
 
-                logger.info("[checkout] completed session=%s shop_ref=%s sub_id=%s",
-                            session.get("id"), shop_ref, sub_id)
+                if not shop_ref or not stripe_subscription_id:
+                    logger.warning("checkout.session.completed missing client_reference_id/subscription: %r", session)
+                    return Response(status=200)  # ACK, don't retry
 
-                shop_hint = None
-                if shop_ref:
-                    try:
-                        shop_hint = Shop.objects.get(id=int(shop_ref))
-                        logger.info("[checkout] resolved shop_hint=%s from client_reference_id", shop_hint.id)
-                    except Exception:
-                        logger.warning("[checkout] bad client_reference_id: %r", shop_ref)
+                # 1) Load full subscription from Stripe
+                stripe_sub = stripe.Subscription.retrieve(stripe_subscription_id)
 
-                if sub_id:
-                    # Normal path: fetch subscription, map by subscription price
-                    sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
-                    _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
+                # 2) Compute period end safely (classic + flexible)
+                period_end_ts = stripe_sub.get("current_period_end")
+
+                if not period_end_ts:
+                    items = (stripe_sub.get("items") or {}).get("data") or []
+                    per_item = []
+                    for it in items:
+                        ts = it.get("current_period_end")
+                        if not ts:
+                            curr = it.get("current_period")
+                            if curr:
+                                ts = curr.get("end")
+                        if ts:
+                            per_item.append(ts)
+                    if per_item:
+                        period_end_ts = max(per_item)
+
+                if not period_end_ts:
+                    latest_inv_id = stripe_sub.get("latest_invoice")
+                    if latest_inv_id:
+                        inv = stripe.Invoice.retrieve(latest_inv_id)
+                        period_end_ts = inv.get("period_end")
+
+                if period_end_ts:
+                    period_end_dt = datetime.datetime.fromtimestamp(period_end_ts, tz=datetime.timezone.utc)
+                else:
+                    period_end_dt = timezone.now() + relativedelta(months=1)  # last resort
+                    logger.warning("No period_end found for %s; defaulting to +1 month", stripe_subscription_id)
+
+                # 3) Map Stripe price -> local plan
+                items = (stripe_sub.get("items") or {}).get("data") or []
+                if not items:
+                    logger.error("Subscription %s has no items; cannot determine price/plan", stripe_subscription_id)
                     return Response(status=200)
 
-                # Fallback (rare): no subscription on session → try line_items
-                # This also helps you debug wrong price ids.
-                try:
-                    session_full = stripe.checkout.Session.retrieve(session["id"], expand=["line_items.data.price"])
-                    li = (session_full.get("line_items") or {}).get("data") or []
-                    price_id = li and (li[0].get("price") or {}).get("id")
-                    logger.info("[checkout] fallback price_id from line_items: %s", price_id)
-                    if price_id and shop_hint:
-                        try:
-                            plan = SubscriptionPlan.objects.get(stripe_price_id=price_id)
-                            ShopSubscription.objects.update_or_create(
-                                shop=shop_hint,
-                                defaults={
-                                    "plan": plan,
-                                    "status": ShopSubscription.STATUS_ACTIVE,
-                                    "stripe_subscription_id": None,  # unknown here
-                                    "start_date": timezone.now(),
-                                    "end_date": timezone.now() + relativedelta(months=1),
-                                },
-                            )
-                            logger.info("✅ Shop %s set to plan %s via CHECKOUT fallback", shop_hint.id, plan.name)
-                        except SubscriptionPlan.DoesNotExist:
-                            known = list(SubscriptionPlan.objects.values_list("name", "stripe_price_id"))
-                            logger.error("[checkout] fallback: no local plan for price_id=%s. Known: %s", price_id, known)
-                except Exception:
-                    logger.exception("[checkout] fallback retrieval failed")
+                price = items[0].get("price") or {}
+                stripe_price_id = price.get("id")
+                if not stripe_price_id:
+                    logger.error("Subscription %s item has no price.id", stripe_subscription_id)
+                    return Response(status=200)
 
+                try:
+                    plan = SubscriptionPlan.objects.get(stripe_price_id=stripe_price_id)
+                except SubscriptionPlan.DoesNotExist:
+                    logger.error("No local SubscriptionPlan with stripe_price_id=%s", stripe_price_id)
+                    return Response(status=200)
+
+                # 4) Resolve shop and upsert
+                try:
+                    shop_id = int(shop_ref)
+                except (TypeError, ValueError):
+                    logger.error("Invalid client_reference_id (not int): %r", shop_ref)
+                    return Response(status=200)
+
+                try:
+                    shop = Shop.objects.get(id=shop_id)
+                except Shop.DoesNotExist:
+                    logger.error("Shop id=%s not found", shop_id)
+                    return Response(status=200)
+
+                ShopSubscription.objects.update_or_create(
+                    shop=shop,
+                    defaults={
+                        "plan": plan,
+                        "status": ShopSubscription.STATUS_ACTIVE,
+                        "stripe_subscription_id": stripe_subscription_id,
+                        "start_date": timezone.now(),
+                        "end_date": period_end_dt,
+                    },
+                )
+                logger.info("✅ Shop %s moved to plan %s (until %s)", shop.id, plan.name, period_end_dt.isoformat())
                 return Response(status=200)
-            except Exception:
-                logger.exception("checkout.session.completed error")
-                return Response(status=500)
+
+            except Exception as e:
+                logger.exception("checkout.session.completed handler error: %r", e)
+                return Response(status=200)
 
 
-        # --- subscription lifecycle ---
-        if event_type in ("customer.subscription.created", "customer.subscription.updated"):
-            _update_shop_from_subscription_obj(data)
+        elif event_type == "invoice.payment_succeeded":
+            invoice = data
+            sub_id = invoice.get("subscription")
+            if not sub_id:
+                return Response(status=200)
+
+            try:
+                stripe_sub = stripe.Subscription.retrieve(sub_id)
+                items = (stripe_sub.get("items") or {}).get("data") or []
+                stripe_price_id = items and (items[0].get("price") or {}).get("id")
+                plan = stripe_price_id and SubscriptionPlan.objects.get(stripe_price_id=stripe_price_id)
+                shop_sub = ShopSubscription.objects.get(stripe_subscription_id=sub_id)
+                if plan and shop_sub.plan_id != plan.id:
+                    shop_sub.plan = plan
+                # keep it active and bump end_date from the invoice
+                pe = invoice.get("period_end")
+                if pe:
+                    shop_sub.end_date = datetime.datetime.fromtimestamp(invoice['period_end'], tz=datetime.timezone.utc)
+                shop_sub.status = ShopSubscription.STATUS_ACTIVE
+                shop_sub.save()
+            except (ShopSubscription.DoesNotExist, SubscriptionPlan.DoesNotExist):
+                pass
             return Response(status=200)
 
-        # --- invoice paid (support old/new names) ---
-        if event_type in ("invoice.payment_succeeded", "invoice.paid", "invoice_payment.paid"):
-            sub_id = data.get("subscription")
-            if sub_id:
-                try:
-                    sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
-                    _update_shop_from_subscription_obj(sub)
-                except Exception as e:
-                    logger.exception("invoice handler failed for %s: %s", sub_id, e)
-            return Response(status=200)
 
-        # --- subscription cancelled ---
-        if event_type == "customer.subscription.deleted":
+        elif event_type == "customer.subscription.deleted":
             stripe_sub = data
             try:
                 shop_sub = ShopSubscription.objects.get(stripe_subscription_id=stripe_sub['id'])
-                foundation = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
-                shop_sub.plan = foundation
+                foundation_plan = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                
+                shop_sub.plan = foundation_plan
                 shop_sub.status = ShopSubscription.STATUS_ACTIVE
                 shop_sub.stripe_subscription_id = None
                 shop_sub.end_date = timezone.now() + relativedelta(years=100)
                 shop_sub.save()
             except ShopSubscription.DoesNotExist:
-                pass
-            return Response(status=200)
+                pass # Subscription not tracked
 
-        logger.warning("⚠️ Unhandled event: %s", event_type)
+        else:
+            # Log unhandled events for debugging
+            print("⚠️ Unhandled event:", event_type)
+
         return Response(status=200)
 
     def _update_payment_status(self, stripe_obj, new_status):
+        """Helper to safely update your Payment model"""
         intent_id = stripe_obj.get("id")
         if stripe_obj.get("object") == "charge":
-            intent_id = stripe_obj.get("payment_intent")
+            intent_id = stripe_obj.get("payment_intent")  # link charge → intent
 
         try:
             payment = Payment.objects.get(stripe_payment_intent_id=intent_id)
             payment.status = new_status
             payment.save(update_fields=["status"])
-            logger.info("✅ Payment %s → %s", intent_id, new_status)
+            print(f"✅ Payment {intent_id} updated to {new_status}")
         except Payment.DoesNotExist:
-            logger.warning("⚠️ Payment with intent %s not found", intent_id)
+            print(f"⚠️ Payment with intent {intent_id} not found")
 
 class VerifyShopOnboardingView(APIView):
     permission_classes = [IsAuthenticated]
@@ -641,3 +687,4 @@ class TransactionLogListView(APIView):
 #         # Return coupon info
 #         coupon_data = CouponSerializer(serializer.instance).data
 #         return Response(coupon_data, status=status.HTTP_200_OK)
+

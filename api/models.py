@@ -53,7 +53,6 @@ class Shop(models.Model):
     free_cancellation_hours = models.PositiveIntegerField(default=24)
     cancellation_fee_percentage = models.PositiveIntegerField(default=50)
     no_refund_hours = models.PositiveIntegerField(default=4)
-    stripe_customer_id = models.CharField(max_length=255, blank=True, null=True)
     # --- End of New Fields ---
 
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
