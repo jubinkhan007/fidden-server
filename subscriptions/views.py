@@ -14,6 +14,8 @@ from api.models import Shop
 from .serializers import SubscriptionPlanSerializer
 from payments.models import UserStripeCustomer
 import logging
+from datetime import timezone as dt_timezone
+
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -64,121 +66,105 @@ class SubscriptionDetailsView(APIView):
         plan = None
         status = "none"
         renews_on = None
+        expires_on = None          # 👈 NEW
         cancel_at_period_end = False
         ai_state = "not_enabled"
         ai_legacy = False
 
-        # 1) Find the user's shop (if any)
+        # find shop
         try:
             shop = request.user.shop
         except Shop.DoesNotExist:
             shop = None
 
-        # 2) Prefer our DB (source of truth)
-        shop_sub = None
-        if shop:
-            shop_sub = getattr(shop, "subscription", None)
-            if shop_sub and shop_sub.plan:
-                plan = shop_sub.plan
-                # If we have a Stripe subscription id, we can ask Stripe for status/period_end
-                if shop_sub.stripe_subscription_id:
-                    try:
-                        s = stripe.Subscription.retrieve(shop_sub.stripe_subscription_id)
-                        status = s.get("status", "none")
-                        cpe = s.get("current_period_end")
-                        if cpe:
-                            renews_on = timezone.datetime.fromtimestamp(int(cpe), tz=timezone.utc).isoformat()
-                        cancel_at_period_end = bool(s.get("cancel_at_period_end"))
-                    except Exception:
-                        # If Stripe is unreachable, keep DB plan and default status
-                        pass
-                else:
-                    # No Stripe sub id → we treat as free/Foundation (status 'none')
-                    status = "none"
+        # Prefer DB
+        shop_sub = getattr(shop, "subscription", None) if shop else None
+        if shop_sub and shop_sub.plan:
+            plan = shop_sub.plan
+            # if you store a long free-plan expiry, surface it; otherwise None
+            if shop_sub.end_date:
+                expires_on = shop_sub.end_date.astimezone(dt_timezone.utc).isoformat()
 
-        # 3) If we still didn't determine a plan from DB, fallback to Stripe (only active-ish)
-        if plan is None and shop:
-            customer_id = getattr(shop, "stripe_customer_id", None)
-            if customer_id:
+
+            if shop_sub.stripe_subscription_id:
                 try:
-                    subs = stripe.Subscription.list(
-                        customer=customer_id,
-                        status="all",
-                        expand=["data.items.data.price"],  # keep depth <= 4
-                        limit=20,
-                    )
-                    # pick only “current” statuses
-                    ALLOWED = {"active", "trialing", "past_due"}
-                    chosen = None
-                    best_score = -1
-                    priority = {"active": 3, "trialing": 2, "past_due": 1}
-                    for s in subs.get("data", []):
-                        st = s.get("status")
-                        if st not in ALLOWED:
-                            continue
-                        sc = priority.get(st, 0)
-                        if sc > best_score:
-                            chosen, best_score = s, sc
-
-                    if chosen:
-                        status = chosen.get("status", "none")
-                        cpe = chosen.get("current_period_end")
-                        if cpe:
-                            renews_on = timezone.datetime.fromtimestamp(int(cpe), tz=timezone.utc).isoformat()
-                        cancel_at_period_end = bool(chosen.get("cancel_at_period_end"))
-
-                        price_ids = [it["price"]["id"] for it in chosen["items"]["data"]]
-                        base_plan = (SubscriptionPlan.objects
-                                     .filter(stripe_price_id__in=price_ids)
-                                     .order_by("id")
-                                     .first())
-                        if base_plan:
-                            plan = base_plan
-
-                        if ai_price_id and ai_price_id in price_ids:
-                            ai_state = "addon_active"
-
-                        # Optional: legacy promo example
-                        discount = chosen.get("discount")
-                        promo_id = discount.get("promotion_code") if discount else None
-                        if promo_id:
-                            try:
-                                promo = stripe.PromotionCode.retrieve(promo_id)
-                                if promo and promo.get("code") == "LEGACY500":
-                                    ai_legacy = True
-                                    ai_state = "included"
-                            except Exception:
-                                pass
+                    s = stripe.Subscription.retrieve(shop_sub.stripe_subscription_id)
+                    status = s.get("status", "none")
+                    cpe = s.get("current_period_end")
+                    if cpe:
+                        # Next billing date (and also the end of the current period)
+                        renews_on = timezone.datetime.fromtimestamp(int(cpe), tz=dt_timezone.utc).isoformat()
+                        expires_on = renews_on  # 👈 NEW: Stripe period end
+                    cancel_at_period_end = bool(s.get("cancel_at_period_end"))
                 except Exception:
-                    # Stripe unreachable – ignore
                     pass
+            else:
+                status = "none"
 
-        # 4) Final fallback → Foundation
+        # If plan still None, optionally fall back to Stripe (active-ish only)…
+        if plan is None and shop and getattr(shop, "stripe_customer_id", None):
+            try:
+                subs = stripe.Subscription.list(
+                    customer=shop.stripe_customer_id,
+                    status="all",
+                    expand=["data.items.data.price"],
+                    limit=20,
+                )
+                ALLOWED = {"active", "trialing", "past_due"}
+                priority = {"active": 3, "trialing": 2, "past_due": 1}
+                chosen, best = None, -1
+                for s in subs.get("data", []):
+                    st = s.get("status")
+                    if st not in ALLOWED:
+                        continue
+                    sc = priority.get(st, 0)
+                    if sc > best:
+                        chosen, best = s, sc
+
+                if chosen:
+                    status = chosen.get("status", "none")
+                    cpe = chosen.get("current_period_end")
+                    if cpe:
+                        renews_on = timezone.datetime.fromtimestamp(int(cpe), tz=dt_timezone.utc).isoformat()
+                        expires_on = renews_on  # 👈 NEW
+                    cancel_at_period_end = bool(chosen.get("cancel_at_period_end"))
+
+                    price_ids = [it["price"]["id"] for it in chosen["items"]["data"]]
+                    base_plan = (SubscriptionPlan.objects
+                                 .filter(stripe_price_id__in=price_ids)
+                                 .order_by("id").first())
+                    if base_plan:
+                        plan = base_plan
+
+                    ai_price_id and ai_price_id in price_ids and (ai_state := "addon_active")
+            except Exception:
+                pass
+
+        # Final fallback → Foundation
         if plan is None:
             plan = (SubscriptionPlan.objects.filter(name__iexact=SubscriptionPlan.FOUNDATION).first()
                     or SubscriptionPlan.objects.order_by("id").first())
             status = "none"
-            renews_on = None
-            cancel_at_period_end = False
+            renews_on = renews_on or None
+            # keep expires_on as-is (may be None or long free-plan date if set above)
 
-        # 5) AI state from plan
+        # AI override if plan includes it
         if getattr(plan, "ai_assistant", "") == "included":
             ai_state = "included"
 
-        # 6) Commission: use the plan’s value, default only if truly missing
-        commission = plan.commission_rate
-        if commission is None:
-            commission = Decimal("0.10")
+        commission = plan.commission_rate if plan.commission_rate is not None else Decimal("0.10")
 
         payload = {
             "plan": SubscriptionPlanSerializer(plan).data,
             "status": status,
             "renews_on": renews_on,
+            "expires_on": expires_on,             # 👈 NEW in response
             "cancel_at_period_end": cancel_at_period_end,
             "commission_rate": str(commission),
             "ai": {"state": ai_state, "legacy": ai_legacy, "price_id": ai_price_id},
         }
         return Response(payload, status=200)
+
 
 class SubscriptionPlanListView(APIView):
     """
