@@ -50,13 +50,15 @@ def _android_cfg() -> messaging.AndroidConfig:
 
 def _apns_cfg(title: str, body: str) -> messaging.APNSConfig:
     return messaging.APNSConfig(
-        headers={"apns-push-type": "alert", "apns-priority": "10"},
+        headers={"apns-push-type": "alert", "apns-priority": "10", "apns-push-type": "background","apns-priority": "5"},
         payload=messaging.APNSPayload(
             aps=messaging.Aps(
                 alert=messaging.ApsAlert(title=title, body=body),
                 sound="default",
                 badge=1,
+                content_available=True,
             )
+
         ),
     )
 
@@ -77,7 +79,17 @@ def send_push_notification(
         if debug:
             print("Firebase Admin not configured; skipping push.")
         return
+    print(f"DEBUG: Sending notification - Title: '{title}', Message: '{message}'")
 
+    #ensuring we have a valid message
+    if not message or not isinstance(message, str):
+        message = "New notification"  # Fallback message
+
+    #ensuring we have a valid title
+    if not title or not isinstance(title, str):
+        title = "New notification"  # Fallback title
+
+    #adding a log for check if the notification is being sent
     tokens: List[str] = [d.fcm_token for d in user.devices.all() if _valid(getattr(d, "fcm_token", ""))]
     if not tokens:
         if debug:
@@ -85,7 +97,7 @@ def send_push_notification(
         return
 
     # FCM requires string values in data
-    data_map = _stringify(data)
+    data_map = _stringify(data or {})
     # Keep title/body in notification (shown by system), *not* only in data
     note = messaging.Notification(title=title, body=message)
 
