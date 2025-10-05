@@ -19,5 +19,11 @@ venv/
 #service_account_fcm
 service_account_fcm.json
 
+<<<<<<< HEAD
 .env__pycache__/
 *.pyc
+=======
+.env
+
+/.idea*/*
+>>>>>>> Omi
