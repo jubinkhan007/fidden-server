@@ -1,0 +1,9 @@
+#docker run & build
+docker-compose up -d --build
+
+#makemigrations
+docker-compose exec web python manage.py makemigrations
+docker-compose exec web python manage.py migrate
+
+# for watching container logs
+docker-compose logs -f web  
