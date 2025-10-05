@@ -67,31 +67,32 @@ def _apns_cfg(title: str, body: str) -> messaging.APNSConfig:
 def _valid(token: str) -> bool:
     return bool(token) and len(token) > 50
 
+
 def send_push_notification(
-    user,
-    title: str,
-    message: str,
-    data: Optional[Dict[str, Any]] = None,
-    *,
-    debug: bool = False,
-    dry_run: bool = False,
+        user,
+        title: str,
+        message: str,
+        data: Optional[Dict[str, Any]] = None,
+        *,
+        debug: bool = False,
+        dry_run: bool = False,
 ) -> None:
     _init_firebase()
     if not firebase_admin._apps:
         if debug:
             print("Firebase Admin not configured; skipping push.")
         return
+
     print(f"DEBUG: Sending notification - Title: '{title}', Message: '{message}'")
 
-    #ensuring we have a valid message
+    # Ensure we have a valid message
     if not message or not isinstance(message, str):
-        message = "New notification"  # Fallback message
+        message = "New notification"
 
-    #ensuring we have a valid title
+    # Ensure we have a valid title
     if not title or not isinstance(title, str):
-        title = "New notification"  # Fallback title
+        title = "New Message"
 
-    #adding a log for check if the notification is being sent
     tokens: List[str] = [d.fcm_token for d in user.devices.all() if _valid(getattr(d, "fcm_token", ""))]
     if not tokens:
         if debug:
@@ -100,37 +101,37 @@ def send_push_notification(
 
     # FCM requires string values in data
     data_map = _stringify(data or {})
-    # Keep title/body in notification (shown by system), *not* only in data
-    note = messaging.Notification(title=title, body=message)
+
+    # Create a notification with both title and body
+    notification = messaging.Notification(
+        title=title,
+        body=message,
+    )
 
     android = _android_cfg()
     apns = _apns_cfg(title, message)
 
-    # Use multicast to fan out in one request
-    msg = messaging.MulticastMessage(
-        tokens=tokens,
-        notification=note,
-        data=data_map,
-        android=android,
-        apns=apns,
-        fcm_options=messaging.FCMOptions(analytics_label="chat"),
-    )
+    try:
+        # Send to each token individually
+        for token in tokens:
+            message = messaging.Message(
+                token=token,
+                notification=notification,
+                data=data_map,
+                android=android,
+                apns=apns,
+            )
+            try:
+                response = messaging.send(message, dry_run=dry_run)
+                print(f"Successfully sent message: {response}")
+            except Exception as e:
+                print(f"Error sending message to token {token}: {e}")
+                # Optionally, remove invalid tokens from the database
+                # user.devices.filter(fcm_token=token).delete()
 
-    resp = messaging.send_multicast(msg, dry_run=dry_run)
-    if debug:
-        print(f"FCM multicast: success={resp.success_count} failure={resp.failure_count}")
-        for i, r in enumerate(resp.responses):
-            if not r.success:
-                print(" ->", tokens[i], r.exception)
-
-    # Clean up invalid tokens
-    for idx, r in enumerate(resp.responses):
-        if not r.success:
-            err = getattr(r.exception, "code", "")
-            if err in ("registration-token-not-registered", "invalid-argument"):
-                user.devices.filter(fcm_token=tokens[idx]).update(fcm_token="")
-                if debug:
-                    print(f"Removed invalid token {tokens[idx]}")
+    except Exception as e:
+        print(f"Error in send_push_notification: {e}")
+        traceback.print_exc()
 
 def notify_user(
     user,
