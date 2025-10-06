@@ -14,7 +14,7 @@ def _init_firebase() -> None:
         svc = getattr(settings, "FCM_SERVICE_ACCOUNT_JSON", None)
 
         if not svc:
-            print("❌ FCM_SERVICE_ACCOUNT_JSON not found in settings.")
+            print("FCM_SERVICE_ACCOUNT_JSON not found in settings.")
             return
 
         print("🔍 Attempting to initialize Firebase with config...")
@@ -55,13 +55,13 @@ def _apns_cfg(title: str, body: str) -> messaging.APNSConfig:
         ##old setup##
         # headers={"apns-push-type": "alert", "apns-priority": "10", "apns-push-type": "background","apns-priority": "5"},
         ##new header###
-        headers={ "apns-push-type": "background", "apns-priority": "5"},
+        headers={ "apns-push-type": "alert", "apns-priority": "10"},
         payload=messaging.APNSPayload(
             aps=messaging.Aps(
                 alert=messaging.ApsAlert(title=title, body=body),
                 sound="default",
                 badge=1,
-                content_available=True,
+                # content_available=True,
             )
 
         ),
@@ -117,7 +117,7 @@ def send_push_notification(
     try:
         # Send to each token individually
         for token in tokens:
-            message = messaging.Message(
+            fcm_message = messaging.Message(
                 token=token,
                 notification=notification,
                 data=data_map,
@@ -125,7 +125,7 @@ def send_push_notification(
                 apns=apns,
             )
             try:
-                response = messaging.send(message, dry_run=dry_run)
+                response = messaging.send(fcm_message, dry_run=dry_run)
                 print(f"Successfully sent message: {response}")
             except Exception as e:
                 print(f"Error sending message to token {token}: {e}")
