@@ -54,6 +54,15 @@ class Payment(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    # Amount that has been actually paid toward the booking's balance (defaults 0).
+    balance_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    deposit_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    payment_type = models.CharField(max_length=20, default='full')
+    tips_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    application_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
     coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, blank=True, null=True, related_name='payment_coupon',
         help_text="Coupon applied to this payment"
     )
