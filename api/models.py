@@ -38,6 +38,29 @@ class Shop(models.Model):
         help_text="List of closed days (e.g., ['monday', 'tuesday'])"
     )
 
+    #default value for all the shops
+    default_is_deposit_required = models.BooleanField(
+        default=True,
+        help_text="Default setting for whether deposits are required for new services"
+    )
+
+    default_deposit_type = models.CharField(
+        max_length=10,
+        choices=[('fixed', 'Fixed Amount'), ('percentage', 'Percentage')],
+        default='percentage',
+        null=True,
+        blank=True,
+        help_text="Default deposit type for new services"
+    )
+
+    default_deposit_percentage = models.PositiveIntegerField(
+        default=20,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(100)],
+        help_text="Default percentage deposit for new services"
+    )
+
     # ✅ new field
     status = models.CharField(
         max_length=10,
@@ -82,6 +105,64 @@ class Shop(models.Model):
             'performance_analytics': 'none',
             'ghost_client_reengagement': False,
         }
+
+
+    ## New method toa add default value to the shop but subscription based
+    def apply_plan_defaults(self, overwrite=False):
+        """
+        Apply plan-based defaults from GlobalSettings to this shop.
+
+        overwrite=False will only fill values if they are empty/zero.
+        """
+        from .models import GlobalSettings  # local import to avoid circulars
+        settings = GlobalSettings.get_settings()
+
+        plan = None
+        if hasattr(self, 'subscription') and self.subscription and self.subscription.plan:
+            plan = self.subscription.plan.name
+
+        # Defaults from GlobalSettings
+        dep_required = settings.default_deposit_required
+        dep_type = settings.default_deposit_type
+        dep_pct = settings.default_deposit_percentage
+        # dep_amount = settings.default_deposit_amount
+
+        free_cancel = settings.default_free_cancellation_hours
+        cancel_fee = settings.default_cancellation_fee_percentage
+        no_refund = settings.default_no_refund_hours
+
+        def set_field(field_name, value):
+            current = getattr(self, field_name, None)
+            if overwrite:
+                setattr(self, field_name, value)
+            else:
+                # Only apply if empty/zero/None
+                if current in (None, 0, 0.0, '') or (isinstance(current, bool) and current is False):
+                    setattr(self, field_name, value)
+
+        if plan == 'Foundation':
+            # Apply all defaults
+            set_field('is_deposit_required', dep_required)
+            if dep_type == 'percentage':
+                set_field('deposit_amount', 0)  # ensure fixed is zero when using percent
+            set_field('free_cancellation_hours', free_cancel)
+            set_field('cancellation_fee_percentage', cancel_fee)
+            set_field('no_refund_hours', no_refund)
+
+        elif plan == 'Momentum':
+            # Only deposit amount default
+            # set_field('deposit_amount', dep_amount)
+            pass
+
+        # Icon: do nothing
+
+        self.save(update_fields=[
+            'is_deposit_required',
+            'deposit_amount',
+            'free_cancellation_hours',
+            'cancellation_fee_percentage',
+            'no_refund_hours',
+        ])
 
     def save(self, *args, **kwargs):
         # Auto-update is_verified based on status
@@ -157,6 +238,38 @@ class Service(models.Model):
         help_text="Maximum number of people who can take this service at a time"
     )
     is_active = models.BooleanField(default=True)
+
+    ##new method
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        if is_new and self.shop:
+            # apply service-level defaults on create based on shop plan
+            from .models import GlobalSettings
+            settings = GlobalSettings.get_settings()
+
+            plan = None
+            if hasattr(self.shop, 'subscription') and self.shop.subscription and self.shop.subscription.plan:
+                plan = self.shop.subscription.plan.name
+
+            if plan == 'Foundation':
+                if self.is_deposit_required is False:
+                    self.is_deposit_required = settings.default_deposit_required
+                if not self.deposit_type:
+                    self.deposit_type = settings.default_deposit_type
+                if self.deposit_type == 'percentage' and (not self.deposit_percentage):
+                    self.deposit_percentage = settings.default_deposit_percentage
+                # if self.deposit_type == 'fixed' and (not self.deposit_amount):
+                #     self.deposit_amount = settings.default_deposit_amount
+
+            elif plan == 'Momentum':
+                # only deposit amount default
+                if not self.deposit_type:
+                    self.deposit_type = 'percentage'
+                if self.deposit_type == 'percentage' and (not self.deposit_percentage):
+                    self.deposit_percentage = settings.default_deposit_percentage
+            # Icon: do nothing
+
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.title} ({self.shop.name})"
@@ -481,3 +594,56 @@ class Coupon(models.Model):
         if self.validity_date < timezone.now().date():
             self.is_active = False
         super().save(*args, **kwargs)
+
+
+## new global settings model
+class GlobalSettings(models.Model):
+    """
+    Global default settings that apply to all shops regardless of subscription plan.
+    Admin can change these values to affect all shops.
+    """
+    # Deposit defaults
+    default_deposit_required = models.BooleanField(
+        default=True,
+        help_text="Default: Is deposit required for all shops?"
+    )
+    default_deposit_type = models.CharField(
+        max_length=10,
+        choices=[('fixed', 'Fixed Amount'), ('percentage', 'Percentage')],
+        default='percentage',
+        help_text="Default deposit type for all shops"
+    )
+    default_deposit_percentage = models.PositiveIntegerField(
+        default=20,
+        validators=[MinValueValidator(1), MaxValueValidator(100)],
+        help_text="Default percentage deposit (e.g., 20 means 20%)"
+    )
+    
+
+    # Cancellation policy defaults
+    default_free_cancellation_hours = models.PositiveIntegerField(
+        default=24,
+        help_text="Default hours before booking for free cancellation"
+    )
+    default_cancellation_fee_percentage = models.PositiveIntegerField(
+        default=50,
+        help_text="Default cancellation fee percentage"
+    )
+    default_no_refund_hours = models.PositiveIntegerField(
+        default=4,
+        help_text="Default hours before booking when no refund is given"
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Global Settings"
+        verbose_name_plural = "Global Settings"
+
+    def __str__(self):
+        return f"Global Settings (Updated: {self.updated_at})"
+
+    @classmethod
+    def get_settings(cls):
+        settings, _ = cls.objects.get_or_create(pk=1)
+        return settings

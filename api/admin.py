@@ -15,7 +15,8 @@ from .models import (
     Device, 
     Notification,
     Revenue,
-    Coupon
+    Coupon,
+    GlobalSettings
 )
 
 
@@ -82,6 +83,32 @@ class ShopAdmin(admin.ModelAdmin):
         """Superusers can modify all fields, regular staff have restrictions"""
         if request.user.is_superuser:
             return ['is_verified']  # Only verification status is readonly for superusers
+        
+         # Fields controlled by plan
+        deposit_fields = ['is_deposit_required', 'deposit_amount']
+        cancellation_fields = ['free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours']
+
+        # On add view (obj is None), be conservative like Foundation
+        if obj is None:
+            return ['is_verified'] + deposit_fields + cancellation_fields
+
+        
+        # Determine current plan (if any)
+        plan_name = None
+        if getattr(obj, 'subscription', None) and obj.subscription.is_active and obj.subscription.plan:
+            plan_name = obj.subscription.plan.name
+
+        # Foundation: no modification on deposit/cancellation
+        if plan_name == 'Foundation':
+            return ['is_verified'] + deposit_fields + cancellation_fields
+
+        # Momentum: only deposit_amount editable; keep others readonly
+        if plan_name == 'Momentum':
+            return ['is_verified'] + ['is_deposit_required'] + cancellation_fields
+
+        # Icon (or anything else): full control except verification
+        return ['is_verified']
+
         
         # Regular staff cannot modify deposit/cancellation settings
         return [
@@ -276,3 +303,29 @@ class CouponAdmin(admin.ModelAdmin):
         """Show related services as comma-separated titles."""
         return ", ".join(service.title for service in obj.services.all())
     display_services.short_description = "Services"             
+
+
+## new default value settings for admin which is gonna apply for all shop
+
+
+# Add this at the end of admin.py
+@admin.register(GlobalSettings)
+class GlobalSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+    'default_deposit_required',
+    'default_deposit_percentage',
+    'default_free_cancellation_hours',
+    'default_cancellation_fee_percentage',
+    'default_no_refund_hours',
+    'updated_at',
+    )
+    search_fields = ()
+    ordering = ('-updated_at',)
+
+    def has_add_permission(self, request):
+        # Only allow one settings instance
+        return not GlobalSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        # Don't allow deletion
+        return False

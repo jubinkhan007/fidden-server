@@ -125,3 +125,13 @@ def create_default_subscription_for_new_shop(sender, instance, created, **kwargs
             end_date=timezone.now() + relativedelta(years=100), # Long duration for free plan
             status=ShopSubscription.STATUS_ACTIVE
         )
+
+        instance.apply_plan_defaults(overwrite=False)
+@receiver(post_save, sender=ShopSubscription)
+def apply_defaults_on_subscription_change(sender, instance, created, **kwargs):
+    """
+    When a shop gets/updates a subscription, apply the correct defaults.
+    We don't overwrite user-changed values; we only fill empties by default.
+    """
+    if instance.shop:
+        instance.shop.apply_plan_defaults(overwrite=False)
