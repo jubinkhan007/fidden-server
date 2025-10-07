@@ -74,7 +74,6 @@ class Shop(models.Model):
 
     is_deposit_required = models.BooleanField(default=False, help_text="Is a deposit required for booking?")
     deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
-    # --- End of New Fields ---
 
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
 
@@ -381,7 +380,12 @@ class Slot(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.shop.name} · {self.service.title} · {timezone.localtime(self.start_time)}"
+        # Avoid self.shop.name / self.service.title (relation hits)
+        try:
+            dt = timezone.localtime(self.start_time)
+        except Exception:
+            dt = self.start_time
+        return f"Slot #{self.pk} @ {dt:%Y-%m-%d %H:%M}"
 
 class SlotBooking(models.Model):
     STATUS_CHOICES = [
@@ -419,7 +423,12 @@ class SlotBooking(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.user} → {self.service.title} @ {self.shop.name} ({timezone.localtime(self.start_time)})"
+        # Avoid self.user / self.service.title / self.shop.name
+        try:
+            dt = timezone.localtime(self.start_time)
+        except Exception:
+            dt = self.start_time
+        return f"Booking #{self.pk} @ {dt:%Y-%m-%d %H:%M}"
 
 
 # NEW: only time-of-day per service to disable across ALL dates

@@ -55,8 +55,16 @@ class Payment(models.Model):
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     is_deposit = models.BooleanField(default=False)
-    deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     remaining_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    # Amount that has been actually paid toward the booking's balance (defaults 0).
+    balance_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    deposit_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    payment_type = models.CharField(max_length=20, default='full')
+    tips_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    application_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
     coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, blank=True, null=True, related_name='payment_coupon',
         help_text="Coupon applied to this payment"
     )
@@ -69,7 +77,7 @@ class Payment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Payment {self.id} for {self.booking}"
+        return f"Payment #{self.pk}"
 
 # -----------------------------
 # Refund Table
@@ -91,7 +99,7 @@ class Refund(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Refund {self.id} for Payment {self.payment_id}"
+        return f"Refund #{self.pk} for Payment #{self.payment_id}"
 
 # -----------------------------
 # Booking Table
@@ -274,91 +282,101 @@ def handle_payment_status(sender, instance, created, **kwargs):
 
         # ---------------- Payment Succeeded ----------------
         if instance.status == "succeeded":
-            if instance.status == "succeeded":
-                # Update SlotBooking payment status
-                if slot_booking.payment_status != "success":
-                    slot_booking.payment_status = "success"
-                    slot_booking.save(update_fields=["payment_status"])
+            # Update SlotBooking payment status
+            if slot_booking.payment_status != "success":
+                slot_booking.payment_status = "success"
+                slot_booking.save(update_fields=["payment_status"])
                     
             # Create Booking if not exists
-            if not hasattr(instance, "booking_record"):
-                Booking.objects.create(
-                    payment=instance,
-                    user=instance.user,
-                    shop=instance.booking.shop,
-                    slot=instance.booking,
-                    status="active",
-                    stripe_payment_intent_id=instance.stripe_payment_intent_id
-                )
-                
-            try:
-                start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
-                end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
-                shop_name = shop.name
-                service_title = slot_booking.service.title
-                customer_name = instance.user.name or instance.user.email
+            # Create Booking exactly once for this Payment
+            booking_obj, created_booking = Booking.objects.get_or_create(
+                payment=instance,
+                defaults={
+                    "user": instance.user,
+                    "shop": instance.booking.shop,
+                    "slot": instance.booking,
+                    "status": "active",
+                    "stripe_payment_intent_id": instance.stripe_payment_intent_id,
+                },
+            )
 
-                from_email = settings.DEFAULT_FROM_EMAIL
-                to_email = [slot_booking.shop.owner.email]
-                subject = "New Appointment Booked"
+            # Update SlotBooking payment status (safe to run multiple times)
+            slot_booking = instance.booking
+            if slot_booking.payment_status != "success":
+                slot_booking.payment_status = "success"
+                slot_booking.save(update_fields=["payment_status"])
 
-                owner_message = (
-                    f"Hello {slot_booking.shop.owner.name or 'Shop Owner'},\n\n"
-                    f"A new appointment has been booked.\n\n"
-                    f"👤 Customer: {customer_name}\n"
-                    f"🏬 Shop: {shop_name}\n"
-                    f"💆 Service: {service_title}\n"
-                    f"🗓 Date & Time: {start_time} – {end_time}\n\n"
-                    f"Please prepare accordingly."
-                )
+            if created_booking:
+                try:
+                    start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
+                    end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
+                    shop_name = shop.name
+                    service_title = slot_booking.service.title
+                    customer_name = instance.user.name or instance.user.email
 
-                send_mail(subject, owner_message, from_email, to_email)
-            except Exception as email_error:
-                logger.error(
-                    "Failed to send email to shop owner %s: %s\n%s",
-                    shop.owner.id if shop.owner else "unknown",
-                    str(email_error),
-                    traceback.format_exc()
-                )
+                    from_email = settings.DEFAULT_FROM_EMAIL
+                    to_email = [slot_booking.shop.owner.email]
+                    subject = "New Appointment Booked"
 
-            try:
-                # ✅ Push notification to shop owner
-                notify_user(
-                    shop.owner,
-                    message=(
-                        f"New appointment from {customer_name} for {service_title} "
-                        f"on {start_time}."
-                    ),
-                    notification_type="booking",
-                    data={
-                        "shop_id": shop.id,
-                        "booking_id": slot_booking.id,
-                        "service": service_title,
-                        "start_time": str(slot_booking.start_time),
-                        "end_time": str(slot_booking.end_time),
-                    },
-                    debug=True
-                )
-            except Exception as notify_error:
-                logger.error(
-                    "Failed to send push notification to shop owner %s: %s\n%s",
-                    shop.owner.id if shop.owner else "unknown",
-                    str(notify_error),
-                    traceback.format_exc()
-                )
+                    owner_message = (
+                        f"Hello {slot_booking.shop.owner.name or 'Shop Owner'},\n\n"
+                        f"A new appointment has been booked.\n\n"
+                        f"👤 Customer: {customer_name}\n"
+                        f"🏬 Shop: {shop_name}\n"
+                        f"💆 Service: {service_title}\n"
+                        f"🗓 Date & Time: {start_time} – {end_time}\n\n"
+                        f"Please prepare accordingly."
+                    )
+
+                    send_mail(subject, owner_message, from_email, to_email)
+                except Exception as email_error:
+                    logger.error(
+                        "Failed to send email to shop owner %s: %s\n%s",
+                        shop.owner.id if shop.owner else "unknown",
+                        str(email_error),
+                        traceback.format_exc()
+                    )
+
+                try:
+                    # ✅ Push notification to shop owner
+                    notify_user(
+                        shop.owner,
+                        message=(
+                            f"New appointment from {customer_name} for {service_title} "
+                            f"on {start_time}."
+                        ),
+                        notification_type="booking",
+                        data={
+                            "shop_id": shop.id,
+                            "booking_id": slot_booking.id,
+                            "service": service_title,
+                            "start_time": str(slot_booking.start_time),
+                            "end_time": str(slot_booking.end_time),
+                        },
+                        debug=True
+                    )
+                except Exception as notify_error:
+                    logger.error(
+                        "Failed to send push notification to shop owner %s: %s\n%s",
+                        shop.owner.id if shop.owner else "unknown",
+                        str(notify_error),
+                        traceback.format_exc()
+                    )
             # Create payment TransactionLog if not exists
             if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
-                TransactionLog.objects.create(
-                    transaction_type="payment",
-                    payment=instance,
-                    user=instance.user,
-                    shop=instance.booking.shop,
-                    slot=instance.booking,
-                    service=instance.booking.service,
-                    amount=instance.amount,
-                    currency=instance.currency,
-                    status=instance.status,
-                )
+                TransactionLog.objects.get_or_create(
+                transaction_type="payment",
+                payment=instance,
+                defaults={
+                    "user": instance.user,
+                    "shop": instance.booking.shop,
+                    "slot": instance.booking,
+                    "service": instance.booking.service,
+                    "amount": instance.amount,
+                    "currency": instance.currency,
+                    "status": instance.status,
+                },
+            )
         # ---------------- Payment Refunded ----------------
         elif instance.status == "refunded":
             if hasattr(instance, "booking_record"):
