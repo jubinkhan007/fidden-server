@@ -50,10 +50,6 @@ class Shop(models.Model):
 
     is_deposit_required = models.BooleanField(default=False, help_text="Is a deposit required for booking?")
     deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
-    free_cancellation_hours = models.PositiveIntegerField(default=24)
-    cancellation_fee_percentage = models.PositiveIntegerField(default=50)
-    no_refund_hours = models.PositiveIntegerField(default=4)
-    # --- End of New Fields ---
 
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
 
