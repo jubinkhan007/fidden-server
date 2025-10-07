@@ -1,3 +1,4 @@
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.conf import settings
 from datetime import timedelta
@@ -50,9 +51,6 @@ class Shop(models.Model):
 
     is_deposit_required = models.BooleanField(default=False, help_text="Is a deposit required for booking?")
     deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
-    free_cancellation_hours = models.PositiveIntegerField(default=24)
-    cancellation_fee_percentage = models.PositiveIntegerField(default=50)
-    no_refund_hours = models.PositiveIntegerField(default=4)
     # --- End of New Fields ---
 
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
@@ -126,6 +124,29 @@ class Service(models.Model):
     discount_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True,  default=0)
     description = models.TextField(blank=True, null=True)
     service_img = models.ImageField(upload_to='services/', blank=True, null=True)
+
+    ## adding new field for experimental
+    # Deposit settings
+    is_deposit_required = models.BooleanField(default=False)
+    deposit_type = models.CharField(
+        max_length=10,
+        choices=[('fixed', 'Fixed Amount'), ('percentage', 'Percentage')],
+        null=True,
+        blank=True
+    )
+    deposit_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Fixed deposit amount (if deposit_type is 'fixed')"
+    )
+    deposit_percentage = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(100)],
+        help_text="Percentage deposit (if deposit_type is 'percentage')"
+    )
     duration = models.PositiveIntegerField(
         blank=True,
         null=True,
