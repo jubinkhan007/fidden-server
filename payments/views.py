@@ -66,27 +66,38 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
         return
 
     # Resolve shop if not passed
+    # Resolve shop if not passed
     shop = shop_hint
+
+    # A) First, use subscription metadata (set during checkout)
     if not shop:
-        # 1) Try by subscription id already saved
+        meta = sub_obj.get("metadata") or {}
+        shop_id_meta = meta.get("shop_id")
+        if shop_id_meta:
+            try:
+                shop = Shop.objects.get(id=int(shop_id_meta))
+            except Exception:
+                shop = None
+
+    # B) Then, any existing ShopSubscription record that already linked this subscription
+    if not shop:
         ss = ShopSubscription.objects.filter(stripe_subscription_id=sub_obj["id"]).select_related("shop").first()
         if ss:
             shop = ss.shop
-        else:
-            # 2) Try by customer id -> Shop.stripe_customer_id
-            cust_id = sub_obj.get("customer")
-            if cust_id:
-                shop = Shop.objects.filter(stripe_customer_id=cust_id).first()
-            # 3) Last fallback: owner’s saved customer mapping
-            if not shop and cust_id:
-                from payments.models import UserStripeCustomer
-                usc = UserStripeCustomer.objects.filter(stripe_customer_id=cust_id).select_related("user").first()
-                if usc and hasattr(usc.user, "shop"):
-                    shop = usc.user.shop
+
+    # C) Finally, map Stripe customer -> owner -> shop
+    if not shop:
+        cust_id = sub_obj.get("customer")
+        if cust_id:
+            usc = UserStripeCustomer.objects.filter(stripe_customer_id=cust_id).select_related("user").first()
+            if usc:
+                # If an owner can have multiple shops, refine this selection if needed.
+                shop = Shop.objects.filter(owner=usc.user).order_by("id").first()
 
     if not shop:
         logger.error("Could not resolve shop for subscription %s", sub_obj.get("id"))
         return
+
 
     # Compute period end
     period_end_ts = sub_obj.get("current_period_end")
@@ -453,6 +464,13 @@ class StripeWebhookView(APIView):
                     # Normal path: fetch subscription, map by subscription price
                     sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
                     _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
+                    try:
+                        current_meta = sub.get("metadata") or {}
+                        if shop_hint and str(current_meta.get("shop_id")) != str(shop_hint.id):
+                            stripe.Subscription.modify(sub["id"], metadata={**current_meta, "shop_id": str(shop_hint.id)})
+                    except Exception:
+                        logger.exception("Failed to set subscription metadata.shop_id")
+
                     return Response(status=200)
 
                 # Fallback (rare): no subscription on session → try line_items

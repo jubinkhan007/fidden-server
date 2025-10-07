@@ -29,32 +29,20 @@ def _get_customer_id(user):
 
 def _ensure_shop_customer_id(shop) -> str:
     """
-    Ensure there's a Stripe Customer (on the platform account) for the shop OWNER,
-    persist that id onto the Shop, and return it.
+    Ensure there's a Stripe Customer for the SHOP OWNER and return its id.
+    We do NOT rely on or write any field on Shop.
     """
-    # Fast path: already saved on Shop
-    cid = getattr(shop, "stripe_customer_id", None)
-    if cid:
-        return cid
-
-    # Reuse/ensure the owner's customer
     owner = shop.owner
     usc, _ = UserStripeCustomer.objects.get_or_create(user=owner)
     if not usc.stripe_customer_id:
         sc = stripe.Customer.create(
             email=owner.email,
             name=getattr(owner, "name", "") or owner.email,
+            metadata={"user_id": str(owner.id)},
         )
         usc.stripe_customer_id = sc.id
         usc.save(update_fields=["stripe_customer_id"])
-
-    # Mirror to Shop for quick lookup next time
-    if shop.stripe_customer_id != usc.stripe_customer_id:
-        shop.stripe_customer_id = usc.stripe_customer_id
-        shop.save(update_fields=["stripe_customer_id"])
-
-    return shop.stripe_customer_id
-
+    return usc.stripe_customer_id
 
 class SubscriptionDetailsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -102,10 +90,11 @@ class SubscriptionDetailsView(APIView):
                 status = "none"
 
         # If plan still None, optionally fall back to Stripe (active-ish only)…
-        if plan is None and shop and getattr(shop, "stripe_customer_id", None):
+        if plan is None and shop:
             try:
+                owner_cus = _ensure_shop_customer_id(shop)
                 subs = stripe.Subscription.list(
-                    customer=shop.stripe_customer_id,
+                    customer=owner_cus,
                     status="all",
                     expand=["data.items.data.price"],
                     limit=20,
@@ -201,13 +190,19 @@ class CreateSubscriptionCheckoutSessionView(APIView):
             customer_id = _ensure_shop_customer_id(shop)
 
             checkout_session = stripe.checkout.Session.create(
-                mode='subscription',
-                customer=customer_id,  # 👈 was undefined before
-                line_items=[{'price': plan.stripe_price_id, 'quantity': 1}],
-                success_url=settings.STRIPE_SUCCESS_URL + '?session_id={CHECKOUT_SESSION_ID}',
+                mode="subscription",
+                customer=customer_id,
+                line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
+                success_url=settings.STRIPE_SUCCESS_URL + "?session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=settings.STRIPE_CANCEL_URL,
-                client_reference_id=shop.id,   # used by your webhook to locate the shop
-            )
+                client_reference_id=str(shop.id),
+                subscription_data={
+                    "metadata": {
+                        "shop_id": str(shop.id),
+                        "plan_id": str(plan.id),
+                    }
+                },
+)
             return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
