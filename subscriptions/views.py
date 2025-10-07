@@ -167,28 +167,40 @@ class SubscriptionPlanListView(APIView):
         serializer = SubscriptionPlanSerializer(plans, many=True)
         return Response(serializer.data)
 
+# subscriptions/views.py
+
 class CreateSubscriptionCheckoutSessionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         plan_id = request.data.get('plan_id')
         if not plan_id:
-            return Response({"error": "plan_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "plan_id is required.", "code": "PLAN_ID_REQUIRED"},
+                            status=status.HTTP_400_BAD_REQUEST)
 
+        # 1) Validate plan
         try:
             plan = SubscriptionPlan.objects.get(id=plan_id)
+        except SubscriptionPlan.DoesNotExist:
+            return Response({"error": "Plan not found.", "code": "PLAN_NOT_FOUND"},
+                            status=status.HTTP_404_NOT_FOUND)
+
+        # 2) Validate shop (user must have created one)
+        try:
             shop = request.user.shop
-        except (SubscriptionPlan.DoesNotExist, Shop.DoesNotExist):
-            return Response({"error": "Invalid Plan or Shop."}, status=status.HTTP_404_NOT_FOUND)
+        except Shop.DoesNotExist:
+            # 409 is good for “precondition not met”; 400 also fine
+            return Response({"error": "Create a shop before purchasing a subscription.",
+                             "code": "NO_SHOP"},
+                            status=status.HTTP_409_CONFLICT)
 
         if not plan.stripe_price_id:
-            return Response({"error": "Stripe Price ID not configured for this plan."},
+            return Response({"error": "Stripe Price ID not configured for this plan.",
+                             "code": "MISSING_STRIPE_PRICE"},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         try:
-            # 👇 FIX: ensure & use a platform Customer for the shop owner
             customer_id = _ensure_shop_customer_id(shop)
-
             checkout_session = stripe.checkout.Session.create(
                 mode="subscription",
                 customer=customer_id,
@@ -196,16 +208,13 @@ class CreateSubscriptionCheckoutSessionView(APIView):
                 success_url=settings.STRIPE_SUCCESS_URL + "?session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=settings.STRIPE_CANCEL_URL,
                 client_reference_id=str(shop.id),
-                subscription_data={
-                    "metadata": {
-                        "shop_id": str(shop.id),
-                        "plan_id": str(plan.id),
-                    }
-                },
-)
+                subscription_data={"metadata": {"shop_id": str(shop.id), "plan_id": str(plan.id)}},
+            )
             return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": str(e), "code": "STRIPE_ERROR"},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class CancelSubscriptionView(APIView):
     """
