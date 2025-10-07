@@ -75,7 +75,7 @@ class Payment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Payment {self.id} for {self.booking}"
+        return f"Payment #{self.pk}"
 
 # -----------------------------
 # Refund Table
@@ -97,7 +97,7 @@ class Refund(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Refund {self.id} for Payment {self.payment_id}"
+        return f"Refund #{self.pk} for Payment #{self.payment_id}"
 
 # -----------------------------
 # Booking Table
