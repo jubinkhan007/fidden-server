@@ -218,6 +218,19 @@ class CreatePaymentIntentView(APIView):
             )
             total_amount = float(total_amount)
 
+            # 5. Calculate final price after coupon
+            total_amount = booking.service.discount_price if booking.service.discount_price > 0 else booking.service.price
+            full_service_amount = total_amount  # Save original amount before deposit calculation
+
+            if shop.is_deposit_required:
+                # Calculate deposit amount based on shop settings
+                deposit_amount = shop.deposit_amount
+                total_amount = min(deposit_amount, total_amount)  # Charge deposit only
+            else:
+                deposit_amount = total_amount  # Full payment
+                
+            remaining_balance = full_service_amount - total_amount if shop.is_deposit_required else 0.00
+
             if coupon:
                 if coupon.in_percentage:
                     discount = (total_amount * float(coupon.amount)) / 100.0
@@ -255,6 +268,7 @@ class CreatePaymentIntentView(APIView):
 
             # 9) Persist Payment row
             Payment.objects.update_or_create(
+                
             booking=booking,
             defaults={
                 "user": user,
@@ -264,8 +278,10 @@ class CreatePaymentIntentView(APIView):
                 "coupon_amount": discount if coupon else None,
                 "stripe_payment_intent_id": intent.id,
                 "status": "pending",
+                "is_deposit": shop.is_deposit_required,
                 "balance_paid": 0,
                 "deposit_amount": 0,   # <- important
+                "remaining_amount": remaining_balance,
                 "deposit_paid": 0,   # 👈 add this
                 "tips_amount": 0,
                 "application_fee_amount": 0,
@@ -725,3 +741,92 @@ class TransactionLogListView(APIView):
 #         # Return coupon info
 #         coupon_data = CouponSerializer(serializer.instance).data
 #         return Response(coupon_data, status=status.HTTP_200_OK)
+
+
+
+##########
+#new Class
+#########
+class RemainingPaymentView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, booking_id):
+        """
+        Charge remaining balance for a deposit booking at service time
+        """
+        try:
+            # 1. Get the booking and original payment
+            booking = Booking.objects.get(id=booking_id)
+            original_payment = booking.payment
+
+            # 2. Check if this is a deposit payment with remaining amount
+            if not original_payment.is_deposit or original_payment.remaining_amount <= 0:
+                return Response({
+                    "detail": "This booking doesn't require a remaining payment"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # 3. Check authorization (customer or shop owner)
+            if (booking.user != request.user and
+                    booking.shop.owner != request.user):
+                return Response({
+                    "detail": "Not authorized to process this payment"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # 4. Get Stripe customer and shop account
+            user_customer = original_payment.user.stripe_customer
+            shop_account = booking.shop.stripe_account
+
+            if not user_customer.stripe_customer_id:
+                return Response({
+                    "detail": "Customer not found in Stripe"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            if not shop_account.stripe_account_id:
+                return Response({
+                    "detail": "Shop Stripe account not found"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # 5. Create PaymentIntent for remaining amount
+            remaining_cents = int(original_payment.remaining_amount * 100)
+
+            payment_intent = stripe.PaymentIntent.create(
+                amount=remaining_cents,
+                currency='usd',
+                customer=user_customer.stripe_customer_id,
+                payment_method_types=['card'],
+                transfer_data={'destination': shop_account.stripe_account_id},
+                metadata={
+                    'booking_id': booking.id,
+                    'original_payment_id': original_payment.id,
+                    'payment_type': 'remaining_balance'
+                }
+            )
+
+            # 6. Create new Payment record for remaining amount
+            remaining_payment = Payment.objects.create(
+                booking=original_payment.booking,
+                user=original_payment.user,
+                amount=original_payment.remaining_amount,
+                stripe_payment_intent_id=payment_intent.id,
+                status='pending',
+                is_deposit=False,
+                deposit_amount=0.00,
+                remaining_amount=0.00
+            )
+
+            return Response({
+                "payment_id": remaining_payment.id,
+                "client_secret": payment_intent.client_secret,
+                "payment_intent_id": payment_intent.id,
+                "amount": original_payment.remaining_amount,
+                "message": "Remaining payment initiated successfully"
+            }, status=status.HTTP_200_OK)
+
+        except Booking.DoesNotExist:
+            return Response({
+                "detail": "Booking not found"
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                "detail": f"Error processing remaining payment: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

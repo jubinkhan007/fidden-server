@@ -226,7 +226,7 @@ class ShopSerializer(serializers.ModelSerializer):
         # --- Momentum Plan ---
         # Can only change deposit and cancellation fee amount.
         elif plan_name == SubscriptionPlan.MOMENTUM:
-            allowed_fields = {'is_deposit_required', 'deposit_amount', 'cancellation_fee_percentage'}
+            allowed_fields = { 'deposit_amount'}
             for field in policy_fields:
                 if field in validated_data and field not in allowed_fields:
                     raise serializers.ValidationError(

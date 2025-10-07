@@ -25,5 +25,9 @@ service_account_fcm.json
 =======
 .env
 
+/docs*/
+
+New_requirment.md
+
 /.idea*/*
 >>>>>>> Omi

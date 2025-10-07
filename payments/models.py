@@ -54,6 +54,8 @@ class Payment(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    is_deposit = models.BooleanField(default=False)
+    remaining_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     # Amount that has been actually paid toward the booking's balance (defaults 0).
     balance_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
