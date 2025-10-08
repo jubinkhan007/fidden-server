@@ -230,6 +230,7 @@ class CreatePaymentIntentView(APIView):
                 deposit_amount = total_amount  # Full payment
                 
             remaining_balance = full_service_amount - total_amount if shop.is_deposit_required else 0.00
+            total_amount = float(total_amount)
 
             if coupon:
                 if coupon.in_percentage:
