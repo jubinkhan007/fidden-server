@@ -127,11 +127,16 @@ def send_push_notification(
             try:
                 response = messaging.send(fcm_message, dry_run=dry_run)
                 print(f"Successfully sent message: {response}")
+            except messaging.UnregisteredError:
+                print(f"Invalid FCM token, removing: {token}")
+                user.devices.filter(fcm_token=token).delete()
+            except messaging.SenderIdMismatchError:
+                print(f"Wrong sender ID, removing token: {token}")
+                user.devices.filter(fcm_token=token).delete()
             except Exception as e:
                 print(f"Error sending message to token {token}: {e}")
-                # Optionally, remove invalid tokens from the database
-                # user.devices.filter(fcm_token=token).delete()
-
+                if "not found" in str(e).lower():
+                    user.devices.filter(fcm_token=token).delete()
     except Exception as e:
         print(f"Error in send_push_notification: {e}")
         traceback.print_exc()
