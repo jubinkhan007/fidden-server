@@ -29,7 +29,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from api.models import Slot
 from api.serializers import SlotSerializer
-
+from django.db import transaction
 from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 import datetime
@@ -269,29 +269,33 @@ class CreatePaymentIntentView(APIView):
 
             intent = stripe.PaymentIntent.create(**payment_intent_params)
 
-            # 9) Persist Payment row
-            Payment.objects.update_or_create(
-                
-            booking=booking,
-            defaults={
-                "user": user,
-                "amount": total_amount,
-                "total_amount": total_amount,
-                "coupon": coupon,
-                "coupon_amount": discount if coupon else None,
-                "stripe_payment_intent_id": intent.id,
-                "status": "pending",
-                "is_deposit": shop.is_deposit_required,
-                "balance_paid": 0,
-                "deposit_amount": 0,   # <- important
-                "remaining_amount": remaining_balance,
-                "deposit_paid": 0,   # 👈 add this
-                "tips_amount": 0,
-                "application_fee_amount": 0,
-                "payment_type": "full",
+            print(f"PaymentIntent created: {intent.id}")
+            print(f"About to create payment for booking {booking.id}")
 
-            },
-            )
+            # 9) Persist Payment row
+            with transaction.atomic():
+                Payment.objects.update_or_create(
+                booking=booking,
+                    defaults={
+                        "user": user,
+                        "amount": total_amount,
+                        "total_amount": total_amount,
+                        "coupon": coupon,
+                        "coupon_amount": discount if coupon else None,
+                        "stripe_payment_intent_id": intent.id,
+                        "status": "pending",
+                        "is_deposit": shop.is_deposit_required,
+                        "balance_paid": 0,
+                        "deposit_amount": deposit_amount if shop.is_deposit_required else 0,  # Fix: use calculated deposit_amount
+                        "remaining_amount": remaining_balance,
+                        "deposit_paid": 0,   # 👈 add this
+                        "tips_amount": 0,
+                        "application_fee_amount": 0,
+                        "payment_type": "full",
+
+                    },
+                )
+                # print(f"✅ Payment saved: ID={payment.id}, Created={created}")
 
             # 10) Ephemeral key for mobile SDKs
             ephemeral_key = stripe.EphemeralKey.create(
@@ -315,11 +319,17 @@ class CreatePaymentIntentView(APIView):
 
         except Exception as e:
             # If needed, your Celery auto-cancel can clean up failed payments/holds later.
+            import traceback
+            print(f"ERROR in payment creation: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Payment creation failed: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        
+
 APP_SCHEME = getattr(settings, "APP_URL_SCHEME", "myapp")
-APP_HOST   = getattr(settings, "APP_URL_HOST",   "stripe") 
+APP_HOST   = getattr(settings, "APP_URL_HOST",   "stripe")
 
 class StripeReturnView(APIView):
     authentication_classes = []
@@ -426,18 +436,25 @@ class StripeWebhookView(APIView):
     def post(self, request, *args, **kwargs):
         payload = request.body
         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
+        logger.info("=" * 80)
+        logger.info("🔔 WEBHOOK RECEIVED at %s", timezone.now())
+        logger.info("Signature present: %s", bool(sig_header))
+        logger.info("=" * 80)
 
         try:
             event = stripe.Webhook.construct_event(payload, sig_header, settings.STRIPE_ENDPOINT_SECRET)
-        except ValueError:
+            logger.info("✅ Webhook signature verified")
+        except ValueError as e:
+            logger.error("❌ Invalid payload: %s", str(e))
             return Response({"error": "Invalid payload"}, status=400)
-        except stripe.error.SignatureVerificationError:
+        except stripe.error.SignatureVerificationError as e:
+            logger.error("❌ Invalid signature: %s", str(e))
             return Response({"error": "Invalid signature"}, status=400)
 
         event_type = event["type"]
         data = event["data"]["object"]
 
-        logger.info("Stripe event: %s (livemode=%s)", event_type, bool(event.get("livemode")))
+        logger.info("📨 Event: %s (livemode=%s, id=%s)", event_type, bool(event.get("livemode")), event.get("id"))
 
         # --- payments (keep your existing handlers) ---
         if event_type == "payment_intent.succeeded":
@@ -561,16 +578,32 @@ class StripeWebhookView(APIView):
 
     def _update_payment_status(self, stripe_obj, new_status):
         intent_id = stripe_obj.get("id")
-        if stripe_obj.get("object") == "charge":
+        object_type = stripe_obj.get("object")
+
+        logger.info("🔄 _update_payment_status called:")
+        logger.info("   - Object type: %s", object_type)
+        logger.info("   - Intent ID: %s", intent_id)
+        logger.info("   - New status: %s", new_status)
+
+        if object_type == "charge":
             intent_id = stripe_obj.get("payment_intent")
+            logger.info("   - Resolved payment_intent from charge: %s", intent_id)
 
         try:
             payment = Payment.objects.get(stripe_payment_intent_id=intent_id)
+            old_status = payment.status
             payment.status = new_status
             payment.save(update_fields=["status"])
-            logger.info("✅ Payment %s → %s", intent_id, new_status)
+            logger.info("✅ Payment #%s updated: %s → %s (intent: %s)",
+                       payment.id, old_status, new_status, intent_id)
+            logger.info("   - Booking ID: %s", payment.booking.id if hasattr(payment, 'booking') else 'N/A')
+            logger.info("   - User: %s", payment.user.email)
+            logger.info("   - Amount: %s", payment.amount)
         except Payment.DoesNotExist:
-            logger.warning("⚠️ Payment with intent %s not found", intent_id)
+            logger.error("❌ Payment NOT FOUND for intent: %s", intent_id)
+            logger.error("   - Checking all payments in DB...")
+            all_intents = Payment.objects.values_list('stripe_payment_intent_id', flat=True)
+            logger.error("   - Existing payment intents: %s", list(all_intents)[:10])
 
 class VerifyShopOnboardingView(APIView):
     permission_classes = [IsAuthenticated]
