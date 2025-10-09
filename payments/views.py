@@ -223,12 +223,22 @@ class CreatePaymentIntentView(APIView):
             full_service_amount = total_amount  # Save original amount before deposit calculation
 
             if shop.is_deposit_required:
-                # Calculate deposit amount based on shop settings
-                deposit_amount = shop.deposit_amount
-                total_amount = min(deposit_amount, total_amount)  # Charge deposit only
+                plan_name = plan.name if plan else None
+
+                if plan_name == 'Foundation':
+                    # Foundation: Use GlobalSettings percentage
+                    from api.models import GlobalSettings
+                    settings = GlobalSettings.get_settings()
+                    deposit_percentage = settings.default_deposit_percentage
+                    deposit_amount = (full_service_amount * deposit_percentage) / 100.0
+                else:
+                    # Other plans: Use shop's fixed deposit_amount
+                    deposit_amount = shop.deposit_amount
+
+                total_amount = min(deposit_amount, full_service_amount)
             else:
-                deposit_amount = total_amount  # Full payment
-                
+                deposit_amount = full_service_amount
+
             remaining_balance = full_service_amount - total_amount if shop.is_deposit_required else 0.00
             total_amount = float(total_amount)
 

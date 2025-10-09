@@ -36,7 +36,7 @@ class VerificationFileInline(admin.TabularInline):
 class ShopAdmin(admin.ModelAdmin):
     list_display = (
         'name', 'owner', 'address', 'location', 'capacity', 
-        'status', 'is_deposit_required', 'deposit_amount', 'get_subscription_plan'
+        'status', 'is_deposit_required', 'get_subscription_plan'
     )
     list_filter = (
         'status', 'is_deposit_required', 'is_verified', 
@@ -55,7 +55,7 @@ class ShopAdmin(admin.ModelAdmin):
             )
         }),
         ('Deposit Settings', {
-            'fields': ('is_deposit_required', 'deposit_amount'),
+            'fields': ('is_deposit_required',),
             'description': 'Deposit settings - restricted by subscription plan for regular users'
         }),
         ('Cancellation Policy', {
@@ -85,7 +85,7 @@ class ShopAdmin(admin.ModelAdmin):
             return ['is_verified']  # Only verification status is readonly for superusers
         
          # Fields controlled by plan
-        deposit_fields = ['is_deposit_required', 'deposit_amount']
+        deposit_fields = ['is_deposit_required',]
         cancellation_fields = ['free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours']
 
         # On add view (obj is None), be conservative like Foundation
@@ -112,7 +112,7 @@ class ShopAdmin(admin.ModelAdmin):
         
         # Regular staff cannot modify deposit/cancellation settings
         return [
-            'is_verified', 'is_deposit_required', 'deposit_amount',
+            'is_verified', 'is_deposit_required',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         ]
     # list_display = ('name', 'owner', 'address', 'location', 'capacity')

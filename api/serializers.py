@@ -173,7 +173,8 @@ class ShopSerializer(serializers.ModelSerializer):
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
             'shop_img', 'close_days', 'owner_id', 'is_verified', 'status', 
-            'verification_files', 'uploaded_files', 'is_deposit_required', 'deposit_amount',
+            'verification_files', 'uploaded_files', 'is_deposit_required',
+            'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         ]
         read_only_fields = ('owner_id','is_verified', 'uploaded_files')
@@ -203,47 +204,34 @@ class ShopSerializer(serializers.ModelSerializer):
         return shop
 
     def update(self, instance, validated_data):
-        """
-        Custom update logic to enforce subscription-based feature gating
-        for deposit and cancellation policies.
-        """
         plan_name = instance.subscription.plan.name
-        
+
         policy_fields = {
-            'is_deposit_required', 'deposit_amount', 'free_cancellation_hours',
-            'cancellation_fee_percentage', 'no_refund_hours'
+            'is_deposit_required', 'deposit_amount', 'default_deposit_percentage',
+            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         }
-        
-        # --- Foundation Plan ---
-        # Cannot change any policy fields.
+
+        # Foundation: Cannot change ANY policy fields
         if plan_name == SubscriptionPlan.FOUNDATION:
             for field in policy_fields:
                 if field in validated_data:
-                    raise serializers.ValidationError(
-                        f"Your current '{plan_name}' plan does not allow customizing the {field}. Please upgrade your plan."
-                    )
-        
-        # --- Momentum Plan ---
-        # Can only change deposit and cancellation fee amount.
+                    validated_data.pop(field)
+
+        # Momentum: Can only change deposit percentage
         elif plan_name == SubscriptionPlan.MOMENTUM:
-            allowed_fields = { 'deposit_amount'}
+            allowed = {'default_deposit_percentage'}  # Only percentage allowed
             for field in policy_fields:
-                if field in validated_data and field not in allowed_fields:
-                    raise serializers.ValidationError(
-                        f"Your current '{plan_name}' plan does not allow customizing the {field}. Please upgrade to the 'Icon' plan."
-                    )
-        
-        # --- Icon Plan ---
-        # Can change all policy fields. No checks needed.
+                if field in validated_data and field not in allowed:
+                    validated_data.pop(field)
 
-        # Reset status to pending on update
+        # Icon: Can change everything (no restrictions)
+
+        # Continue with update...
         instance.status = "pending"
+        files = validated_data.pop("verification_files", None)
 
-        files = validated_data.pop("verification_files", None)  
-
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
+        # USE super().update() instead of manual field setting
+        instance = super().update(instance, validated_data)
 
         if files:
             for f in files:

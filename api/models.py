@@ -2,9 +2,13 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.conf import settings
 from datetime import timedelta
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from django.utils import timezone
 from django.db.models import Q
 import uuid
+from subscriptions.models import SubscriptionPlan,ShopSubscription
 
 
 
@@ -73,7 +77,7 @@ class Shop(models.Model):
 
 
     is_deposit_required = models.BooleanField(default=False, help_text="Is a deposit required for booking?")
-    deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
+    # deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
 
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
 
@@ -105,6 +109,21 @@ class Shop(models.Model):
             'ghost_client_reengagement': False,
         }
 
+    ##update all service new method
+    def update_all_service_deposits(self):
+        """Update all services' deposit amounts based on shop's default percentage"""
+        if self.default_deposit_type == 'percentage' and self.default_deposit_percentage:
+            self.services.filter(deposit_type='percentage').update(
+                deposit_percentage=self.default_deposit_percentage
+            )
+            # Calculate deposit_amount for each service
+            for service in self.services.all():
+                service.deposit_type = 'percentage'
+                service.deposit_percentage = self.default_deposit_percentage
+                base_price = service.discount_price if service.discount_price and service.discount_price > 0 else service.price
+                if base_price:
+                    service.deposit_amount = (base_price * self.default_deposit_percentage) / 100
+                    service.save(update_fields=['deposit_amount'])
 
     ## New method toa add default value to the shop but subscription based
     def apply_plan_defaults(self, overwrite=False):
@@ -142,34 +161,52 @@ class Shop(models.Model):
         if plan == 'Foundation':
             # Apply all defaults
             set_field('is_deposit_required', dep_required)
-            if dep_type == 'percentage':
-                set_field('deposit_amount', 0)  # ensure fixed is zero when using percent
+            set_field('default_deposit_type', dep_type)
+            set_field('default_deposit_percentage', dep_pct)
+            set_field('free_cancellation_hours', free_cancel)
+            set_field('cancellation_fee_percentage', cancel_fee)
+            set_field('no_refund_hours', no_refund)
+        elif plan == 'Momentum':
+            set_field('is_deposit_required', dep_required)
+            set_field('default_deposit_type', dep_type)
             set_field('free_cancellation_hours', free_cancel)
             set_field('cancellation_fee_percentage', cancel_fee)
             set_field('no_refund_hours', no_refund)
 
-        elif plan == 'Momentum':
-            # Only deposit amount default
-            # set_field('deposit_amount', dep_amount)
-            pass
 
-        # Icon: do nothing
 
         self.save(update_fields=[
             'is_deposit_required',
-            'deposit_amount',
+            'default_deposit_type',
+            'default_deposit_percentage',
             'free_cancellation_hours',
             'cancellation_fee_percentage',
             'no_refund_hours',
         ])
+        # NEW: Update all services after shop settings change
+        self.update_all_service_deposits()
 
     def save(self, *args, **kwargs):
+        print(f"Shop save() called for {self.name}")
+        old_percentage = None
+        if self.pk:  # Existing shop
+            old_shop = Shop.objects.get(pk=self.pk)
+            old_percentage = old_shop.default_deposit_percentage
+            print(f"Old percentage: {old_percentage}, New percentage: {self.default_deposit_percentage}")
+
         # Auto-update is_verified based on status
         if self.status == "verified":
             self.is_verified = True
         else:
             self.is_verified = False
         super().save(*args, **kwargs)
+
+        # Update services if deposit percentage changed
+        if old_percentage != self.default_deposit_percentage:
+            print(f"Percentage changed! Updating services...")
+            self.update_all_service_deposits()
+        else:
+            print("No percentage change detected")
 
     def __str__(self):
         return self.name
@@ -238,8 +275,21 @@ class Service(models.Model):
     )
     is_active = models.BooleanField(default=True)
 
+    ##new calculation method
+    def calculate_deposit_amount(self):
+        """Calculate deposit amount based on percentage and service price"""
+        if self.deposit_type == 'percentage' and self.deposit_percentage:
+            # Use discount_price if it exists and > 0, otherwise use price
+            base_price = self.discount_price if self.discount_price and self.discount_price > 0 else self.price
+            if base_price:
+                self.deposit_amount = (base_price * self.deposit_percentage) / 100
+        elif self.deposit_type == 'fixed':
+            # Keep existing deposit_amount for fixed type
+            pass
+
     ##new method
     def save(self, *args, **kwargs):
+        self.calculate_deposit_amount()
         is_new = self.pk is None
         if is_new and self.shop:
             # apply service-level defaults on create based on shop plan
@@ -656,3 +706,16 @@ class GlobalSettings(models.Model):
     def get_settings(cls):
         settings, _ = cls.objects.get_or_create(pk=1)
         return settings
+
+
+# Update the GlobalSettings signal
+@receiver(post_save, sender=GlobalSettings)
+def update_foundation_shops_on_settings_change(sender, instance, **kwargs):
+    foundation_shops = Shop.objects.filter(
+        subscription__plan__name=SubscriptionPlan.FOUNDATION,
+        subscription__status=ShopSubscription.STATUS_ACTIVE
+    )
+
+    for shop in foundation_shops:
+        shop.apply_plan_defaults(overwrite=True)
+        # This will now also update all services via update_all_service_deposits()

@@ -19,10 +19,8 @@ venv/
 #service_account_fcm
 service_account_fcm.json
 
-<<<<<<< HEAD
 .env__pycache__/
 *.pyc
-=======
 .env
 
 /docs*/
@@ -30,4 +28,9 @@ service_account_fcm.json
 New_requirment.md
 
 /.idea*/*
->>>>>>> Omi
+
+/.amazonq*/
+/.continue*/
+
+# Django migrations
+**/*migrations*/**
