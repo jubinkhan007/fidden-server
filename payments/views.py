@@ -8,6 +8,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 import stripe
 import logging
+from decimal import Decimal
 import json
 from datetime import timedelta
 from django.utils.timezone import now
@@ -223,23 +224,14 @@ class CreatePaymentIntentView(APIView):
             full_service_amount = total_amount  # Save original amount before deposit calculation
 
             if shop.is_deposit_required:
-                plan_name = plan.name if plan else None
-
-                if plan_name == 'Foundation':
-                    # Foundation: Use GlobalSettings percentage
-                    from api.models import GlobalSettings
-                    settings = GlobalSettings.get_settings()
-                    deposit_percentage = settings.default_deposit_percentage
-                    deposit_amount = (full_service_amount * deposit_percentage) / 100.0
-                else:
-                    # Other plans: Use shop's fixed deposit_amount
-                    deposit_amount = shop.deposit_amount
-
+                service = booking.service
+                # Use the pre-calculated deposit amount from service
+                deposit_amount = service.deposit_amount if service.deposit_amount else full_service_amount
                 total_amount = min(deposit_amount, full_service_amount)
             else:
                 deposit_amount = full_service_amount
 
-            remaining_balance = full_service_amount - total_amount if shop.is_deposit_required else 0.00
+            remaining_balance = full_service_amount - total_amount if shop.is_deposit_required else Decimal('0.00')
             total_amount = float(total_amount)
 
             if coupon:
