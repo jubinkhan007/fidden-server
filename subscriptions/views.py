@@ -202,14 +202,15 @@ class CreateSubscriptionCheckoutSessionView(APIView):
         try:
             customer_id = _ensure_shop_customer_id(shop)
             checkout_session = stripe.checkout.Session.create(
-                mode="subscription",
-                customer=customer_id,
-                line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
-                success_url=settings.STRIPE_SUCCESS_URL + "?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url=settings.STRIPE_CANCEL_URL,
-                client_reference_id=str(shop.id),
-                subscription_data={"metadata": {"shop_id": str(shop.id), "plan_id": str(plan.id)}},
-            )
+            mode="subscription",
+            customer=customer_id,
+            line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
+            success_url="myapp://subscription/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url="myapp://subscription/cancel",
+            client_reference_id=str(shop.id),
+            subscription_data={"metadata": {"shop_id": str(shop.id), "plan_id": str(plan.id)}},
+        )
+
             return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e), "code": "STRIPE_ERROR"},
