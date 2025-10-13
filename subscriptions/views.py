@@ -15,10 +15,56 @@ from .serializers import SubscriptionPlanSerializer
 from payments.models import UserStripeCustomer
 import logging
 from datetime import timezone as dt_timezone
+# add near the top
+from django.views.generic import View
+from django.http import HttpResponse
+from django.urls import reverse
 
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+
+
+APP_SCHEME = "myapp"  # your app scheme
+
+_HTML = """
+<!doctype html><html><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Returning to app…</title>
+<script>
+  window.onload = function(){
+    var link = "%(deeplink)s";
+    // try to open app
+    window.location.href = link;
+    // show fallback button shortly after
+    setTimeout(function(){
+      var b = document.getElementById('fallback');
+      if (b) b.style.display = 'block';
+    }, 800);
+  };
+</script>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}
+a.btn{background:#635bff;color:#fff;padding:12px 16px;border-radius:8px;text-decoration:none}
+#fallback{display:none}</style>
+</head><body>
+  <h2>Finishing up…</h2>
+  <p>If nothing happens, tap the button below to return to the app.</p>
+  <p id="fallback"><a class="btn" href="%(deeplink)s">Open Fidden</a></p>
+</body></html>
+"""
+
+class CheckoutReturnView(View):
+    def get(self, request):
+        session_id = request.GET.get("session_id", "")
+        deeplink = f"{APP_SCHEME}://subscription/success?session_id={session_id}"
+        return HttpResponse(_HTML % {"deeplink": deeplink})
+
+class CheckoutCancelView(View):
+    def get(self, request):
+        deeplink = f"{APP_SCHEME}://subscription/cancel"
+        return HttpResponse(_HTML % {"deeplink": deeplink})
+
 
 def _get_customer_id(user):
     # Adjust to your schema
@@ -173,48 +219,63 @@ class CreateSubscriptionCheckoutSessionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        plan_id = request.data.get('plan_id')
+        # 1) Validate input
+        plan_id = request.data.get("plan_id")
         if not plan_id:
-            return Response({"error": "plan_id is required.", "code": "PLAN_ID_REQUIRED"},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "plan_id is required.", "code": "PLAN_ID_REQUIRED"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # 1) Validate plan
+        # 2) Load plan
         try:
             plan = SubscriptionPlan.objects.get(id=plan_id)
         except SubscriptionPlan.DoesNotExist:
-            return Response({"error": "Plan not found.", "code": "PLAN_NOT_FOUND"},
-                            status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"error": "Plan not found.", "code": "PLAN_NOT_FOUND"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
-        # 2) Validate shop (user must have created one)
+        if not plan.stripe_price_id:
+            return Response(
+                {"error": "Stripe Price ID not configured for this plan.", "code": "MISSING_STRIPE_PRICE"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # 3) Load shop for current owner
         try:
             shop = request.user.shop
         except Shop.DoesNotExist:
-            # 409 is good for “precondition not met”; 400 also fine
-            return Response({"error": "Create a shop before purchasing a subscription.",
-                             "code": "NO_SHOP"},
-                            status=status.HTTP_409_CONFLICT)
+            return Response(
+                {"error": "Create a shop before purchasing a subscription.", "code": "NO_SHOP"},
+                status=status.HTTP_409_CONFLICT,
+            )
 
-        if not plan.stripe_price_id:
-            return Response({"error": "Stripe Price ID not configured for this plan.",
-                             "code": "MISSING_STRIPE_PRICE"},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # 4) Build success/cancel HTTPS pages that bounce back to the app
+        success_url = request.build_absolute_uri(reverse("checkout_return")) + "?session_id={CHECKOUT_SESSION_ID}"
+        cancel_url  = request.build_absolute_uri(reverse("checkout_cancel"))
 
+        # 5) Create Stripe Checkout Session
         try:
             customer_id = _ensure_shop_customer_id(shop)
-            checkout_session = stripe.checkout.Session.create(
-            mode="subscription",
-            customer=customer_id,
-            line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
-            success_url="myapp://subscription/success?session_id={CHECKOUT_SESSION_ID}",
-            cancel_url="myapp://subscription/cancel",
-            client_reference_id=str(shop.id),
-            subscription_data={"metadata": {"shop_id": str(shop.id), "plan_id": str(plan.id)}},
-        )
 
-            return Response({'url': checkout_session.url}, status=status.HTTP_200_OK)
+            checkout_session = stripe.checkout.Session.create(
+                mode="subscription",
+                customer=customer_id,
+                line_items=[{"price": plan.stripe_price_id, "quantity": 1}],
+                success_url=success_url,   # HTTPS → your server → deep link
+                cancel_url=cancel_url,     # HTTPS → your server → deep link
+                client_reference_id=str(shop.id),
+                subscription_data={
+                    "metadata": {"shop_id": str(shop.id), "plan_id": str(plan.id)}
+                },
+            )
+            return Response({"url": checkout_session.url}, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({"error": str(e), "code": "STRIPE_ERROR"},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Stripe error creating checkout session: %s", e)
+            return Response({"error": str(e), "code": "STRIPE_ERROR"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 
 class CancelSubscriptionView(APIView):
