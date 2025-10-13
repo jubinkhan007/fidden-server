@@ -1339,11 +1339,16 @@ class PerformanceAnalyticsView(APIView):
 
     def get(self, request):
         shop = get_object_or_404(Shop, owner=request.user)
-        plan = shop.subscription_features.get('performance_analytics', 'none')
+
+        subscription = getattr(shop, 'subscription', None)
+        if not subscription or not subscription.plan:
+            return Response({"detail": "No active subscription found."}, status=status.HTTP_403_FORBIDDEN)
+
+        plan = getattr(subscription.plan, 'performance_analytics', 'none')
 
         if plan == 'none':
             return Response({"detail": "No analytics available for your current plan."}, status=status.HTTP_403_FORBIDDEN)
 
-        analytics, created = PerformanceAnalytics.objects.get_or_create(shop=shop)
+        analytics, _ = PerformanceAnalytics.objects.get_or_create(shop=shop)
         serializer = PerformanceAnalyticsSerializer(analytics, context={'plan': plan})
-        return Response(serializer.data)
+        return Response(serializer.data, status=status.HTTP_200_OK)

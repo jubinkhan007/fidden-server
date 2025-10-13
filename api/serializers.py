@@ -37,23 +37,23 @@ class PerformanceAnalyticsSerializer(serializers.ModelSerializer):
         exclude = ['id', 'shop']
 
     def to_representation(self, instance):
+        """
+        Custom representation to filter analytics data based on the user's plan.
+        """
         data = super().to_representation(instance)
-        plan = self.context['plan']
+        plan = self.context.get('plan')
 
+        # For 'Momentum' users, the plan context should be 'basic'.
         if plan == 'basic':
             return {
                 'total_revenue': data.get('total_revenue'),
                 'total_bookings': data.get('total_bookings'),
                 'average_rating': data.get('average_rating'),
             }
-        if plan == 'moderate':
-            return {
-                'total_revenue': data.get('total_revenue'),
-                'total_bookings': data.get('total_bookings'),
-                'average_rating': data.get('average_rating'),
-                'cancellation_rate': data.get('cancellation_rate'),
-            }
-        return data # Advanced
+
+        # For 'Icon' users ('advanced' plan) and any other higher tiers,
+        # return the full dataset. The view already handles the 'none' case.
+        return data
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
     class Meta:
