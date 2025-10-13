@@ -11,7 +11,6 @@ import uuid
 from subscriptions.models import SubscriptionPlan,ShopSubscription
 
 
-
 class Shop(models.Model):
     STATUS_CHOICES = [
         ("pending", "Pending"),
@@ -719,3 +718,18 @@ def update_foundation_shops_on_settings_change(sender, instance, **kwargs):
     for shop in foundation_shops:
         shop.apply_plan_defaults(overwrite=True)
         # This will now also update all services via update_all_service_deposits()
+
+class PerformanceAnalytics(models.Model):
+    shop = models.OneToOneField(Shop, on_delete=models.CASCADE, related_name='analytics')
+    total_revenue = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    total_bookings = models.PositiveIntegerField(default=0)
+    cancellation_rate = models.FloatField(default=0.0)
+    repeat_customer_rate = models.FloatField(default=0.0)
+    average_rating = models.FloatField(default=0.0)
+    top_service = models.CharField(max_length=255, blank=True, null=True)
+    peak_booking_time = models.CharField(max_length=255, blank=True, null=True)
+    customer_demographics = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Analytics for {self.shop.name}"

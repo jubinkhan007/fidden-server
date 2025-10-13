@@ -5,13 +5,54 @@ from django.utils import timezone
 from django.conf import settings
 from celery import shared_task
 from django.core.mail import send_mail
-from .models import Slot, SlotBooking, Shop
+from django.db.models import Count, Avg, Sum
+from payments.models import Booking
+from .models import PerformanceAnalytics, Slot, SlotBooking, Shop
+from api import models
 
 logger = logging.getLogger(__name__)
 
 def _aware(dt):
     """Ensure datetime is timezone-aware."""
     return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+
+
+@shared_task
+def calculate_analytics():
+    for shop in Shop.objects.all():
+        bookings = Booking.objects.filter(shop=shop)
+        total_bookings = bookings.count()
+
+        # Basic Analytics
+        total_revenue = shop.revenues.aggregate(total=Sum('revenue'))['total'] or 0 # Use Sum directly
+        average_rating = shop.ratings.aggregate(avg=Avg('rating'))['avg'] or 0.0
+
+        # Moderate Analytics
+        cancellation_rate = (bookings.filter(status='cancelled').count() / total_bookings * 100) if total_bookings > 0 else 0
+
+        # Advanced Analytics
+        repeat_customer_rate = 0
+        if total_bookings > 0:
+            customer_counts = bookings.values('user').annotate(count=Count('id'))
+            repeat_customers = sum(1 for c in customer_counts if c['count'] > 1)
+            total_customers = len(customer_counts)
+            repeat_customer_rate = (repeat_customers / total_customers * 100) if total_customers > 0 else 0
+
+        top_service = bookings.values('slot__service__title').annotate(count=Count('id')).order_by('-count').first()
+        peak_booking_time = bookings.values('slot__start_time__hour').annotate(count=Count('id')).order_by('-count').first()
+
+        PerformanceAnalytics.objects.update_or_create(
+            shop=shop,
+            defaults={
+                'total_revenue': total_revenue,
+                'total_bookings': total_bookings,
+                'average_rating': average_rating,
+                'cancellation_rate': cancellation_rate,
+                'repeat_customer_rate': repeat_customer_rate,
+                'top_service': top_service['slot__service__title'] if top_service else None,
+                'peak_booking_time': f"{peak_booking_time['slot__start_time__hour']}:00" if peak_booking_time else None,
+            }
+        )
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)

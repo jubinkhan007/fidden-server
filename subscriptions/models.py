@@ -39,10 +39,12 @@ class SubscriptionPlan(models.Model):
 
     PERF_NONE = "none"
     PERF_BASIC = "basic"
+    PERF_MODERATE = "moderate"  # New tier
     PERF_ADVANCED = "advanced"
     PERF_CHOICES = [
         (PERF_NONE, "None"),
         (PERF_BASIC, "Basic"),
+        (PERF_MODERATE, "Moderate"),  # New tier
         (PERF_ADVANCED, "Advanced"),
     ]
     

@@ -1,5 +1,7 @@
 from django.contrib import admin
+
 from .models import (
+    PerformanceAnalytics,
     Shop, 
     Service, 
     ServiceCategory, 
@@ -329,3 +331,9 @@ class GlobalSettingsAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         # Don't allow deletion
         return False
+    
+
+@admin.register(PerformanceAnalytics)
+class PerformanceAnalyticsAdmin(admin.ModelAdmin):
+    list_display = ('shop', 'total_revenue', 'total_bookings', 'updated_at')
+    search_fields = ('shop__name',)

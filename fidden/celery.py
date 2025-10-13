@@ -42,4 +42,8 @@ app.conf.beat_schedule = {
         "task": "payments.tasks.send_booking_reminders",
         "schedule": crontab(minute="*"),  # every 60 seconds
     },
+    "calculate-analytics-daily": {
+        "task": "api.tasks.calculate_analytics",
+        "schedule": crontab(hour=2, minute=0),  # Daily at 2 AM
+    },
 }

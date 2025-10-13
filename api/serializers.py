@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from subscriptions.models import SubscriptionPlan
 from .models import (
+    PerformanceAnalytics,
     Shop, 
     Service, 
     ServiceCategory, 
@@ -29,6 +30,30 @@ from django.db import transaction
 from django.utils import timezone
 from accounts.serializers import UserSerializer
 
+
+class PerformanceAnalyticsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PerformanceAnalytics
+        exclude = ['id', 'shop']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        plan = self.context['plan']
+
+        if plan == 'basic':
+            return {
+                'total_revenue': data.get('total_revenue'),
+                'total_bookings': data.get('total_bookings'),
+                'average_rating': data.get('average_rating'),
+            }
+        if plan == 'moderate':
+            return {
+                'total_revenue': data.get('total_revenue'),
+                'total_bookings': data.get('total_bookings'),
+                'average_rating': data.get('average_rating'),
+                'cancellation_rate': data.get('cancellation_rate'),
+            }
+        return data # Advanced
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
     class Meta:

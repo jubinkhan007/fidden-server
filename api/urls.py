@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import (
+    PerformanceAnalyticsView,
     ShopListCreateView,
     ShopRetrieveUpdateDestroyView,
     ServiceListCreateView,
@@ -68,4 +69,5 @@ urlpatterns = [
     path('coupons/<int:coupon_id>/', CouponRetrieveUpdateDestroyAPIView.as_view(), name='coupon-detail'),
     path('users/coupons/', UserCouponRetrieveAPIView.as_view(), name='user-get-coupon'),
     path('best-service/<int:shop_id>/', BestServicePerShopView.as_view(), name="best-service-per-shop"),
+    path('analytics/', PerformanceAnalyticsView.as_view(), name='performance-analytics'),
 ]

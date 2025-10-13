@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Sum
 from django.utils.timezone import make_aware
 from .models import (
+    PerformanceAnalytics,
     Shop, 
     Service, 
     RatingReview, 
@@ -67,6 +68,7 @@ from api.utils.fcm import notify_user
 from api.utils.growth_suggestions import generate_growth_suggestions
 from .tasks import auto_cancel_booking
 import logging
+from .serializers import PerformanceAnalyticsSerializer
 logger = logging.getLogger(__name__)
 
 class ShopListCreateView(APIView):
@@ -1330,3 +1332,18 @@ class BestServicePerShopView(APIView):
         result['total_bookings'] = best_service_data['total_bookings']  # add bookings count
 
         return Response(result, status=status.HTTP_200_OK)
+
+
+class PerformanceAnalyticsView(APIView):
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+
+    def get(self, request):
+        shop = get_object_or_404(Shop, owner=request.user)
+        plan = shop.subscription_features.get('performance_analytics', 'none')
+
+        if plan == 'none':
+            return Response({"detail": "No analytics available for your current plan."}, status=status.HTTP_403_FORBIDDEN)
+
+        analytics, created = PerformanceAnalytics.objects.get_or_create(shop=shop)
+        serializer = PerformanceAnalyticsSerializer(analytics, context={'plan': plan})
+        return Response(serializer.data)
