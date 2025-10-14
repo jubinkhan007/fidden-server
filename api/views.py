@@ -70,6 +70,7 @@ from .tasks import auto_cancel_booking
 import logging
 from .serializers import PerformanceAnalyticsSerializer, AIAutoFillSettingsSerializer
 from .models import AIAutoFillSettings
+from django.db.models import IntegerField, Case, When, Value, F
 
 
 logger = logging.getLogger(__name__)
@@ -420,22 +421,42 @@ class AllShopsListView(APIView):
         except ValueError:
             cursor = 0
 
-        shops_qs = Shop.objects.filter(is_verified=True)
+        # Pull subscription+plan in one go to avoid N+1 when serializer asks for is_priority
+        shops_qs = (
+            Shop.objects
+            .filter(is_verified=True)
+            .select_related("subscription__plan")
+        )
         if search_query:
             shops_qs = shops_qs.filter(
                 Q(name__iregex=search_query) | Q(address__iregex=search_query)
             )
 
         shops_qs = shops_qs.annotate(
-            avg_rating=Coalesce(Avg('ratings__rating'), Value(0.0, output_field=FloatField())),
-            review_count=Count(
-                'ratings',
-                filter=Q(ratings__review__isnull=False) & ~Q(ratings__review__exact='')
-            )
-        )
+        avg_rating=Coalesce(Avg('ratings__rating'), Value(0.0, output_field=FloatField())),
+        review_count=Count(
+            'ratings',
+            filter=Q(ratings__review__isnull=False) & ~Q(ratings__review__exact='')
+        ),
+        # ✅ compute a plan-based priority boost (Icon > Momentum; only if plan is priority)
+        plan_priority=Case(
+            When(subscription__plan__priority_marketplace_ranking=True, then=Value(1)),
+            default=Value(0), output_field=IntegerField()
+        ),
+        tier_weight=Case(
+            When(subscription__plan__name="Icon", then=Value(2)),
+            When(subscription__plan__name="Momentum", then=Value(1)),
+            default=Value(0), output_field=IntegerField()
+        ),
+        boost_score=F('plan_priority') * Value(10) + F('tier_weight') * Value(5),
+    )
 
-        # Sort by avg_rating and review_count first; distance sorted later
-        shops_qs = shops_qs.order_by('-avg_rating', '-review_count')
+        # order by boost first, then rating/reviews as you already do
+        shops_qs = shops_qs.order_by(
+            F('boost_score').desc(nulls_last=True),
+            F('avg_rating').desc(nulls_last=True),
+            F('review_count').desc(nulls_last=True),
+        )
 
         # Serialize with distance and badge
         serializer = ShopListSerializer(
@@ -443,12 +464,19 @@ class AllShopsListView(APIView):
         )
         shops_list = serializer.data
 
-        # Sort by distance → avg_rating → review_count
+        # Sort by distance -> ranking_power -> avg_rating -> review_count
+        # replace your final Python sort with this
         shops_list = sorted(
             shops_list,
-            key=lambda x: (x["distance"] if x["distance"] is not None else float("inf"),
-                           -x["avg_rating"], -x["review_count"])
+            key=lambda x: (
+                x["distance"] if x["distance"] is not None else float("inf"),
+                -x.get("boost_score", 0),   # Icon > Momentum > others
+                -x["avg_rating"],
+                -x["review_count"],
+            )
         )
+
+
 
         # Manual cursor pagination
         start = cursor

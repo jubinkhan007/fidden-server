@@ -126,14 +126,18 @@ class SubscriptionDetailsView(APIView):
                     status = s.get("status", "none")
                     cpe = s.get("current_period_end")
                     if cpe:
-                        # Next billing date (and also the end of the current period)
+                        # Next billing (Stripe)
                         renews_on = timezone.datetime.fromtimestamp(int(cpe), tz=dt_timezone.utc).isoformat()
-                        expires_on = renews_on  # 👈 NEW: Stripe period end
+                    # DO NOT overwrite expires_on here; keep DB value below
                     cancel_at_period_end = bool(s.get("cancel_at_period_end"))
                 except Exception:
                     pass
             else:
                 status = "none"
+
+            # Always prefer DB for the current period window we show in the app
+            if shop_sub.end_date:
+                expires_on = shop_sub.end_date.astimezone(dt_timezone.utc).isoformat()
 
         # If plan still None, optionally fall back to Stripe (active-ish only)…
         if plan is None and shop:

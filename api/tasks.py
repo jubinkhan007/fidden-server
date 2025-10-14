@@ -174,8 +174,8 @@ def trigger_no_show_auto_fill(self, booking_id):
         return "No candidates."
 
     candidates.sort(key=lambda t: t[1], reverse=True)
-    top_ids  = [uid for (uid, _) in candidates[:5]]
-    next_ids = [uid for (uid, _) in candidates[5:25]]
+    top_ids  = [uid for (uid, _) in candidates[:1]]
+    next_ids = [uid for (uid, _) in candidates[1:25]]
 
     # Log the ids we’re about to enqueue so we can see if slot vs slot_booking is correct
     logger.info("[autofill] enqueue slot.id=%s slot_booking.id=%s service_id=%s", slot.id, slot_booking.id, service_id)

@@ -435,7 +435,8 @@ class ShopListSerializer(serializers.Serializer):
     distance = serializers.SerializerMethodField()
     shop_img = serializers.SerializerMethodField()
     badge = serializers.SerializerMethodField()  # Added badge as method field
-
+    is_priority = serializers.SerializerMethodField()  # <- NEW
+    boost_score = serializers.IntegerField(read_only=True, default=0)
     def get_shop_img(self, obj):
         request = self.context.get("request")
         if obj.shop_img and obj.shop_img.name and obj.shop_img.storage.exists(obj.shop_img.name):
@@ -448,6 +449,20 @@ class ShopListSerializer(serializers.Serializer):
 
     def get_badge(self, obj):
         return "Top"
+
+    def get_is_priority(self, obj) -> bool:
+        """
+        True when the shop’s current subscription plan has priority_marketplace_ranking.
+        Falls back to False if no active subscription/plan is present.
+        """
+        try:
+            sub = getattr(obj, "subscription", None)
+            if sub and getattr(sub, "is_active", False) and getattr(sub, "plan", None):
+                return bool(getattr(sub.plan, "priority_marketplace_ranking", False))
+        except Exception:
+            pass
+        return False
+
     
 class ShopDetailSerializer(serializers.ModelSerializer):
     owner_id = serializers.IntegerField(source='owner.id', read_only=True)

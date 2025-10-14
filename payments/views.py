@@ -43,87 +43,82 @@ STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
 
 def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
     """
-    sub_obj: stripe.Subscription dict (may be partial)
-    shop_hint: a Shop instance if you already resolved it (optional)
+    Persist the plan + correct period window from Stripe.
     """
-    # Ensure we have items->price populated
     if not (sub_obj.get("items") or {}).get("data"):
         sub_obj = stripe.Subscription.retrieve(sub_obj["id"], expand=["items.data.price"])
 
-    # Map price -> local plan
     items = (sub_obj.get("items") or {}).get("data") or []
     if not items:
         logger.error("Subscription %s has no items; cannot map plan", sub_obj.get("id"))
         return
     price_id = (items[0].get("price") or {}).get("id")
-    if not price_id:
-        logger.error("Subscription %s missing price.id", sub_obj.get("id"))
-        return
-
     try:
         plan = SubscriptionPlan.objects.get(stripe_price_id=price_id)
     except SubscriptionPlan.DoesNotExist:
         logger.error("No SubscriptionPlan with stripe_price_id=%s", price_id)
         return
 
-    # Resolve shop if not passed
-    # Resolve shop if not passed
     shop = shop_hint
-
-    # A) First, use subscription metadata (set during checkout)
+    # ... (the rest of your 'Resolve the shop' logic can stay as is) ...
     if not shop:
         meta = sub_obj.get("metadata") or {}
-        shop_id_meta = meta.get("shop_id")
-        if shop_id_meta:
-            try:
-                shop = Shop.objects.get(id=int(shop_id_meta))
-            except Exception:
-                shop = None
-
-    # B) Then, any existing ShopSubscription record that already linked this subscription
+        sid = meta.get("shop_id")
+        if sid:
+            try: shop = Shop.objects.get(id=int(sid))
+            except Exception: pass
     if not shop:
         ss = ShopSubscription.objects.filter(stripe_subscription_id=sub_obj["id"]).select_related("shop").first()
-        if ss:
-            shop = ss.shop
-
-    # C) Finally, map Stripe customer -> owner -> shop
+        if ss: shop = ss.shop
     if not shop:
         cust_id = sub_obj.get("customer")
         if cust_id:
             usc = UserStripeCustomer.objects.filter(stripe_customer_id=cust_id).select_related("user").first()
-            if usc:
-                # If an owner can have multiple shops, refine this selection if needed.
-                shop = Shop.objects.filter(owner=usc.user).order_by("id").first()
-
+            if usc: shop = Shop.objects.filter(owner=usc.user).order_by("id").first()
     if not shop:
         logger.error("Could not resolve shop for subscription %s", sub_obj.get("id"))
         return
 
+    ps_ts = sub_obj.get("current_period_start")
+    pe_ts = sub_obj.get("current_period_end")
+    
+    # ✅ FINAL FIX: If timestamps are identical or missing, get them from the invoice's LINE ITEM period.
+    if (not ps_ts or not pe_ts or ps_ts == pe_ts) and sub_obj.get("latest_invoice"):
+        try:
+            inv = stripe.Invoice.retrieve(sub_obj["latest_invoice"], expand=["lines.data.period"])
+            invoice_lines = (inv.get("lines") or {}).get("data") or []
+            if invoice_lines:
+                ps_ts = invoice_lines[0]["period"]["start"]
+                pe_ts = invoice_lines[0]["period"]["end"]
+        except Exception as e:
+            logger.error("Could not retrieve period from invoice lines: %s", str(e))
 
-    # Compute period end
-    period_end_ts = sub_obj.get("current_period_end")
-    if not period_end_ts:
-        latest_inv_id = sub_obj.get("latest_invoice")
-        if latest_inv_id:
-            inv = stripe.Invoice.retrieve(latest_inv_id)
-            period_end_ts = inv.get("period_end")
-    end_dt = timezone.now() + relativedelta(months=1)
-    if period_end_ts:
-        import datetime
-        end_dt = datetime.datetime.fromtimestamp(period_end_ts, tz=datetime.timezone.utc)
-
-    ShopSubscription.objects.update_or_create(
+    obj, created = ShopSubscription.objects.get_or_create(
         shop=shop,
-        defaults={
-            "plan": plan,
-            "status": ShopSubscription.STATUS_ACTIVE,
-            "stripe_subscription_id": sub_obj.get("id"),
-            "start_date": timezone.now(),
-            "end_date": end_dt,
-        },
+        defaults={"plan": plan, "status": ShopSubscription.STATUS_ACTIVE},
     )
-    logger.info("✅ Shop %s set to plan %s via subscription %s (ends %s)",
-                shop.id, plan.name, sub_obj.get("id"), end_dt.isoformat())
+
+    start_dt = datetime.datetime.fromtimestamp(ps_ts, tz=datetime.timezone.utc)
+    end_dt = datetime.datetime.fromtimestamp(pe_ts, tz=datetime.timezone.utc)
+
+    # Sanity check: If dates are still identical after all fallbacks, add one month.
+    if start_dt == end_dt:
+        logger.warning("Dates still identical for sub %s. Manually adding 1 month.", sub_obj.get("id"))
+        end_dt = start_dt + relativedelta(months=1)
+
+    obj.plan = plan
+    obj.status = ShopSubscription.STATUS_ACTIVE
+    obj.stripe_subscription_id = sub_obj.get("id")
+    obj.start_date = start_dt
+    obj.end_date = end_dt
+    obj.save(update_fields=["plan", "status", "stripe_subscription_id", "start_date", "end_date"])
+
+    logger.info("✅ Shop %s set to plan %s via subscription %s (%s → %s)",
+                shop.id, plan.name, sub_obj.get("id"),
+                obj.start_date.isoformat(), obj.end_date.isoformat())
+
+
+
 
 class CreatePaymentIntentView(APIView):
     permission_classes = [IsAuthenticated]

@@ -84,6 +84,12 @@ class Shop(models.Model):
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
 
     @property
+    def ranking_power(self):
+        if hasattr(self, 'subscription') and self.subscription.is_active:
+            return self.subscription.plan.ranking_power
+        return 0
+
+    @property
     def subscription_features(self):
         """
         Returns a dictionary of feature flags for the shop's current plan.
