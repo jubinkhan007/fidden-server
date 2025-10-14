@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from subscriptions.models import SubscriptionPlan
 from .models import (
+    AIAutoFillSettings,
     PerformanceAnalytics,
     Shop, 
     Service, 
@@ -1022,3 +1023,12 @@ class UserCouponRetrieveSerializer(serializers.Serializer):
         # Attach all matching coupons
         attrs['coupons'] = coupon_qs
         return attrs
+    
+class AIAutoFillSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AIAutoFillSettings
+        fields = [
+            'is_active',
+            'no_show_window_minutes',
+            'auto_fill_scope_hours',
+        ]

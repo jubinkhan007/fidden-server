@@ -9,7 +9,10 @@ from django.utils import timezone
 from django.db.models import Q
 import uuid
 from subscriptions.models import SubscriptionPlan,ShopSubscription
-
+from django.db import transaction
+# from payments.models import Booking
+import logging
+logger = logging.getLogger(__name__)
 
 class Shop(models.Model):
     STATUS_CHOICES = [
@@ -733,3 +736,51 @@ class PerformanceAnalytics(models.Model):
 
     def __str__(self):
         return f"Analytics for {self.shop.name}"
+    
+
+class AIAutoFillSettings(models.Model):
+    """ Provider-specific settings for the No-Show Auto-Fill feature. """
+    shop = models.OneToOneField(Shop, on_delete=models.CASCADE, related_name='ai_settings')
+    is_active = models.BooleanField(default=False)
+    no_show_window_minutes = models.PositiveIntegerField(default=10, help_text="Minutes after start time to mark as no-show.")
+    auto_fill_scope_hours = models.PositiveIntegerField(default=48, help_text="How many hours into the future to look for candidates.")
+    # TODO: Add other settings like incentives, quiet hours, etc., as fields here.
+    
+    def __str__(self):
+        return f"AI Settings for {self.shop.name}"
+
+class WaitlistEntry(models.Model):
+    """ A user waiting for a specific service or any opening at a shop. """
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='waitlist_entries')
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='waitlist')
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    opted_in_offers = models.BooleanField(default=True, help_text="User agrees to receive short-notice offers.")
+    
+    class Meta:
+        unique_together = ('user', 'shop', 'service')
+
+    def __str__(self):
+        return f"{self.user.email} on waitlist for {self.shop.name}"
+
+class AutoFillLog(models.Model):
+    """ Audit log for tracking auto-fill events. """
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='autofill_logs')
+    original_booking = models.ForeignKey('payments.Booking', on_delete=models.SET_NULL, null=True, related_name='autofill_trigger')
+    filled_by_booking = models.ForeignKey('payments.Booking', on_delete=models.SET_NULL, null=True, related_name='autofill_success')
+    status = models.CharField(max_length=30, default='initiated')
+    revenue_recovered = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Auto-fill log for {self.shop.name} at {self.created_at}"
+# --- DJANGO SIGNAL TO TRIGGER AUTO-FILL ---
+
+@receiver(post_save, dispatch_uid="api_on_booking_status_change")
+def on_booking_status_change(sender, instance, **kwargs):
+    if not hasattr(instance, "status"):
+        return
+    if instance.status in ("no-show", "late-cancel"):
+        from api.tasks import trigger_no_show_auto_fill  # local import avoids cycle
+        from django.db import transaction
+        transaction.on_commit(lambda: trigger_no_show_auto_fill.delay(instance.id))

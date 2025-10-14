@@ -46,4 +46,8 @@ app.conf.beat_schedule = {
         "task": "api.tasks.calculate_analytics",
         "schedule": crontab(hour=2, minute=0),  # Daily at 2 AM
     },
+    'generate-weekly-ai-reports': {
+        'task': 'api.tasks.generate_weekly_ai_reports',
+        'schedule': crontab(day_of_week='sunday', hour=20, minute=0),  # Every Sunday at 8 PM
+    },
 }

@@ -33,6 +33,8 @@ from .views import (
     UserCouponRetrieveAPIView,
     BestServicePerShopView,
     ThreadDetailsView,
+    AIAutoFillSettingsView,
+    HoldSlotAndBookView,
 )
 from payments.views import ShopSlotsView
 
@@ -70,4 +72,6 @@ urlpatterns = [
     path('users/coupons/', UserCouponRetrieveAPIView.as_view(), name='user-get-coupon'),
     path('best-service/<int:shop_id>/', BestServicePerShopView.as_view(), name="best-service-per-shop"),
     path('analytics/', PerformanceAnalyticsView.as_view(), name='performance-analytics'),
+    path('ai-settings/', AIAutoFillSettingsView.as_view(), name='ai-settings'),
+    path('slots/<int:slot_id>/hold/', HoldSlotAndBookView.as_view(), name='hold-slot'),
 ]

@@ -18,9 +18,14 @@ from .models import (
     Notification,
     Revenue,
     Coupon,
-    GlobalSettings
+    GlobalSettings,
+    WaitlistEntry, 
+    AutoFillLog
 )
-
+try:
+    from .models import AIAutoFillSettings  # noqa: F401
+except Exception:
+    AIAutoFillSettings = None
 
 admin.site.site_header = "Fidden Administration"
 admin.site.site_title = "Fidden Admin Portal"
@@ -337,3 +342,21 @@ class GlobalSettingsAdmin(admin.ModelAdmin):
 class PerformanceAnalyticsAdmin(admin.ModelAdmin):
     list_display = ('shop', 'total_revenue', 'total_bookings', 'updated_at')
     search_fields = ('shop__name',)
+if AIAutoFillSettings:
+    @admin.register(AIAutoFillSettings)
+    class AIAutoFillSettingsAdmin(admin.ModelAdmin):
+        list_display = ('shop', 'is_active', 'no_show_window_minutes')
+        list_filter = ('is_active',)
+        search_fields = ('shop__name',)
+
+@admin.register(WaitlistEntry)
+class WaitlistEntryAdmin(admin.ModelAdmin):
+    list_display = ('user', 'shop', 'service', 'created_at', 'opted_in_offers')
+    list_filter = ('shop', 'opted_in_offers')
+    search_fields = ('user__email', 'shop__name')
+
+@admin.register(AutoFillLog)
+class AutoFillLogAdmin(admin.ModelAdmin):
+    list_display = ('shop', 'status', 'revenue_recovered', 'created_at')
+    list_filter = ('status', 'shop')
+    readonly_fields = ('original_booking', 'filled_by_booking')

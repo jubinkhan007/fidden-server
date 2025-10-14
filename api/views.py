@@ -68,8 +68,41 @@ from api.utils.fcm import notify_user
 from api.utils.growth_suggestions import generate_growth_suggestions
 from .tasks import auto_cancel_booking
 import logging
-from .serializers import PerformanceAnalyticsSerializer
+from .serializers import PerformanceAnalyticsSerializer, AIAutoFillSettingsSerializer
+from .models import AIAutoFillSettings
+
+
 logger = logging.getLogger(__name__)
+
+
+class AIAutoFillSettingsView(APIView):
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+
+    def get(self, request):
+        settings, _ = AIAutoFillSettings.objects.get_or_create(shop=request.user.shop)
+        serializer = AIAutoFillSettingsSerializer(settings) # Create this serializer
+        return Response(serializer.data)
+
+    def patch(self, request):
+        settings, _ = AIAutoFillSettings.objects.get_or_create(shop=request.user.shop)
+        serializer = AIAutoFillSettingsSerializer(settings, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class HoldSlotAndBookView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, slot_id):
+        # This endpoint is hit when a user clicks the shortlink
+        # 1. Check if slot is available and create a temporary hold (e.g., in Redis or a model)
+        # 2. Create a Stripe Payment Intent.
+        # 3. Return payment client secret to the app.
+        # The app will confirm the payment, then call the final booking endpoint.
+        # This logic ensures atomicity and prevents double booking.
+        pass
 
 class ShopListCreateView(APIView):
     authentication_classes = [JWTAuthentication]

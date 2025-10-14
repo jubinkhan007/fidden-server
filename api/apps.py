@@ -1,7 +1,10 @@
+# api/apps.py
+
 from django.apps import AppConfig
 from django.db.models.signals import post_migrate
 from django.conf import settings
-
+from django.apps import AppConfig, apps
+from django.db.models.signals import post_save
 
 def _setup_daily_slot_prefill_schedule():
     """Create or update a daily midnight schedule for pre-filling slots.
@@ -42,12 +45,25 @@ def _setup_daily_slot_prefill_schedule():
         pass
 
 class ApiConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'api'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "api"
 
     def ready(self):
-        # Defer DB work until after migrations to avoid app init queries
-        def _handler(**kwargs):
-            _setup_daily_slot_prefill_schedule()
+        # Import models module so the handler function is defined
+        import api.models  # noqa
 
+        Booking = apps.get_model("payments", "Booking")
+        from api.models import on_booking_status_change
+
+        post_save.connect(
+            on_booking_status_change,
+            sender=Booking,
+            dispatch_uid="api_on_booking_status_change",
+            weak=False,
+        )
+
+        # keep your _setup_daily_slot_prefill_schedule() hook
+        def _handler(**kwargs):
+            from .apps import _setup_daily_slot_prefill_schedule
+            _setup_daily_slot_prefill_schedule()
         post_migrate.connect(_handler, sender=self)

@@ -48,6 +48,7 @@ class BookingAdmin(admin.ModelAdmin):
     list_filter = ("status", "created_at")
     search_fields = ("user__email", "shop__name")
     readonly_fields = ("created_at", "updated_at")
+    actions = ['mark_as_no_show', 'mark_as_late_cancel']
 
 
 # -----------------------------
