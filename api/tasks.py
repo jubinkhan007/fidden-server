@@ -13,6 +13,8 @@ from .utils.fcm import notify_user
 from subscriptions.models import SubscriptionPlan
 from django.db import transaction
 from django.contrib.auth import get_user_model
+import time, uuid, json
+from django.utils.timezone import now as tz_now
 
 
 logger = logging.getLogger(__name__)
@@ -203,37 +205,64 @@ def send_autofill_offers(slot_id, user_ids, channel):
     interpret slot_id as a SlotBooking.pk and map to its Slot.
     """
     from .models import Slot, SlotBooking
-    logger.info("[autofill] send_autofill_offers(slot_id=%s, users=%s, channel=%s)",
-                slot_id, user_ids, channel)
+    started_at = tz_now()
+    t0 = time.monotonic()
+    run_id = str(uuid.uuid4())[:8]  # correlation id for this run
+
+    def _dt(ms):  # elapsed ms helper
+        return f"{int((time.monotonic() - t0) * 1000)}ms"
+
+    def _safe(obj):
+        try:
+            return json.dumps(obj, ensure_ascii=False)
+        except Exception:
+            return str(obj)
+
+    def _redact(email):
+        if not email or "@" not in email:
+            return email
+        name, host = email.split("@", 1)
+        return (name[:1] + "***@" + host)
+
+    logger.info("[autofill:%s] start slot_id=%s users=%s channel=%s at=%s",
+                run_id, slot_id, user_ids, channel, started_at.isoformat())
 
     # 1) Find the Slot (with defensive fallback)
     slot = None
     try:
         slot = Slot.objects.select_related('shop', 'service').get(id=slot_id)
+        logger.info("[autofill:%s] %s found Slot id=%s shop=%s service=%s (%s)",
+                    run_id, _dt(0), slot.id, slot.shop_id, slot.service_id, slot.start_time.isoformat())
     except Slot.DoesNotExist:
-        # Fallback: maybe a SlotBooking id was passed by mistake
+        logger.warning("[autofill:%s] %s Slot id=%s not found; trying SlotBooking fallback",
+                       run_id, _dt(0), slot_id)
         sb = SlotBooking.objects.filter(id=slot_id).select_related("slot").first()
         if sb and sb.slot_id:
-            logger.warning("[autofill] slot_id=%s looked like SlotBooking.id; "
-                           "using its slot_id=%s instead", slot_id, sb.slot_id)
             slot = Slot.objects.select_related('shop', 'service').filter(id=sb.slot_id).first()
+            logger.warning("[autofill:%s] %s slot_id looked like SlotBooking.id; mapped to slot_id=%s",
+                           run_id, _dt(0), getattr(slot, "id", None))
 
     if not slot:
-        logger.warning("[autofill] Slot id=%s not found. Aborting outreach.", slot_id)
+        logger.warning("[autofill:%s] %s abort: no slot", run_id, _dt(0))
         return "No slot."
 
     # 2) Capacity guard
-    if (slot.capacity_left or 0) <= 0:
-        logger.info("[autofill] Slot id=%s has no capacity_left; aborting.", slot.id)
+    cap = (slot.capacity_left or 0)
+    logger.info("[autofill:%s] %s capacity_left=%s", run_id, _dt(0), cap)
+    if cap <= 0:
+        logger.info("[autofill:%s] %s abort: slot filled", run_id, _dt(0))
         return "Slot was filled before this wave."
 
     # 3) Users via AUTH_USER_MODEL
     User = get_user_model()
-    users = list(User.objects.filter(id__in=user_ids).only("id", "email"))
-    logger.info("[autofill] Matched %d users for outreach.", len(users))
+    users_qs = User.objects.filter(id__in=user_ids).only("id", "email")
+    users = list(users_qs)
+    logger.info("[autofill:%s] %s matched_users=%d ids=%s",
+                run_id, _dt(0), len(users), [u.id for u in users])
     if not users:
         return "No recipients."
 
+    # 4) Compose content
     subject = "An opening just became available!"
     message_body = (
         f"{slot.shop.name} just had a {slot.service.title} spot open up at "
@@ -242,61 +271,102 @@ def send_autofill_offers(slot_id, user_ids, channel):
     shortlink = f"https://your-app.com/book/{slot.id}"
     full_message = f"{message_body}\n\nTap to book: {shortlink}"
 
-    # 4) Push + Email (email errors visible)
+    # Shared data payload (also used by push)
+    data = {
+        "type": "autofill_offer",
+        "action": "book_offer",
+        "slot_id": str(slot.id),
+        "shop_id": str(slot.shop_id),
+        "service_id": str(slot.service_id),
+        "serviceName": slot.service.title or "",
+        "service_img": getattr(slot.service, "image_url", "") or "",
+        "shopName": slot.shop.name or "",
+        "shopAddress": getattr(slot.shop, "address", "") or "",
+        "serviceDurationMinutes": str(getattr(slot.service, "duration", 0)),
+        "start_time": slot.start_time.isoformat(),
+        "price": str(getattr(slot.service, "price", 0) or 0),
+        "discountPrice": str(getattr(slot.service, "discount_price", "") or ""),
+        "deeplink": f"fidden://book/{slot.id}",
+        "url": shortlink,
+        # Include text so client can render even if notification payload is absent
+        "title": subject,
+        "body": message_body,
+    }
+    logger.info("[autofill:%s] %s payload=%s", run_id, _dt(0), _safe(data))
+
+    # 5) Push + Email
     sent_push = 0
     sent_email = 0
 
-    if channel in ("push", "sms_push"):
+    # PUSH
+    if channel in ("push", "sms_push", "email_push"):
+        logger.info("[autofill:%s] %s entering push branch channel=%s",
+                    run_id, _dt(0), channel)
         for u in users:
             try:
-                subject = "An opening just became available!"
-                message_body = (
-                    f"{slot.shop.name} just had a {slot.service.title} spot open up at "
-                    f"{slot.start_time.strftime('%I:%M %p on %b %d')}. First come, first served!"
-                )
-                shortlink = f"https://your-app.com/book/{slot.id}"
-
-                data = {
-                    "type": "autofill_offer",
-                    "action": "book_offer",
-                    "slot_id": str(slot.id),
-                    "shop_id": str(slot.shop_id),
-                    "service_id": str(slot.service_id),
-                    "deeplink": f"fidden://offer/{slot.id}",   # <- app deep link
-                    "url": shortlink,                          # <- web fallback
-                }
-
-                # keep click_action & notification_id logic inside notify_user
+                logger.debug("[autofill:%s] %s push→user_id=%s",
+                             run_id, _dt(0), u.id)
                 notify_user(
                     user=u,
                     message=message_body,
                     notification_type="autofill_offer",
                     data=data,
-                    debug=True,
+                    debug=True,        # ensures console prints in your fcm util
                     dry_run=False,
                 )
-
                 sent_push += 1
             except Exception as e:
-                logger.warning("[autofill] push failed user_id=%s err=%s", getattr(u, "id", None), e)
+                logger.warning("[autofill:%s] %s push failed user_id=%s err=%s",
+                               run_id, _dt(0), getattr(u, "id", None), e, exc_info=True)
+
+    # EMAIL
+    if channel in ("email", "email_push"):
+        logger.info("[autofill:%s] %s entering email branch channel=%s",
+                    run_id, _dt(0), channel)
+        for u in users:
+            email = getattr(u, "email", None)
+            logger.debug("[autofill:%s] %s email candidate user_id=%s email=%s",
+                         run_id, _dt(0), getattr(u, "id", None), _redact(email))
+            if not email:
+                continue
+            try:
+                send_mail(
+                    subject=f"[Fidden] {subject}",
+                    message=full_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[email],
+                    fail_silently=False,
+                )
+                sent_email += 1
+                logger.debug("[autofill:%s] %s email sent user_id=%s email=%s",
+                             run_id, _dt(0), getattr(u, "id", None), _redact(email))
+            except Exception as e:
+                logger.warning("[autofill:%s] %s email failed user_id=%s email=%s err=%s",
+                               run_id, _dt(0), getattr(u, "id", None), _redact(email), e, exc_info=True)
+
+    elapsed = _dt(0)
+    logger.info("[autofill:%s] done elapsed=%s push_sent=%d email_sent=%d slot_id=%s",
+                run_id, elapsed, sent_push, sent_email, slot.id)
+    return f"push={sent_push}, email={sent_email}, recipients={len(users)}, channel={channel}"
 
 
-        if channel in ("email", "email_push"):
-            for u in users:
-                email = getattr(u, "email", None)
-                if not email:
-                    continue
-                try:
-                    send_mail(
-                        subject=f"[Fidden] {subject}",
-                        message=full_message,
-                        from_email=settings.DEFAULT_FROM_EMAIL,
-                        recipient_list=[email],
-                        fail_silently=False,  # show SMTP issues in logs
-                    )
-                    sent_email += 1
-                except Exception as e:
-                    logger.warning("[autofill] email failed to %s: %s", email, e)
+
+    if channel in ("email", "email_push"):
+        for u in users:
+            email = getattr(u, "email", None)
+            if not email:
+                continue
+            try:
+                send_mail(
+                    subject=f"[Fidden] {subject}",
+                    message=full_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[email],
+                    fail_silently=False,  # show SMTP issues in logs
+                )
+                sent_email += 1
+            except Exception as e:
+                logger.warning("[autofill] email failed to %s: %s", email, e)
 
     logger.info("[autofill] Done. push_sent=%d email_sent=%d slot_id=%s",
                 sent_push, sent_email, slot.id)
