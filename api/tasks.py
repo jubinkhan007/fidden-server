@@ -174,8 +174,8 @@ def trigger_no_show_auto_fill(self, booking_id):
         return "No candidates."
 
     candidates.sort(key=lambda t: t[1], reverse=True)
-    top_ids  = [uid for (uid, _) in candidates[:1]]
-    next_ids = [uid for (uid, _) in candidates[1:25]]
+    top_ids  = [uid for (uid, _) in candidates[:5]]
+    next_ids = [uid for (uid, _) in candidates[5:25]]
 
     # Log the ids we’re about to enqueue so we can see if slot vs slot_booking is correct
     logger.info("[autofill] enqueue slot.id=%s slot_booking.id=%s service_id=%s", slot.id, slot_booking.id, service_id)
@@ -249,7 +249,6 @@ def send_autofill_offers(slot_id, user_ids, channel):
     if channel in ("push", "sms_push"):
         for u in users:
             try:
-                # Build strings
                 subject = "An opening just became available!"
                 message_body = (
                     f"{slot.shop.name} just had a {slot.service.title} spot open up at "
@@ -257,13 +256,23 @@ def send_autofill_offers(slot_id, user_ids, channel):
                 )
                 shortlink = f"https://your-app.com/book/{slot.id}"
 
-                # GOOD: pass message correctly, and a short, valid type
+                data = {
+                    "type": "autofill_offer",
+                    "action": "book_offer",
+                    "slot_id": str(slot.id),
+                    "shop_id": str(slot.shop_id),
+                    "service_id": str(slot.service_id),
+                    "deeplink": f"fidden://offer/{slot.id}",   # <- app deep link
+                    "url": shortlink,                          # <- web fallback
+                }
+
+                # keep click_action & notification_id logic inside notify_user
                 notify_user(
                     user=u,
-                    message=message_body,                 # <- this is the notification body
-                    notification_type="autofill_offer",   # <- define a stable type (add to choices if you have them)
-                    data={"url": shortlink},
-                    debug=True,                           # <- turn on logs while testing
+                    message=message_body,
+                    notification_type="autofill_offer",
+                    data=data,
+                    debug=True,
                     dry_run=False,
                 )
 
@@ -271,22 +280,23 @@ def send_autofill_offers(slot_id, user_ids, channel):
             except Exception as e:
                 logger.warning("[autofill] push failed user_id=%s err=%s", getattr(u, "id", None), e)
 
-    if channel in ("email", "email_push"):
-        for u in users:
-            email = getattr(u, "email", None)
-            if not email:
-                continue
-            try:
-                send_mail(
-                    subject=f"[Fidden] {subject}",
-                    message=full_message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[email],
-                    fail_silently=False,  # show SMTP issues in logs
-                )
-                sent_email += 1
-            except Exception as e:
-                logger.warning("[autofill] email failed to %s: %s", email, e)
+
+        if channel in ("email", "email_push"):
+            for u in users:
+                email = getattr(u, "email", None)
+                if not email:
+                    continue
+                try:
+                    send_mail(
+                        subject=f"[Fidden] {subject}",
+                        message=full_message,
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        recipient_list=[email],
+                        fail_silently=False,  # show SMTP issues in logs
+                    )
+                    sent_email += 1
+                except Exception as e:
+                    logger.warning("[autofill] email failed to %s: %s", email, e)
 
     logger.info("[autofill] Done. push_sent=%d email_sent=%d slot_id=%s",
                 sent_push, sent_email, slot.id)

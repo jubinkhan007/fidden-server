@@ -62,6 +62,7 @@ def _apns_cfg(title: str, body: str) -> messaging.APNSConfig:
                 sound="default",
                 badge=1,
                 # content_available=True,
+                category="AUTOFILL_OFFER",
             )
 
         ),
