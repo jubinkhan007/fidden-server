@@ -1,6 +1,7 @@
 # subscriptions/urls.py
 from django.urls import path
 from .views import (
+    CreateAIAddonCheckoutSessionView,
     SubscriptionPlanListView,
     CreateSubscriptionCheckoutSessionView,
     CancelSubscriptionView,
@@ -19,4 +20,5 @@ urlpatterns = [
     # HTTPS landers that immediately deep-link back to the app
     path("checkout/return/", CheckoutReturnView.as_view(), name="checkout_return"),
     path("checkout/cancel/", CheckoutCancelView.as_view(), name="checkout_cancel"),
+    path("create-ai-addon-checkout-session/", CreateAIAddonCheckoutSessionView.as_view(), name="create-ai-addon-checkout-session"),
 ]

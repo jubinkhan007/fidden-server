@@ -100,9 +100,6 @@ class SubscriptionPlan(models.Model):
 
 
 class ShopSubscription(models.Model):
-    """
-    Links a Shop to a SubscriptionPlan, tracking its current status and validity period.
-    """
     STATUS_ACTIVE = "active"
     STATUS_EXPIRED = "expired"
     STATUS_CANCELLED = "cancelled"
@@ -118,7 +115,28 @@ class ShopSubscription(models.Model):
     end_date = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     stripe_subscription_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
+    has_ai_addon = models.BooleanField(default=False)  # user explicitly bought add-on
 
+    @property
+    def ai_enabled(self):
+        """
+        AI Assistant is active if:
+        - the plan includes it (Icon), or
+        - user purchased it as an add-on.
+        """
+        if self.plan and self.plan.ai_assistant == SubscriptionPlan.AI_INCLUDED:
+            return True
+        return self.has_ai_addon
+
+    @property
+    def ai_source(self):
+        """Return 'included', 'addon', or 'none'."""
+        if self.plan and self.plan.ai_assistant == SubscriptionPlan.AI_INCLUDED:
+            return "included"
+        if self.has_ai_addon:
+            return "addon"
+        return "none"
+    
     def __str__(self):
         plan_name = self.plan.name if self.plan else "—"
         return f"{self.shop.name} - {plan_name} ({self.status})"

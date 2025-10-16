@@ -50,4 +50,16 @@ app.conf.beat_schedule = {
         'task': 'api.tasks.generate_weekly_ai_reports',
         'schedule': crontab(day_of_week='sunday', hour=20, minute=0),  # Every Sunday at 8 PM
     },
+    'send-smart-rebooking-prompts': {
+        'task': 'api.tasks.send_smart_rebooking_prompts',
+        'schedule': crontab(hour=10, minute=0),  # Every day at 10 AM
+    },
+    'send-auto-followups': {
+        'task': 'api.tasks.send_auto_followups',
+        'schedule': crontab(minute='*/30'),  # Every 30 minutes
+    },
+    'reengage-ghost-clients': {
+        'task': 'api.tasks.reengage_ghost_clients',
+        'schedule': crontab(day_of_week='monday', hour=11, minute=0),  # Every Monday at 11 AM
+    },
 }

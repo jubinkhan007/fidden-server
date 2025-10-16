@@ -192,17 +192,71 @@ class SubscriptionDetailsView(APIView):
             ai_state = "included"
 
         commission = plan.commission_rate if plan.commission_rate is not None else Decimal("0.10")
-
+        ai_state = "none"
+        if shop_sub:
+            if shop_sub.ai_source == "included":
+                ai_state = "included"
+            elif shop_sub.ai_source == "addon":
+                ai_state = "addon_active"
+            elif shop_sub.plan.name in [SubscriptionPlan.FOUNDATION, SubscriptionPlan.MOMENTUM]:
+                ai_state = "available"
         payload = {
-            "plan": SubscriptionPlanSerializer(plan).data,
-            "status": status,
-            "renews_on": renews_on,
-            "expires_on": expires_on,             # 👈 NEW in response
-            "cancel_at_period_end": cancel_at_period_end,
-            "commission_rate": str(commission),
-            "ai": {"state": ai_state, "legacy": ai_legacy, "price_id": ai_price_id},
-        }
+    "plan": SubscriptionPlanSerializer(plan).data,
+    "status": status,
+    "renews_on": renews_on,
+    "expires_on": expires_on,
+    "cancel_at_period_end": cancel_at_period_end,
+    "commission_rate": str(commission),
+    "ai": {
+        "state": ai_state,
+        "legacy": False,
+        "price_id": ai_price_id
+    },
+}
         return Response(payload, status=200)
+
+
+class CreateAIAddonCheckoutSessionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            shop = request.user.shop
+            sub = getattr(shop, "subscription", None)
+            if not sub:
+                return Response({"error": "No active subscription found."}, status=404)
+
+            if sub.ai_source == "included":
+                return Response({"error": "AI Assistant already included in your plan."}, status=400)
+            if sub.ai_source == "addon":
+                return Response({"error": "AI Assistant add-on already active."}, status=400)
+
+            if sub.plan.name not in [SubscriptionPlan.FOUNDATION, SubscriptionPlan.MOMENTUM]:
+                return Response({"error": "AI Add-on not available for this plan."}, status=400)
+        except Exception:
+            return Response({"error": "Create a shop first."}, status=404)
+
+        ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+        if not ai_price_id:
+            return Response({"error": "AI add-on price not configured."}, status=500)
+
+        success_url = request.build_absolute_uri(reverse("checkout_return")) + "?session_id={CHECKOUT_SESSION_ID}"
+        cancel_url  = request.build_absolute_uri(reverse("checkout_cancel"))
+
+        customer_id = _ensure_shop_customer_id(shop)
+        checkout_session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer=customer_id,
+            line_items=[{"price": ai_price_id, "quantity": 1}],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            client_reference_id=str(shop.id),
+            subscription_data={
+                "metadata": {"shop_id": str(shop.id), "addon": "ai_assistant"}
+            },
+        )
+        return Response({"url": checkout_session.url}, status=200)
+
 
 
 class SubscriptionPlanListView(APIView):

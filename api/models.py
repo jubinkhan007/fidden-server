@@ -37,6 +37,7 @@ class Shop(models.Model):
     break_end_time = models.TimeField(blank=True, null=True)
     about_us = models.TextField(blank=True, null=True)
     shop_img = models.ImageField(upload_to='shop/', blank=True, null=True)
+    ai_partner_name = models.CharField(max_length=50, blank=True, null=True, default="Amara")
 
     close_days = models.JSONField(
         default=list,
