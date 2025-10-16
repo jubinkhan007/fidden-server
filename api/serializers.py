@@ -1047,3 +1047,24 @@ class AIAutoFillSettingsSerializer(serializers.ModelSerializer):
             'no_show_window_minutes',
             'auto_fill_scope_hours',
         ]
+
+
+class AIReportSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the AI Weekly Report.
+    """
+    top_selling_service = serializers.CharField(source='get_top_selling_service_display')
+    forecast_summary = serializers.CharField(source='get_forecast_summary_display')
+    motivational_nudge = serializers.CharField(source='get_motivational_nudge_display')
+
+    class Meta:
+        model = PerformanceAnalytics
+        fields = [
+            'total_appointments',
+            'total_revenue',
+            'no_shows_filled', # Assuming you add this field later
+            'top_selling_service',
+            'forecast_summary',
+            'motivational_nudge',
+            'week_start_date',
+        ]
