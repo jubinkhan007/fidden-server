@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import (
+    AIReportView,
     PerformanceAnalyticsView,
     ShopListCreateView,
     ShopRetrieveUpdateDestroyView,
@@ -74,4 +75,5 @@ urlpatterns = [
     path('analytics/', PerformanceAnalyticsView.as_view(), name='performance-analytics'),
     path('ai-settings/', AIAutoFillSettingsView.as_view(), name='ai-settings'),
     path('slots/<int:slot_id>/hold/', HoldSlotAndBookView.as_view(), name='hold-slot'),
+    path('ai-report/', AIReportView.as_view(), name='ai-report'),
 ]

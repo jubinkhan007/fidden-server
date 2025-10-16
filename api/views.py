@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Sum
 from django.utils.timezone import make_aware
 from .models import (
+    AutoFillLog,
     PerformanceAnalytics,
     Shop, 
     Service, 
@@ -27,6 +28,7 @@ from .models import (
 )
 from payments.models import Booking
 from .serializers import (
+    AIReportSerializer,
     ShopSerializer, 
     ServiceSerializer, 
     RatingReviewSerializer, 
@@ -1413,3 +1415,80 @@ class PerformanceAnalyticsView(APIView):
         analytics, _ = PerformanceAnalytics.objects.get_or_create(shop=shop)
         serializer = PerformanceAnalyticsSerializer(analytics, context={'plan': plan})
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AIReportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """
+        Return a weekly-style AI report using fields that actually exist:
+        - PerformanceAnalytics: total_bookings, total_revenue, top_service, updated_at
+        - AutoFillLog: count filled no-shows (last 7 days)
+        - Slot: forecast open slots (next 7 days)
+        """
+        try:
+            shop = request.user.shop
+        except Shop.DoesNotExist:
+            return Response({"error": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # latest analytics row by timestamp you actually have
+        latest = (
+            PerformanceAnalytics.objects
+            .filter(shop=shop)
+            .order_by('-updated_at')
+            .first()
+        )
+        if not latest:
+            return Response({"error": "No AI report available yet."}, status=status.HTTP_404_NOT_FOUND)
+
+        now = timezone.now()
+        week_ago = now - timedelta(days=7)
+        next_week = now + timedelta(days=7)
+
+        # no-shows filled automatically (use AutoFillLog as proxy)
+        # count any log with a successfully filled booking over the last week
+        filled_noshows = AutoFillLog.objects.filter(
+            shop=shop,
+            created_at__gte=week_ago,
+            filled_by_booking__isnull=False
+        ).count()
+
+        # simple forecast: count open slots in the next 7 days
+        open_slots = Slot.objects.filter(
+            shop=shop,
+            start_time__gt=now,
+            start_time__lte=next_week,
+            capacity_left__gt=0
+        ).count()
+
+        # map to your AI UI schema
+        data = {
+            "total_appointments": latest.total_bookings or 0,
+            "total_revenue": float(latest.total_revenue or 0),
+            "no_shows_filled": filled_noshows,
+            "top_selling_service": latest.top_service or "-",
+            "forecast_summary": f"You’ve got {open_slots} open slots next week — let’s fill them.",
+            "motivational_nudge": "You’re building something bigger — let’s keep it rolling.",
+            "updated_at": latest.updated_at,
+            # nice to have for the app header/avatar
+            "ai_partner_name": shop.ai_partner_name or "Amara",
+        }
+        return Response(data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        """
+        Save the chosen AI partner for the authenticated user's shop.
+        """
+        partner_name = request.data.get("partner_name")
+        if partner_name not in {"Malik", "Amara", "Dre", "Zuri"}:
+            return Response({"error": "Invalid partner name."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            shop = request.user.shop
+        except Shop.DoesNotExist:
+            return Response({"error": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        shop.ai_partner_name = partner_name
+        shop.save(update_fields=["ai_partner_name"])
+        return Response({"success": True, "partner_name": partner_name}, status=status.HTTP_200_OK)
