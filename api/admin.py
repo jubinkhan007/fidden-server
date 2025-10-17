@@ -218,7 +218,7 @@ class PromotionAdmin(admin.ModelAdmin):
     search_fields = ('title', 'subtitle')
     ordering = ('-created_at',)
 
-# ✅ Slots
+#  Slots
 @admin.register(Slot)
 class SlotAdmin(admin.ModelAdmin):
     list_display = ("shop", "service", "start_time", "end_time", "capacity_left")
@@ -227,7 +227,7 @@ class SlotAdmin(admin.ModelAdmin):
     ordering = ("start_time",)
 
 
-# ✅ Slot Bookings
+#  Slot Bookings
 @admin.register(SlotBooking)
 class SlotBookingAdmin(admin.ModelAdmin):
     list_display = ("user", "shop", "service", "slot", "status", "payment_status", "start_time", "end_time")

@@ -3,8 +3,10 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Sum
+from django.core.cache import cache
 from django.utils.timezone import make_aware
 from .models import (
     AutoFillLog,
@@ -96,16 +98,70 @@ class AIAutoFillSettingsView(APIView):
 
 
 class HoldSlotAndBookView(APIView):
+    """
+    Allows a user to claim an auto-fill offer.
+    It creates a temporary, exclusive hold on the slot for a few minutes
+    to allow the user to complete the booking process.
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, slot_id):
-        # This endpoint is hit when a user clicks the shortlink
-        # 1. Check if slot is available and create a temporary hold (e.g., in Redis or a model)
-        # 2. Create a Stripe Payment Intent.
-        # 3. Return payment client secret to the app.
-        # The app will confirm the payment, then call the final booking endpoint.
-        # This logic ensures atomicity and prevents double booking.
-        pass
+        user = request.user
+        
+        try:
+            # Use select_for_update to lock the slot row during the transaction
+            with transaction.atomic():
+                slot = Slot.objects.select_for_update().get(id=slot_id)
+
+                # 1. Check if the slot is still available
+                if slot.capacity_left <= 0:
+                    return Response(
+                        {"error": "This slot was just booked by someone else."},
+                        status=status.HTTP_409_CONFLICT  # 409 Conflict
+                    )
+
+                # 2. Check for an existing hold on the slot
+                hold_key = f"slot_hold_{slot_id}"
+                if cache.get(hold_key):
+                    return Response(
+                        {"error": "This slot is currently on hold. Please try again in a few moments."},
+                        status=status.HTTP_409_CONFLICT
+                    )
+
+                # 3. Create a 5-minute hold for the current user
+                cache.set(hold_key, user.id, timeout=300)  # 300 seconds = 5 minutes
+                logger.info(f"Slot {slot_id} is now on hold for user {user.id}.")
+
+                # 4. Create the preliminary booking record in 'pending' state
+                # This uses the Booking model from your payments app
+                new_booking = Booking.objects.create(
+                    user=user,
+                    shop=slot.shop,
+                    service=slot.service,
+                    slot=slot, # Link to the actual Slot
+                    status='pending', # Start as pending until payment is confirmed
+                    start_time=slot.start_time,
+                    end_time=slot.end_time,
+                )
+                
+                # 5. Decrement slot capacity immediately
+                slot.capacity_left -= 1
+                slot.save(update_fields=['capacity_left'])
+
+        except Slot.DoesNotExist:
+            return Response({"error": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Error in HoldSlotAndBookView: {e}", exc_info=True)
+            return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # The user's app should now proceed to the payment screen.
+        # The CreatePaymentIntentView will be called next by the app.
+        return Response({
+            "success": True,
+            "message": "Slot is now on hold. Please complete your payment within 5 minutes.",
+            "booking_id": new_booking.id,
+            "slot_id": slot_id,
+        }, status=status.HTTP_200_OK)
 
 class ShopListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -440,7 +496,7 @@ class AllShopsListView(APIView):
             'ratings',
             filter=Q(ratings__review__isnull=False) & ~Q(ratings__review__exact='')
         ),
-        # ✅ compute a plan-based priority boost (Icon > Momentum; only if plan is priority)
+        #  compute a plan-based priority boost (Icon > Momentum; only if plan is priority)
         plan_priority=Case(
             When(subscription__plan__priority_marketplace_ranking=True, then=Value(1)),
             default=Value(0), output_field=IntegerField()

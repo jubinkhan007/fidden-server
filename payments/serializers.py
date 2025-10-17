@@ -20,7 +20,7 @@ class userBookingSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     shop_name = serializers.CharField(source='shop.name', read_only=True)
     shop_address = serializers.CharField(source='shop.address', read_only=True)
-    shop_img = serializers.SerializerMethodField()  # ✅ custom field for absolute URL
+    shop_img = serializers.SerializerMethodField()  #  custom field for absolute URL
     slot_time = serializers.DateTimeField(source='slot.start_time', read_only=True)
     service_id = serializers.CharField(source='slot.service.id', read_only=True)
     service_title = serializers.CharField(source='slot.service.title', read_only=True)
@@ -55,7 +55,7 @@ class userBookingSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_shop_img(self, obj):
-        request = self.context.get("request")  # ✅ need request from view
+        request = self.context.get("request")  #  need request from view
         if obj.shop.shop_img:
             return request.build_absolute_uri(obj.shop.shop_img.url) if request else obj.shop.shop_img.url
         return None
@@ -144,7 +144,7 @@ class ApplyCouponSerializer(serializers.Serializer):
         if not can_use_coupon(user, coupon):
             raise serializers.ValidationError("Coupon usage limit reached for this user.")
 
-        self._validated_coupon = coupon  # ✅ store safely
+        self._validated_coupon = coupon  #  store safely
         return value
 
     @property

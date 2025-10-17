@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     CreatePaymentIntentView,
+    MarkBookingNoShowView,
     ShopOnboardingLinkView,
     SaveCardView,
     VerifyShopOnboardingView,
@@ -23,4 +24,5 @@ urlpatterns = [
     path("transactions/", TransactionLogListView.as_view(), name="transaction-list"),
     path("stripe/return/",  StripeReturnView.as_view(),  name="stripe-return"),
     path("stripe/refresh/", StripeRefreshView.as_view(), name="stripe-refresh"),
+    path('bookings/<int:booking_id>/mark-no-show/', MarkBookingNoShowView.as_view(), name='mark-booking-no-show'),
 ]

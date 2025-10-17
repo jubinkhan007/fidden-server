@@ -59,7 +59,7 @@ class LoginSerializer(serializers.Serializer):
         refresh = RefreshToken.for_user(user)
 
         return {
-            "user": user,  # ✅ add user object
+            "user": user,  #  add user object
             "message": "Login Successful",
             "accessToken": str(refresh.access_token),
             "refreshToken": str(refresh),

@@ -1,3 +1,5 @@
+# api/models.py
+
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.conf import settings
@@ -68,7 +70,7 @@ class Shop(models.Model):
         help_text="Default percentage deposit for new services"
     )
 
-    # ✅ new field
+    #  new field
     status = models.CharField(
         max_length=10,
         choices=STATUS_CHOICES,
@@ -351,7 +353,7 @@ class RatingReview(models.Model):
         related_name="ratings"
     )
     booking = models.OneToOneField(
-        "payments.Booking",   # ✅ each booking can have only one review
+        "payments.Booking",   #  each booking can have only one review
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -739,6 +741,8 @@ class PerformanceAnalytics(models.Model):
     top_service = models.CharField(max_length=255, blank=True, null=True)
     peak_booking_time = models.CharField(max_length=255, blank=True, null=True)
     customer_demographics = models.JSONField(default=dict)
+    no_shows_filled = models.PositiveIntegerField(default=0)
+    week_start_date = models.DateField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -783,11 +787,23 @@ class AutoFillLog(models.Model):
         return f"Auto-fill log for {self.shop.name} at {self.created_at}"
 # --- DJANGO SIGNAL TO TRIGGER AUTO-FILL ---
 
+# api/models.py
 @receiver(post_save, dispatch_uid="api_on_booking_status_change")
 def on_booking_status_change(sender, instance, **kwargs):
+    # only react to models that actually have a status
     if not hasattr(instance, "status"):
         return
+
     if instance.status in ("no-show", "late-cancel"):
-        from api.tasks import trigger_no_show_auto_fill  # local import avoids cycle
-        from django.db import transaction
+        # 1) immediately cancel the slot-level record (prevents overlap)
+        try:
+            sb = instance.slot  # api.SlotBooking
+            if sb and sb.status != "cancelled":
+                sb.status = "cancelled"
+                sb.save(update_fields=["status"])
+        except Exception:
+            pass
+
+        # 2) kick off outreach after the transaction commits
+        from api.tasks import trigger_no_show_auto_fill
         transaction.on_commit(lambda: trigger_no_show_auto_fill.delay(instance.id))

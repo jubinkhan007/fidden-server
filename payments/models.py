@@ -342,7 +342,7 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     )
 
                 try:
-                    # ✅ Push notification to shop owner
+                    #  Push notification to shop owner
                     notify_user(
                         shop.owner,
                         message=(

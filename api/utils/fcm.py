@@ -25,7 +25,7 @@ def _init_firebase() -> None:
         try:
             cred = credentials.Certificate(temp_path)
             firebase_admin.initialize_app(cred)
-            print("✅ Firebase initialized successfully!")
+            print(" Firebase initialized successfully!")
         finally:
             try:
                 os.unlink(temp_path)  # Clean up temp file

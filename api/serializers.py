@@ -183,7 +183,7 @@ class VerificationFileSerializer(serializers.ModelSerializer):
         fields = ["id", "file", "uploaded_at"]
 
 class ShopSerializer(serializers.ModelSerializer):
-    # ✅ removed services from response
+    #  removed services from response
     owner_id = serializers.IntegerField(source='owner.id', read_only=True)
     # 👇 for multiple file uploads at creation
     verification_files = serializers.ListField(

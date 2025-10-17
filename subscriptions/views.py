@@ -193,7 +193,7 @@ class SubscriptionDetailsView(APIView):
 
         commission = plan.commission_rate if plan.commission_rate is not None else Decimal("0.10")
 
-        # ✅ Determine AI state correctly (do NOT reset it earlier)
+        #  Determine AI state correctly (do NOT reset it earlier)
         ai_state = "none"
         if shop_sub:
             # Included automatically for Icon plan

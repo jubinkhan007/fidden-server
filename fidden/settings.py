@@ -42,12 +42,12 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'accounts',
-    'api',
     'payments',
     'subscriptions',
     'django_celery_beat',
     'channels',
     'drf_yasg',
+    'api.apps.ApiConfig',
     # 'django_crontab',
 ]
 
@@ -247,3 +247,12 @@ STRIPE_AI_PRICE_ID = os.environ.get("STRIPE_AI_PRICE_ID")
 
 STRIPE_SUCCESS_URL = os.getenv('STRIPE_SUCCESS_URL', 'http://localhost:3000/subscription/success')
 STRIPE_CANCEL_URL = os.getenv('STRIPE_CANCEL_URL', 'http://localhost:3000/subscription/cancel')
+
+# pip install django-redis
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL", "redis://127.0.0.1:6379/1"),
+        "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+    }
+}

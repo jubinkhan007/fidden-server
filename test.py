@@ -46,7 +46,7 @@ def enable_test_us_account(stripe_account_id, email="owner@example.com"):
                 "url": "https://970536d26b79.ngrok-free.app",
             },
         )
-        print("✅ Test account enabled:", account.id)
+        print(" Test account enabled:", account.id)
         return account
     except Exception as e:
         print(f"❌ Stripe test onboarding failed: {e}")

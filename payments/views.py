@@ -65,10 +65,10 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
                 if hasattr(shop, "subscription"):
                     shop.subscription.has_ai_addon = True
                     shop.subscription.save(update_fields=["has_ai_addon"])
-                    logger.info("✅ AI add-on activated for shop %s", shop_id)
+                    logger.info(" AI add-on activated for shop %s", shop_id)
             except Shop.DoesNotExist:
                 logger.warning("⚠️ Shop not found for AI add-on metadata: %s", shop_id)
-        return  # ✅ stop here — no need to map to a plan
+        return  #  stop here — no need to map to a plan
 
     try:
         plan = SubscriptionPlan.objects.get(stripe_price_id=price_id)
@@ -99,7 +99,7 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
     ps_ts = sub_obj.get("current_period_start")
     pe_ts = sub_obj.get("current_period_end")
     
-    # ✅ FINAL FIX: If timestamps are identical or missing, get them from the invoice's LINE ITEM period.
+    #  FINAL FIX: If timestamps are identical or missing, get them from the invoice's LINE ITEM period.
     if (not ps_ts or not pe_ts or ps_ts == pe_ts) and sub_obj.get("latest_invoice"):
         try:
             inv = stripe.Invoice.retrieve(sub_obj["latest_invoice"], expand=["lines.data.period"])
@@ -130,7 +130,7 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
     obj.end_date = end_dt
     obj.save(update_fields=["plan", "status", "stripe_subscription_id", "start_date", "end_date"])
 
-    logger.info("✅ Shop %s set to plan %s via subscription %s (%s → %s)",
+    logger.info(" Shop %s set to plan %s via subscription %s (%s → %s)",
                 shop.id, plan.name, sub_obj.get("id"),
                 obj.start_date.isoformat(), obj.end_date.isoformat())
 
@@ -307,7 +307,7 @@ class CreatePaymentIntentView(APIView):
 
                     },
                 )
-                # print(f"✅ Payment saved: ID={payment.id}, Created={created}")
+                # print(f" Payment saved: ID={payment.id}, Created={created}")
 
             # 10) Ephemeral key for mobile SDKs
             ephemeral_key = stripe.EphemeralKey.create(
@@ -455,7 +455,7 @@ class StripeWebhookView(APIView):
 
         try:
             event = stripe.Webhook.construct_event(payload, sig_header, settings.STRIPE_ENDPOINT_SECRET)
-            logger.info("✅ Webhook signature verified")
+            logger.info(" Webhook signature verified")
         except ValueError as e:
             logger.error("❌ Invalid payload: %s", str(e))
             return Response({"error": "Invalid payload"}, status=400)
@@ -505,7 +505,7 @@ class StripeWebhookView(APIView):
                     except Exception:
                         logger.warning("[checkout] bad client_reference_id: %r", shop_ref)
 
-                # ✅ Retrieve the subscription that was just created for this session
+                #  Retrieve the subscription that was just created for this session
                 #    (this will include the metadata we set when creating the checkout)
                 if sub_id:
                     sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
@@ -513,13 +513,13 @@ class StripeWebhookView(APIView):
                     price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
                     ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
 
-                    # ✅ If this subscription is the AI add-on, mark the DB and return
+                    #  If this subscription is the AI add-on, mark the DB and return
                     if (sub_meta.get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids):
                         if shop_hint and hasattr(shop_hint, "subscription"):
                             ss = shop_hint.subscription
                             ss.has_ai_addon = True
                             ss.save(update_fields=["has_ai_addon"])
-                            logger.info("✅ AI Assistant add-on activated for shop %s", shop_hint.id)
+                            logger.info(" AI Assistant add-on activated for shop %s", shop_hint.id)
                         return Response(status=200)
 
                     # Otherwise, this is a normal base plan → proceed as before
@@ -553,7 +553,7 @@ class StripeWebhookView(APIView):
                                     "end_date": timezone.now() + relativedelta(months=1),
                                 },
                             )
-                            logger.info("✅ Shop %s set to plan %s via CHECKOUT fallback", shop_hint.id, plan.name)
+                            logger.info(" Shop %s set to plan %s via CHECKOUT fallback", shop_hint.id, plan.name)
                         except SubscriptionPlan.DoesNotExist:
                             known = list(SubscriptionPlan.objects.values_list("name", "stripe_price_id"))
                             logger.error("[checkout] fallback: no local plan for price_id=%s. Known: %s", price_id, known)
@@ -589,7 +589,7 @@ class StripeWebhookView(APIView):
                     if shop and hasattr(shop, "subscription"):
                         shop.subscription.has_ai_addon = True
                         shop.subscription.save(update_fields=["has_ai_addon"])
-                        logger.info("✅ (subscription.*) AI add-on active for shop %s", shop.id)
+                        logger.info(" (subscription.*) AI add-on active for shop %s", shop.id)
                     return Response(status=200)
             except Exception:
                 logger.exception("AI add-on detection failed in subscription.*")
@@ -607,7 +607,7 @@ class StripeWebhookView(APIView):
                     ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
                     price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
 
-                    # ✅ Short-circuit AI add-on invoices
+                    #  Short-circuit AI add-on invoices
                     if (sub.get("metadata", {}).get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids):
                         # resolve shop and set has_ai_addon
                         shop = None
@@ -624,7 +624,7 @@ class StripeWebhookView(APIView):
                         if shop and hasattr(shop, "subscription"):
                             shop.subscription.has_ai_addon = True
                             shop.subscription.save(update_fields=["has_ai_addon"])
-                            logger.info("✅ (invoice.*) AI add-on active for shop %s", shop.id)
+                            logger.info(" (invoice.*) AI add-on active for shop %s", shop.id)
                         return Response(status=200)
 
                     # Otherwise it’s a base plan invoice
@@ -670,7 +670,7 @@ class StripeWebhookView(APIView):
             old_status = payment.status
             payment.status = new_status
             payment.save(update_fields=["status"])
-            logger.info("✅ Payment #%s updated: %s → %s (intent: %s)",
+            logger.info(" Payment #%s updated: %s → %s (intent: %s)",
                        payment.id, old_status, new_status, intent_id)
             logger.info("   - Booking ID: %s", payment.booking.id if hasattr(payment, 'booking') else 'N/A')
             logger.info("   - User: %s", payment.user.email)
@@ -747,7 +747,7 @@ class BookingListView(APIView):
             bookings_queryset = bookings_queryset.filter(user=target_user)
             serializer_class = userBookingSerializer
 
-            # ✅ Support comma-separated status values
+            #  Support comma-separated status values
             status_param = request.query_params.get("status")
             if status_param:
                 status_list = [s.strip() for s in status_param.split(",") if s.strip()]
@@ -777,7 +777,7 @@ class BookingListView(APIView):
         serializer = serializer_class(page, many=True, context={"request": request})
         paginated_response = paginator.get_paginated_response(serializer.data)
 
-        # ✅ Inject stats into paginated response
+        #  Inject stats into paginated response
         paginated_response.data["stats"] = stats
 
         return paginated_response
@@ -791,7 +791,7 @@ class CancelBookingView(APIView):
         except Booking.DoesNotExist:
             return Response({"error": "Booking not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # ✅ Check if request user is either the booker OR the shop owner
+        #  Check if request user is either the booker OR the shop owner
         if booking.user != request.user and booking.shop.owner != request.user:
             return Response({"error": "Not allowed to cancel this booking"}, status=status.HTTP_403_FORBIDDEN)
 
@@ -942,3 +942,41 @@ class RemainingPaymentView(APIView):
             return Response({
                 "detail": f"Error processing remaining payment: {str(e)}"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class MarkBookingNoShowView(APIView):
+    """
+    Allows a shop owner to mark a booking as a 'no-show'.
+    This action will trigger the AI auto-fill process via a Django signal.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, booking_id):
+        try:
+            # Ensure the booking exists and belongs to the authenticated owner's shop
+            booking = Booking.objects.get(id=booking_id, shop__owner=request.user)
+        except Booking.DoesNotExist:
+            return Response(
+                {"error": "Booking not found or you do not have permission to modify it."}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if the booking's current status allows this action
+        if booking.status not in ['active', 'completed']:
+            return Response(
+                {"error": f"This booking cannot be marked as a no-show because its status is '{booking.status}'."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update the status to 'no-show'
+        booking.status = 'no-show'
+        booking.save(update_fields=['status'])
+        
+        logger.info(f"Booking {booking_id} was marked as 'no-show' by owner {request.user.email}.")
+        
+        # The 'on_booking_status_change' signal you already wrote in api/models.py
+        # will now automatically trigger the 'trigger_no_show_auto_fill' Celery task.
+        
+        return Response(
+            {"success": True, "message": f"Booking {booking_id} has been marked as a no-show and the AI auto-fill process has been initiated."},
+            status=status.HTTP_200_OK
+        )

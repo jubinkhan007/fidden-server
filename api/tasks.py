@@ -7,7 +7,7 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.db.models import Count, Avg, Sum, F
 from payments.models import Booking
-from .models import Notification, PerformanceAnalytics, Revenue, Slot, SlotBooking, Shop
+from .models import AutoFillLog, Notification, PerformanceAnalytics, Revenue, Service, Slot, SlotBooking, Shop
 from api import models
 from .utils.fcm import notify_user
 from subscriptions.models import SubscriptionPlan
@@ -29,119 +29,155 @@ from django.utils import timezone
 from django.db.models import Q
 from subscriptions.models import SubscriptionPlan, ShopSubscription
 
-@shared_task
+@shared_task(name="api.tasks.generate_weekly_ai_reports")
 def generate_weekly_ai_reports():
+    """
+    Generates and delivers a weekly performance report for each shop
+    that has an active AI assistant (either included or as an add-on).
+    """
+    logger.info("Starting weekly AI report generation...")
     end_date = timezone.now()
     start_date = end_date - timedelta(days=7)
-    now = timezone.now()
 
-    # Only use DB fields here
-    shops = (
-        Shop.objects
-        .select_related("subscription", "subscription__plan")
-        .filter(
-            subscription__plan__ai_assistant=SubscriptionPlan.AI_INCLUDED,
+    # All shops with active AI (addon or included in plan)
+    eligible_shops = (
+        Shop.objects.filter(
+            Q(subscription__has_ai_addon=True) |
+            Q(subscription__plan__ai_assistant=SubscriptionPlan.AI_INCLUDED),
             subscription__status=ShopSubscription.STATUS_ACTIVE,
+            subscription__end_date__gt=timezone.now(),
         )
+        .distinct()
+        .select_related("subscription", "subscription__plan", "owner")
     )
 
-    # Optional guards done in Python to avoid DB lookups on properties
-    def _is_effectively_active(sub):
-        if not sub:
-            return False
-        # If these attributes exist, use them; otherwise ignore them.
-        exp = getattr(sub, "expires_on", None)
-        if exp and exp <= now:
-            return False
-        if getattr(sub, "cancel_at_period_end", False) and exp and exp <= now:
-            return False
-        return True
+    if not eligible_shops.exists():
+        logger.info("No shops eligible for AI reports this week.")
+        return
 
-    for shop in shops.iterator():
-        sub = getattr(shop, "subscription", None)
-        if not _is_effectively_active(sub):
-            continue
+    for shop in eligible_shops.iterator():
+        # 1) Weekly bookings
+        weekly_bookings = Booking.objects.filter(
+            shop=shop,
+            created_at__range=(start_date, end_date),
+        )
+        completed_bookings = weekly_bookings.filter(status='completed')
 
-        bookings = Booking.objects.filter(shop=shop, created_at__range=(start_date, end_date))
-        total_appointments = bookings.filter(status='completed').count()
-
-        # ✅ Weekly revenue from Revenue model (timestamp is a DateField)
+        # 2) Core metrics
+        total_appointments = completed_bookings.count()
         total_revenue = (
-            Revenue.objects.filter(
-                shop=shop,
-                timestamp__gte=start_date.date(),
-                timestamp__lte=end_date.date(),
-            ).aggregate(total=Sum('revenue'))['total'] or 0
+            completed_bookings.aggregate(total=Sum('payment__amount'))['total'] or 0
         )
 
-        top_service = (
-            bookings.filter(status='completed')
-            .values('slot__service__title')
+        # 3) No-shows filled (by your AutoFillLog)
+        no_shows_filled = AutoFillLog.objects.filter(
+            shop=shop,
+            created_at__range=(start_date, end_date),
+            status='completed',  # adjust if you instead check filled_by_booking__isnull=False
+        ).count()
+
+        # 4) Top service (store as text in CharField)
+        top_service_name = None
+        top_service_count = 0
+        top_service_data = (
+            completed_bookings.values('slot__service_id')
             .annotate(count=Count('id'))
             .order_by('-count')
             .first()
         )
-        top_service_message = (
-            f"Your most popular service was {top_service['slot__service__title']} "
-            f"with {top_service['count']} bookings."
-            if top_service else "You had a good mix of services this week!"
-        )
+        if top_service_data and top_service_data['slot__service_id']:
+            svc = Service.objects.filter(id=top_service_data['slot__service_id']).first()
+            if svc:
+                top_service_name = svc.title
+                top_service_count = top_service_data['count']
 
-        open_slots_next_week = Slot.objects.filter(
+        # 5) Persist analytics (now includes your new fields)
+        analytics, _ = PerformanceAnalytics.objects.update_or_create(
             shop=shop,
-            start_time__gte=end_date,
-            start_time__lt=end_date + timedelta(days=7),
+            defaults={
+                'total_revenue': total_revenue,
+                'total_bookings': total_appointments,
+                'no_shows_filled': no_shows_filled,
+                'top_service': top_service_name,           # <- string, not model
+                'week_start_date': start_date.date(),
+                'updated_at': timezone.now(),
+            },
+        )
+        logger.info(f"Generated AI report for {shop.name}")
+
+        # 6) Build message lines directly (no helper methods required)
+        # next-week forecast
+        next_week_open_slots = Slot.objects.filter(
+            shop=shop,
+            start_time__gt=end_date,
+            start_time__lte=end_date + timedelta(days=7),
             capacity_left__gt=0,
         ).count()
-        forecast_message = f"You’ve got {open_slots_next_week} open slots next week—let’s get them filled!"
+
+        top_service_line = (
+            f"📈 Your most popular service was {top_service_name} with {top_service_count} bookings."
+            if top_service_name else
+            "📈 No standout service this week — let’s drive more bookings!"
+        )
+        forecast_line = f"🗓️ You’ve got {next_week_open_slots} open slots next week—let’s get them filled!"
+        nudge_line = "You're building something great. Let's keep the momentum going! 💪"
 
         report_title = "Your Weekly Business Snapshot ✨"
-        detailed_message = (
-            f"Here's your weekly wrap-up!\n\n"
-            f"✅ You completed {total_appointments} appointments, earning ${total_revenue:.2f}.\n"
-            f"📈 {top_service_message}\n"
-            f"🗓️ {forecast_message}\n\n"
-            f"You're building something great. Let's keep the momentum going! 💪"
+        push_summary = (
+            f"Your report is in! You earned ${total_revenue:.2f} and filled {no_shows_filled} no-shows."
         )
-        push_summary = f"Your weekly report is in! You earned ${total_revenue:.2f} from {total_appointments} appointments."
 
+        detailed_message = (
+            f"Here's your weekly wrap-up from your AI partner, {shop.ai_partner_name or 'Amara'}!\n\n"
+            f"✅ You completed {total_appointments} appointments, earning ${total_revenue:.2f}.\n"
+            f"🎯 You automatically filled {no_shows_filled} no-show slots!\n"
+            f"{top_service_line}\n"
+            f"{forecast_line}\n\n"
+            f"{nudge_line}"
+        )
+
+        # 7) Deliver
         Notification.objects.create(
             recipient=shop.owner,
             message=detailed_message,
             notification_type="ai_report",
             data={"title": report_title},
         )
-        # your existing util
-        from .utils.fcm import notify_user
         notify_user(
     shop.owner,
     message=report_title,
     notification_type="ai_report",
     data={"summary": push_summary}
 )
-
-
         send_mail(
             subject=f"[Fidden] {report_title}",
             message=detailed_message,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[shop.owner.email],
-            fail_silently=True,
+            fail_silently=False,
         )
+        logger.info(f"Successfully sent report for {shop.name}")
 
 
-
+# api/tasks.py
 @shared_task(bind=True, name="api.tasks.trigger_no_show_auto_fill")
 def trigger_no_show_auto_fill(self, booking_id):
+    """
+    When a booking is marked as no-show/late-cancel:
+      1) Free capacity on the original slot
+      2) Offer the SAME slot if its start_time is still in the future
+      3) Otherwise, offer the next available future slot for the same service
+    """
     from django.db import transaction
     from payments.models import Booking
     from api.models import Slot, SlotBooking, AutoFillLog, WaitlistEntry
-    from django.db.models import F
 
-    # Booking.slot is SlotBooking; SlotBooking.slot is the real Slot
-    booking = (Booking.objects
-               .select_related('shop', 'slot', 'slot__service', 'slot__slot')
-               .filter(id=booking_id).first())
+    # -- Load booking & guardrails
+    booking = (
+        Booking.objects
+        .select_related('shop', 'slot', 'slot__service', 'slot__slot')
+        .filter(id=booking_id).first()
+    )
     if not booking:
         logger.warning("[autofill] booking %s not found", booking_id)
         return "No booking."
@@ -151,14 +187,16 @@ def trigger_no_show_auto_fill(self, booking_id):
     if not settings_obj or not settings_obj.is_active:
         return "Auto-fill is not active for this shop."
 
-    # ----- Idempotency gate -----
+    # -- Idempotency / race control
     with transaction.atomic():
-        log, created = (AutoFillLog.objects
-                        .select_for_update()
-                        .get_or_create(
-                            original_booking=booking,
-                            defaults={"shop": shop, "status": "initiated"}
-                        ))
+        log, created = (
+            AutoFillLog.objects
+            .select_for_update()
+            .get_or_create(
+                original_booking=booking,
+                defaults={"shop": shop, "status": "initiated"}
+            )
+        )
         if not created and log.status in ("queued", "initiated", "outreach_started", "completed"):
             logger.info("[autofill] already processing/finished for booking=%s; skipping", booking.id)
             return "Already processing"
@@ -166,16 +204,15 @@ def trigger_no_show_auto_fill(self, booking_id):
             log.status = "initiated"
             log.save(update_fields=["status"])
 
-    # ----- Ensure SlotBooking & Slot -----
+    # -- Ensure we can resolve SlotBooking and the real Slot
     slot_booking = booking.slot  # payments.Booking → api.SlotBooking
     if slot_booking is None:
-        slot_booking = (SlotBooking.objects
-                        .select_related('slot', 'service')
-                        .filter(
-                            shop_id=booking.shop_id,
-                            start_time=booking.start_time
-                        )
-                        .first())
+        slot_booking = (
+            SlotBooking.objects
+            .select_related('slot', 'service')
+            .filter(shop_id=booking.shop_id, start_time=booking.start_time)
+            .first()
+        )
         if slot_booking:
             Booking.objects.filter(id=booking.id).update(slot_id=slot_booking.id)
             logger.info("[autofill] repaired SlotBooking: booking=%s -> slot_booking=%s",
@@ -184,17 +221,18 @@ def trigger_no_show_auto_fill(self, booking_id):
             AutoFillLog.objects.filter(original_booking=booking).update(status="no-slotbooking")
             return "No SlotBooking."
 
-    # Now we can safely get service_id from SlotBooking
     service_id = slot_booking.service_id
 
-    slot = slot_booking.slot  # real api.Slot
+    slot = slot_booking.slot  # the actual api.Slot
     if slot is None:
-        slot = (Slot.objects
-                .filter(
-                    shop_id=booking.shop_id,
-                    service_id=service_id,
-                    start_time=slot_booking.start_time
-                ).first())
+        slot = (
+            Slot.objects
+            .filter(
+                shop_id=booking.shop_id,
+                service_id=service_id,
+                start_time=slot_booking.start_time
+            ).first()
+        )
         if slot:
             SlotBooking.objects.filter(id=slot_booking.id).update(slot_id=slot.id)
             logger.info("[autofill] repaired Slot on SlotBooking=%s -> slot=%s",
@@ -203,15 +241,53 @@ def trigger_no_show_auto_fill(self, booking_id):
             AutoFillLog.objects.filter(original_booking=booking).update(status="no-slot")
             return "No Slot."
 
-    # Free 1 capacity atomically
+    # -- Free 1 capacity on the original slot
     Slot.objects.filter(id=slot.id).update(capacity_left=F('capacity_left') + 1)
 
-    # ----- Build candidates -----
-    qs = (WaitlistEntry.objects
-          .filter(shop=shop, opted_in_offers=True)
-          .select_related('user', 'service'))
+    # -- Decide which slot to offer
+    now = timezone.now()
+    if slot.start_time and slot.start_time > now:
+        # Original slot is still upcoming → offer it
+        slot_for_offers = slot
+    else:
+        # Otherwise offer the earliest future slot for this service
+        slot_for_offers = (
+            Slot.objects
+            .filter(
+                shop=shop,
+                service_id=service_id,
+                start_time__gte=now,
+                capacity_left__gt=0,
+            )
+            .order_by("start_time")
+            .first()
+        )
+        if not slot_for_offers:
+            # Nothing to offer—record & stop
+            AutoFillLog.objects.filter(original_booking=booking).update(status='failed_no_future_slot')
+            logger.info("[autofill] no future slot to offer for shop=%s service=%s", shop.id, service_id)
+            return "No future slot."
+
+    # -- Candidate selection (exclude original user, dedupe)
+    qs = (
+        WaitlistEntry.objects
+        .filter(shop=shop, opted_in_offers=True)
+        .select_related('user', 'service')
+    )
+
+    def _dedupe(seq):
+        seen = set()
+        out = []
+        for x in seq:
+            if x not in seen:
+                out.append(x)
+                seen.add(x)
+        return out
+
     candidates = []
     for entry in qs:
+        if entry.user_id == booking.user_id:
+            continue  # don't ping the same user who just no-showed
         score = 5 if (service_id and entry.service_id == service_id) else 0
         candidates.append((entry.user_id, score))
 
@@ -220,27 +296,24 @@ def trigger_no_show_auto_fill(self, booking_id):
         return "No candidates."
 
     candidates.sort(key=lambda t: t[1], reverse=True)
-    top_ids  = [uid for (uid, _) in candidates[:5]]
-    next_ids = [uid for (uid, _) in candidates[5:25]]
+    user_ids_ranked = _dedupe([uid for (uid, _) in candidates])
+    top_ids  = user_ids_ranked[:5]
+    next_ids = user_ids_ranked[5:25]
 
-    # Log the ids we’re about to enqueue so we can see if slot vs slot_booking is correct
-    logger.info("[autofill] enqueue slot.id=%s slot_booking.id=%s service_id=%s", slot.id, slot_booking.id, service_id)
-    
+    logger.info(
+        "[autofill] enqueue original_slot.id=%s offered_slot.id=%s slot_booking.id=%s service_id=%s",
+        slot.id, slot_for_offers.id, slot_booking.id, service_id
+    )
 
-    # Use the v2 task name to avoid stale registration collisions
-    send_autofill_offers.delay(slot.id, top_ids, "push")
+    # -- Outreach
+    send_autofill_offers.delay(slot_for_offers.id, top_ids, "push")
     if next_ids:
-        send_autofill_offers.apply_async(args=[slot.id, next_ids, "email"], countdown=60)
+        send_autofill_offers.apply_async(args=[slot_for_offers.id, next_ids, "email"], countdown=60)
 
     AutoFillLog.objects.filter(original_booking=booking).update(status='outreach_started')
     return "Outreach started."
 
-
-
-
 # api/tasks.py
-
-# ✅ SINGLE CANONICAL TASK
 @shared_task(name="api.tasks.send_autofill_offers")
 def send_autofill_offers(slot_id, user_ids, channel):
     """
@@ -251,9 +324,9 @@ def send_autofill_offers(slot_id, user_ids, channel):
     from .models import Slot, SlotBooking
     started_at = tz_now()
     t0 = time.monotonic()
-    run_id = str(uuid.uuid4())[:8]  # correlation id for this run
+    run_id = str(uuid.uuid4())[:8]
 
-    def _dt(ms):  # elapsed ms helper
+    def _dt(ms=0):
         return f"{int((time.monotonic() - t0) * 1000)}ms"
 
     def _safe(obj):
@@ -276,25 +349,25 @@ def send_autofill_offers(slot_id, user_ids, channel):
     try:
         slot = Slot.objects.select_related('shop', 'service').get(id=slot_id)
         logger.info("[autofill:%s] %s found Slot id=%s shop=%s service=%s (%s)",
-                    run_id, _dt(0), slot.id, slot.shop_id, slot.service_id, slot.start_time.isoformat())
+                    run_id, _dt(), slot.id, slot.shop_id, slot.service_id, slot.start_time.isoformat())
     except Slot.DoesNotExist:
         logger.warning("[autofill:%s] %s Slot id=%s not found; trying SlotBooking fallback",
-                       run_id, _dt(0), slot_id)
+                       run_id, _dt(), slot_id)
         sb = SlotBooking.objects.filter(id=slot_id).select_related("slot").first()
         if sb and sb.slot_id:
             slot = Slot.objects.select_related('shop', 'service').filter(id=sb.slot_id).first()
             logger.warning("[autofill:%s] %s slot_id looked like SlotBooking.id; mapped to slot_id=%s",
-                           run_id, _dt(0), getattr(slot, "id", None))
+                           run_id, _dt(), getattr(slot, "id", None))
 
     if not slot:
-        logger.warning("[autofill:%s] %s abort: no slot", run_id, _dt(0))
+        logger.warning("[autofill:%s] %s abort: no slot", run_id, _dt())
         return "No slot."
 
     # 2) Capacity guard
     cap = (slot.capacity_left or 0)
-    logger.info("[autofill:%s] %s capacity_left=%s", run_id, _dt(0), cap)
+    logger.info("[autofill:%s] %s capacity_left=%s", run_id, _dt(), cap)
     if cap <= 0:
-        logger.info("[autofill:%s] %s abort: slot filled", run_id, _dt(0))
+        logger.info("[autofill:%s] %s abort: slot filled", run_id, _dt())
         return "Slot was filled before this wave."
 
     # 3) Users via AUTH_USER_MODEL
@@ -302,20 +375,23 @@ def send_autofill_offers(slot_id, user_ids, channel):
     users_qs = User.objects.filter(id__in=user_ids).only("id", "email")
     users = list(users_qs)
     logger.info("[autofill:%s] %s matched_users=%d ids=%s",
-                run_id, _dt(0), len(users), [u.id for u in users])
+                run_id, _dt(), len(users), [u.id for u in users])
     if not users:
         return "No recipients."
 
-    # 4) Compose content
+    # 4) Compose content (localize time for display + payload)
+    start_local = timezone.localtime(slot.start_time)  # uses settings.TIME_ZONE
+    human_time = start_local.strftime("%I:%M %p on %b %d")
+    iso_local = start_local.isoformat()
+
     subject = "An opening just became available!"
     message_body = (
         f"{slot.shop.name} just had a {slot.service.title} spot open up at "
-        f"{slot.start_time.strftime('%I:%M %p on %b %d')}. First come, first served!"
+        f"{human_time}. First come, first served!"
     )
     shortlink = f"https://your-app.com/book/{slot.id}"
     full_message = f"{message_body}\n\nTap to book: {shortlink}"
 
-    # Shared data payload (also used by push)
     data = {
         "type": "autofill_offer",
         "action": "book_offer",
@@ -327,50 +403,46 @@ def send_autofill_offers(slot_id, user_ids, channel):
         "shopName": slot.shop.name or "",
         "shopAddress": getattr(slot.shop, "address", "") or "",
         "serviceDurationMinutes": str(getattr(slot.service, "duration", 0)),
-        "start_time": slot.start_time.isoformat(),
+        "start_time": iso_local,  # localized ISO for client rendering
         "price": str(getattr(slot.service, "price", 0) or 0),
         "discountPrice": str(getattr(slot.service, "discount_price", "") or ""),
         "deeplink": f"fidden://book/{slot.id}",
         "url": shortlink,
-        # Include text so client can render even if notification payload is absent
         "title": subject,
         "body": message_body,
     }
-    logger.info("[autofill:%s] %s payload=%s", run_id, _dt(0), _safe(data))
+    logger.info("[autofill:%s] %s payload=%s", run_id, _dt(), _safe(data))
 
     # 5) Push + Email
     sent_push = 0
     sent_email = 0
 
-    # PUSH
     if channel in ("push", "sms_push", "email_push"):
         logger.info("[autofill:%s] %s entering push branch channel=%s",
-                    run_id, _dt(0), channel)
+                    run_id, _dt(), channel)
         for u in users:
             try:
-                logger.debug("[autofill:%s] %s push→user_id=%s",
-                             run_id, _dt(0), u.id)
+                logger.debug("[autofill:%s] %s push→user_id=%s", run_id, _dt(), u.id)
                 notify_user(
                     user=u,
                     message=message_body,
                     notification_type="autofill_offer",
                     data=data,
-                    debug=True,        # ensures console prints in your fcm util
+                    debug=True,
                     dry_run=False,
                 )
                 sent_push += 1
             except Exception as e:
                 logger.warning("[autofill:%s] %s push failed user_id=%s err=%s",
-                               run_id, _dt(0), getattr(u, "id", None), e, exc_info=True)
+                               run_id, _dt(), getattr(u, "id", None), e, exc_info=True)
 
-    # EMAIL
     if channel in ("email", "email_push"):
         logger.info("[autofill:%s] %s entering email branch channel=%s",
-                    run_id, _dt(0), channel)
+                    run_id, _dt(), channel)
         for u in users:
             email = getattr(u, "email", None)
             logger.debug("[autofill:%s] %s email candidate user_id=%s email=%s",
-                         run_id, _dt(0), getattr(u, "id", None), _redact(email))
+                         run_id, _dt(), getattr(u, "id", None), _redact(email))
             if not email:
                 continue
             try:
@@ -383,39 +455,15 @@ def send_autofill_offers(slot_id, user_ids, channel):
                 )
                 sent_email += 1
                 logger.debug("[autofill:%s] %s email sent user_id=%s email=%s",
-                             run_id, _dt(0), getattr(u, "id", None), _redact(email))
+                             run_id, _dt(), getattr(u, "id", None), _redact(email))
             except Exception as e:
                 logger.warning("[autofill:%s] %s email failed user_id=%s email=%s err=%s",
-                               run_id, _dt(0), getattr(u, "id", None), _redact(email), e, exc_info=True)
+                               run_id, _dt(), getattr(u, "id", None), _redact(email), e, exc_info=True)
 
-    elapsed = _dt(0)
+    elapsed = _dt()
     logger.info("[autofill:%s] done elapsed=%s push_sent=%d email_sent=%d slot_id=%s",
                 run_id, elapsed, sent_push, sent_email, slot.id)
     return f"push={sent_push}, email={sent_email}, recipients={len(users)}, channel={channel}"
-
-
-
-    if channel in ("email", "email_push"):
-        for u in users:
-            email = getattr(u, "email", None)
-            if not email:
-                continue
-            try:
-                send_mail(
-                    subject=f"[Fidden] {subject}",
-                    message=full_message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[email],
-                    fail_silently=False,  # show SMTP issues in logs
-                )
-                sent_email += 1
-            except Exception as e:
-                logger.warning("[autofill] email failed to %s: %s", email, e)
-
-    logger.info("[autofill] Done. push_sent=%d email_sent=%d slot_id=%s",
-                sent_push, sent_email, slot.id)
-    return f"push={sent_push}, email={sent_email}, recipients={len(users)}, channel={channel}"
-
 
 @shared_task
 def calculate_analytics():
