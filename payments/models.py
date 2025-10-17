@@ -1,3 +1,4 @@
+from datetime import timedelta
 import os
 from django.db import models
 from django.conf import settings
@@ -8,10 +9,12 @@ from django.utils import timezone
 import stripe
 from django.core.mail import send_mail
 from accounts.models import User
-from api.models import Shop, SlotBooking, Revenue, Coupon
+from api.models import AutoFillLog, Shop, SlotBooking, Revenue, Coupon
 from api.utils.fcm import notify_user
 import logging
 import traceback
+
+from makemigrations import apps
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +312,48 @@ def handle_payment_status(sender, instance, created, **kwargs):
             if slot_booking.payment_status != "success":
                 slot_booking.payment_status = "success"
                 slot_booking.save(update_fields=["payment_status"])
+            
+            AutoFillLog = apps.get_model("api", "AutoFillLog")
+
+            ai_settings = getattr(shop, "ai_settings", None)
+            scope_hours = getattr(ai_settings, "auto_fill_scope_hours", 48) or 48
+            window_start = timezone.now() - timedelta(hours=scope_hours)
+
+            log_to_close = (
+                AutoFillLog.objects
+                .filter(
+                    shop=shop,
+                    status__in=("initiated", "outreach_started"),
+                    created_at__gte=window_start,
+                    offered_slot=getattr(slot_booking, "slot", None),
+                )
+                .order_by("-created_at")
+                .first()
+            )
+
+            if not log_to_close:
+                log_to_close = (
+                    AutoFillLog.objects
+                    .select_related("original_booking")
+                    .filter(
+                        shop=shop,
+                        status__in=("initiated", "outreach_started"),
+                        created_at__gte=window_start,
+                        original_booking__slot__service_id=slot_booking.service_id,
+                    )
+                    .order_by("-created_at")
+                    .first()
+                )
+
+            if log_to_close:
+                fields = ["filled_by_booking", "status"]
+                log_to_close.filled_by_booking = booking_obj
+                log_to_close.status = "completed"
+                recovered = getattr(instance, "amount", 0) or 0
+                if recovered:
+                    log_to_close.revenue_recovered = recovered
+                    fields.append("revenue_recovered")
+                log_to_close.save(update_fields=fields)
 
             if created_booking:
                 try:
@@ -457,4 +502,3 @@ def update_daily_revenue(sender, instance, created, **kwargs):
     else:
         # Create new revenue row for today
         Revenue.objects.create(shop=shop, timestamp=transaction_date, revenue=delta)
-

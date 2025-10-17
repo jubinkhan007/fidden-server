@@ -778,6 +778,7 @@ class AutoFillLog(models.Model):
     """ Audit log for tracking auto-fill events. """
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='autofill_logs')
     original_booking = models.ForeignKey('payments.Booking', on_delete=models.SET_NULL, null=True, related_name='autofill_trigger')
+    offered_slot = models.OneToOneField('Slot', on_delete=models.SET_NULL, null=True, blank=True, related_name='autofill_log')
     filled_by_booking = models.ForeignKey('payments.Booking', on_delete=models.SET_NULL, null=True, related_name='autofill_success')
     status = models.CharField(max_length=30, default='initiated')
     revenue_recovered = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)

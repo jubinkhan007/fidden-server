@@ -267,7 +267,8 @@ def trigger_no_show_auto_fill(self, booking_id):
             AutoFillLog.objects.filter(original_booking=booking).update(status='failed_no_future_slot')
             logger.info("[autofill] no future slot to offer for shop=%s service=%s", shop.id, service_id)
             return "No future slot."
-
+    log.offered_slot = slot_for_offers
+    log.save(update_fields=["offered_slot"])
     # -- Candidate selection (exclude original user, dedupe)
     qs = (
         WaitlistEntry.objects
