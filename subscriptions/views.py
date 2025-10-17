@@ -192,27 +192,36 @@ class SubscriptionDetailsView(APIView):
             ai_state = "included"
 
         commission = plan.commission_rate if plan.commission_rate is not None else Decimal("0.10")
+
+        # ✅ Determine AI state correctly (do NOT reset it earlier)
         ai_state = "none"
         if shop_sub:
-            if shop_sub.ai_source == "included":
+            # Included automatically for Icon plan
+            if shop_sub.plan and shop_sub.plan.ai_assistant == SubscriptionPlan.AI_INCLUDED:
                 ai_state = "included"
-            elif shop_sub.ai_source == "addon":
+            # Purchased as add-on
+            elif shop_sub.has_ai_addon:
                 ai_state = "addon_active"
-            elif shop_sub.plan.name in [SubscriptionPlan.FOUNDATION, SubscriptionPlan.MOMENTUM]:
+            # Available for Foundation or Momentum
+            elif shop_sub.plan and shop_sub.plan.name in (
+                SubscriptionPlan.FOUNDATION,
+                SubscriptionPlan.MOMENTUM,
+            ):
                 ai_state = "available"
+
         payload = {
-    "plan": SubscriptionPlanSerializer(plan).data,
-    "status": status,
-    "renews_on": renews_on,
-    "expires_on": expires_on,
-    "cancel_at_period_end": cancel_at_period_end,
-    "commission_rate": str(commission),
-    "ai": {
-        "state": ai_state,
-        "legacy": False,
-        "price_id": ai_price_id
-    },
-}
+            "plan": SubscriptionPlanSerializer(plan).data,
+            "status": status,
+            "renews_on": renews_on,
+            "expires_on": expires_on,
+            "cancel_at_period_end": cancel_at_period_end,
+            "commission_rate": str(commission),
+            "ai": {
+                "state": ai_state,
+                "legacy": False,
+                "price_id": ai_price_id,
+            },
+        }
         return Response(payload, status=200)
 
 

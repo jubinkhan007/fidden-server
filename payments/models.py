@@ -112,6 +112,7 @@ class Booking(models.Model):
         # --- NEW STATUSES ---
         ("no-show", "No-Show"),
         ("late-cancel", "Late Cancel"),
+        ('no-show', 'No-Show'),
     ]
 
     payment = models.OneToOneField(Payment, on_delete=models.CASCADE, related_name="booking_record")
