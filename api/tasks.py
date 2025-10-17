@@ -7,7 +7,7 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.db.models import Count, Avg, Sum, F
 from payments.models import Booking
-from .models import PerformanceAnalytics, Slot, SlotBooking, Shop
+from .models import Notification, PerformanceAnalytics, Revenue, Slot, SlotBooking, Shop
 from api import models
 from .utils.fcm import notify_user
 from subscriptions.models import SubscriptionPlan
@@ -24,42 +24,78 @@ def _aware(dt):
     return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
 
 
+# api/tasks.py
+from django.utils import timezone
+from django.db.models import Q
+from subscriptions.models import SubscriptionPlan, ShopSubscription
+
 @shared_task
 def generate_weekly_ai_reports():
-    """
-    Generates and delivers a weekly performance report for each shop.
-    Scheduled to run weekly (e.g., every Sunday evening).
-    """
-    from .models import Shop, Notification
-    from payments.models import Booking
-
     end_date = timezone.now()
     start_date = end_date - timedelta(days=7)
+    now = timezone.now()
 
-    # Process reports for shops on Icon plan
-    for shop in Shop.objects.filter(subscription__plan__ai_assistant=SubscriptionPlan.AI_INCLUDED, subscription__is_active=True):
-        # 1. Gather stats for the past week
+    # Only use DB fields here
+    shops = (
+        Shop.objects
+        .select_related("subscription", "subscription__plan")
+        .filter(
+            subscription__plan__ai_assistant=SubscriptionPlan.AI_INCLUDED,
+            subscription__status=ShopSubscription.STATUS_ACTIVE,
+        )
+    )
+
+    # Optional guards done in Python to avoid DB lookups on properties
+    def _is_effectively_active(sub):
+        if not sub:
+            return False
+        # If these attributes exist, use them; otherwise ignore them.
+        exp = getattr(sub, "expires_on", None)
+        if exp and exp <= now:
+            return False
+        if getattr(sub, "cancel_at_period_end", False) and exp and exp <= now:
+            return False
+        return True
+
+    for shop in shops.iterator():
+        sub = getattr(shop, "subscription", None)
+        if not _is_effectively_active(sub):
+            continue
+
         bookings = Booking.objects.filter(shop=shop, created_at__range=(start_date, end_date))
-        
         total_appointments = bookings.filter(status='completed').count()
-        total_revenue = bookings.filter(status='completed').aggregate(total=Sum('final_amount'))['total'] or 0
-        
-        # 2. Top service (example logic)
-        top_service = bookings.filter(status='completed').values('slot__service__title').annotate(count=Count('id')).order_by('-count').first()
-        top_service_message = f"Your most popular service was {top_service['slot__service__title']} with {top_service['count']} bookings." if top_service else "You had a good mix of services this week!"
 
-        # 3. Forecast for next week (simple version)
+        # ✅ Weekly revenue from Revenue model (timestamp is a DateField)
+        total_revenue = (
+            Revenue.objects.filter(
+                shop=shop,
+                timestamp__gte=start_date.date(),
+                timestamp__lte=end_date.date(),
+            ).aggregate(total=Sum('revenue'))['total'] or 0
+        )
+
+        top_service = (
+            bookings.filter(status='completed')
+            .values('slot__service__title')
+            .annotate(count=Count('id'))
+            .order_by('-count')
+            .first()
+        )
+        top_service_message = (
+            f"Your most popular service was {top_service['slot__service__title']} "
+            f"with {top_service['count']} bookings."
+            if top_service else "You had a good mix of services this week!"
+        )
+
         open_slots_next_week = Slot.objects.filter(
-            shop=shop, 
-            start_time__gte=end_date, 
+            shop=shop,
+            start_time__gte=end_date,
             start_time__lt=end_date + timedelta(days=7),
-            capacity_left__gt=0
+            capacity_left__gt=0,
         ).count()
         forecast_message = f"You’ve got {open_slots_next_week} open slots next week—let’s get them filled!"
 
-        # 4. Construct the messages
         report_title = "Your Weekly Business Snapshot ✨"
-        
         detailed_message = (
             f"Here's your weekly wrap-up!\n\n"
             f"✅ You completed {total_appointments} appointments, earning ${total_revenue:.2f}.\n"
@@ -67,17 +103,24 @@ def generate_weekly_ai_reports():
             f"🗓️ {forecast_message}\n\n"
             f"You're building something great. Let's keep the momentum going! 💪"
         )
-        
         push_summary = f"Your weekly report is in! You earned ${total_revenue:.2f} from {total_appointments} appointments."
 
-        # 5. Deliver the report
         Notification.objects.create(
             recipient=shop.owner,
             message=detailed_message,
             notification_type="ai_report",
-            data={"title": report_title}
+            data={"title": report_title},
         )
-        notify_user(shop.owner, report_title, push_summary)
+        # your existing util
+        from .utils.fcm import notify_user
+        notify_user(
+    shop.owner,
+    message=report_title,
+    notification_type="ai_report",
+    data={"summary": push_summary}
+)
+
+
         send_mail(
             subject=f"[Fidden] {report_title}",
             message=detailed_message,
@@ -85,6 +128,7 @@ def generate_weekly_ai_reports():
             recipient_list=[shop.owner.email],
             fail_silently=True,
         )
+
 
 
 @shared_task(bind=True, name="api.tasks.trigger_no_show_auto_fill")
