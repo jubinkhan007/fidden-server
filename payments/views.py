@@ -782,6 +782,11 @@ class BookingListView(APIView):
 
         return paginated_response
     
+VALID_STRIPE_REASONS = {"duplicate", "fraudulent", "requested_by_customer"}
+
+def _norm_reason(v):
+    return (str(v).strip().lower().replace("-", "_")) if v else None
+
 class CancelBookingView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -791,19 +796,34 @@ class CancelBookingView(APIView):
         except Booking.DoesNotExist:
             return Response({"error": "Booking not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        #  Check if request user is either the booker OR the shop owner
-        if booking.user != request.user and booking.shop.owner != request.user:
+        # only the booker or the shop owner can cancel
+        is_owner = (booking.shop.owner == request.user)
+        is_booker = (booking.user == request.user)
+        if not (is_owner or is_booker):
             return Response({"error": "Not allowed to cancel this booking"}, status=status.HTTP_403_FORBIDDEN)
 
-        success, message = booking.cancel_booking(reason="cancelled_by_owner" if booking.shop.owner == request.user else "requested_by_customer")
+        # block impossible states early
+        if booking.status in ("no-show", "cancelled", "completed"):
+            return Response({"error": f"Cannot cancel a booking in status '{booking.status}'"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # normalize reason coming from client; Stripe-safe fallback
+        incoming = request.data.get("reason") or request.POST.get("reason")
+        reason = _norm_reason(incoming) or "requested_by_customer"
+        if reason not in VALID_STRIPE_REASONS:
+            reason = "requested_by_customer"
+
+        # OWNER → force full refund
+        success, message = booking.cancel_booking(
+            reason=reason,
+            force_full_refund=is_owner,
+        )
 
         if success:
-            # Use correct serializer depending on who cancelled
-            serializer_class = ownerBookingSerializer if booking.shop.owner == request.user else userBookingSerializer
+            serializer_class = ownerBookingSerializer if is_owner else userBookingSerializer
             serializer = serializer_class(booking, context={"request": request})
             return Response({"message": message, "booking": serializer.data}, status=status.HTTP_200_OK)
-        else:
-            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
         
 class TransactionLogListView(APIView):
     permission_classes = [IsAuthenticated]
