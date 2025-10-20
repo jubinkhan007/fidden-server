@@ -29,17 +29,13 @@ from django.utils import timezone
 from django.db.models import Q
 from subscriptions.models import SubscriptionPlan, ShopSubscription
 
+# in api/tasks.py
 @shared_task(name="api.tasks.generate_weekly_ai_reports")
 def generate_weekly_ai_reports():
-    """
-    Generates and delivers a weekly performance report for each shop
-    that has an active AI assistant (either included or as an add-on).
-    """
     logger.info("Starting weekly AI report generation...")
     end_date = timezone.now()
     start_date = end_date - timedelta(days=7)
 
-    # All shops with active AI (addon or included in plan)
     eligible_shops = (
         Shop.objects.filter(
             Q(subscription__has_ai_addon=True) |
@@ -56,31 +52,39 @@ def generate_weekly_ai_reports():
         return
 
     for shop in eligible_shops.iterator():
-        # 1) Weekly bookings
-        weekly_bookings = Booking.objects.filter(
-            shop=shop,
-            created_at__range=(start_date, end_date),
-        )
-        completed_bookings = weekly_bookings.filter(status='completed')
-
-        # 2) Core metrics
-        total_appointments = completed_bookings.count()
-        total_revenue = (
-            completed_bookings.aggregate(total=Sum('payment__amount'))['total'] or 0
+        # Base set: bookings PAID this week, not cancelled
+        paid_this_week = (
+            Booking.objects
+            .filter(
+                shop=shop,
+                created_at__range=(start_date, end_date),
+                payment__status='succeeded',
+            )
+            .exclude(status='cancelled')
         )
 
-        # 3) No-shows filled (by your AutoFillLog)
-        no_shows_filled = AutoFillLog.objects.filter(
-            shop=shop,
-            created_at__range=(start_date, end_date),
-            status='completed',  # adjust if you instead check filled_by_booking__isnull=False
-        ).count()
+        total_appointments = paid_this_week.count()
+        total_revenue = paid_this_week.aggregate(total=Sum('payment__amount'))['total'] or 0
 
-        # 4) Top service (store as text in CharField)
+        # No-shows filled: only count logs whose filled booking exists & was created this week
+        no_shows_filled = (
+            AutoFillLog.objects
+            .filter(
+                shop=shop,
+                status='completed',
+                filled_by_booking__isnull=False,
+                filled_by_booking__created_at__range=(start_date, end_date),
+            )
+            .values('filled_by_booking_id')
+            .distinct()
+            .count()
+        )
+
+        # Top service among paid bookings this week
         top_service_name = None
         top_service_count = 0
         top_service_data = (
-            completed_bookings.values('slot__service_id')
+            paid_this_week.values('slot__service_id')
             .annotate(count=Count('id'))
             .order_by('-count')
             .first()
@@ -91,22 +95,18 @@ def generate_weekly_ai_reports():
                 top_service_name = svc.title
                 top_service_count = top_service_data['count']
 
-        # 5) Persist analytics (now includes your new fields)
-        analytics, _ = PerformanceAnalytics.objects.update_or_create(
+        PerformanceAnalytics.objects.update_or_create(
             shop=shop,
             defaults={
                 'total_revenue': total_revenue,
                 'total_bookings': total_appointments,
                 'no_shows_filled': no_shows_filled,
-                'top_service': top_service_name,           # <- string, not model
+                'top_service': top_service_name,
                 'week_start_date': start_date.date(),
                 'updated_at': timezone.now(),
             },
         )
-        logger.info(f"Generated AI report for {shop.name}")
 
-        # 6) Build message lines directly (no helper methods required)
-        # next-week forecast
         next_week_open_slots = Slot.objects.filter(
             shop=shop,
             start_time__gt=end_date,
@@ -114,49 +114,31 @@ def generate_weekly_ai_reports():
             capacity_left__gt=0,
         ).count()
 
-        top_service_line = (
+        report_title = "Your Weekly Business Snapshot ✨"
+        push_summary = f"Your report is in! You earned ${total_revenue:.2f} and filled {no_shows_filled} no-shows."
+        top_line = (
             f"📈 Your most popular service was {top_service_name} with {top_service_count} bookings."
             if top_service_name else
             "📈 No standout service this week — let’s drive more bookings!"
         )
         forecast_line = f"🗓️ You’ve got {next_week_open_slots} open slots next week—let’s get them filled!"
-        nudge_line = "You're building something great. Let's keep the momentum going! 💪"
-
-        report_title = "Your Weekly Business Snapshot ✨"
-        push_summary = (
-            f"Your report is in! You earned ${total_revenue:.2f} and filled {no_shows_filled} no-shows."
-        )
-
         detailed_message = (
             f"Here's your weekly wrap-up from your AI partner, {shop.ai_partner_name or 'Amara'}!\n\n"
             f"✅ You completed {total_appointments} appointments, earning ${total_revenue:.2f}.\n"
             f"🎯 You automatically filled {no_shows_filled} no-show slots!\n"
-            f"{top_service_line}\n"
-            f"{forecast_line}\n\n"
-            f"{nudge_line}"
+            f"{top_line}\n{forecast_line}\n\nYou're building something great. Let's keep the momentum going! 💪"
         )
 
-        # 7) Deliver
         Notification.objects.create(
             recipient=shop.owner,
             message=detailed_message,
             notification_type="ai_report",
             data={"title": report_title},
         )
-        notify_user(
-    shop.owner,
-    message=report_title,
-    notification_type="ai_report",
-    data={"summary": push_summary}
-)
-        send_mail(
-            subject=f"[Fidden] {report_title}",
-            message=detailed_message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[shop.owner.email],
-            fail_silently=False,
-        )
-        logger.info(f"Successfully sent report for {shop.name}")
+        notify_user(shop.owner, message=report_title, notification_type="ai_report", data={"summary": push_summary})
+        send_mail(subject=f"[Fidden] {report_title}", message=detailed_message,
+                  from_email=settings.DEFAULT_FROM_EMAIL, recipient_list=[shop.owner.email], fail_silently=False)
+
 
 
 # api/tasks.py
@@ -269,6 +251,11 @@ def trigger_no_show_auto_fill(self, booking_id):
             return "No future slot."
     log.offered_slot = slot_for_offers
     log.save(update_fields=["offered_slot"])
+    logger.info(
+    "[autofill] log %s now has offered_slot.id=%s (original_booking=%s)",
+    log.id, getattr(slot_for_offers, "id", None), booking.id
+    )
+
     # -- Candidate selection (exclude original user, dedupe)
     qs = (
         WaitlistEntry.objects
