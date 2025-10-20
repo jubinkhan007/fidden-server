@@ -9,7 +9,7 @@ from django.db.models import Count, Avg, Sum, F
 from payments.models import Booking
 from .models import AutoFillLog, Notification, PerformanceAnalytics, Revenue, Service, Slot, SlotBooking, Shop
 from api import models
-from .utils.fcm import notify_user
+from .utils.fcm import notify_user, send_push_notification
 from subscriptions.models import SubscriptionPlan
 from django.db import transaction
 from django.contrib.auth import get_user_model
@@ -404,33 +404,46 @@ def send_autofill_offers(slot_id, user_ids, channel):
     # 5) Push + Email
     sent_push = 0
     sent_email = 0
+    # ❶ Persist a Notification for every user (no delivery here)
+    for u in users:
+        try:
+            notify_user(
+                user=u,
+                message=message_body,
+                notification_type="autofill_offer",
+                data=data,
+                debug=False,
+                dry_run=True,          # <-- always True: persist only, no push delivery
+            )
+        except Exception as e:
+            logger.warning("[autofill:%s] %s notify_user failed user_id=%s err=%s",
+                        run_id, _dt(), getattr(u, "id", None), e, exc_info=True)
 
+    # ❷ Push (deliver only when channel includes push)
     if channel in ("push", "sms_push", "email_push"):
-        logger.info("[autofill:%s] %s entering push branch channel=%s",
-                    run_id, _dt(), channel)
+        logger.info("[autofill:%s] %s entering push branch channel=%s", run_id, _dt(), channel)
         for u in users:
             try:
-                logger.debug("[autofill:%s] %s push→user_id=%s", run_id, _dt(), u.id)
-                notify_user(
+                send_push_notification(   # <-- deliver push without creating another DB row
                     user=u,
+                    title=subject,
                     message=message_body,
-                    notification_type="autofill_offer",
                     data=data,
-                    debug=True,
+                    debug=False,
                     dry_run=False,
                 )
                 sent_push += 1
             except Exception as e:
                 logger.warning("[autofill:%s] %s push failed user_id=%s err=%s",
-                               run_id, _dt(), getattr(u, "id", None), e, exc_info=True)
+                            run_id, _dt(), getattr(u, "id", None), e, exc_info=True)
 
+    # ❸ Email (unchanged)
     if channel in ("email", "email_push"):
-        logger.info("[autofill:%s] %s entering email branch channel=%s",
-                    run_id, _dt(), channel)
+        logger.info("[autofill:%s] %s entering email branch channel=%s", run_id, _dt(), channel)
         for u in users:
             email = getattr(u, "email", None)
             logger.debug("[autofill:%s] %s email candidate user_id=%s email=%s",
-                         run_id, _dt(), getattr(u, "id", None), _redact(email))
+                        run_id, _dt(), getattr(u, "id", None), _redact(email))
             if not email:
                 continue
             try:
@@ -443,14 +456,14 @@ def send_autofill_offers(slot_id, user_ids, channel):
                 )
                 sent_email += 1
                 logger.debug("[autofill:%s] %s email sent user_id=%s email=%s",
-                             run_id, _dt(), getattr(u, "id", None), _redact(email))
+                            run_id, _dt(), getattr(u, "id", None), _redact(email))
             except Exception as e:
                 logger.warning("[autofill:%s] %s email failed user_id=%s email=%s err=%s",
-                               run_id, _dt(), getattr(u, "id", None), _redact(email), e, exc_info=True)
+                            run_id, _dt(), getattr(u, "id", None), _redact(email), e, exc_info=True)
 
-    elapsed = _dt()
-    logger.info("[autofill:%s] done elapsed=%s push_sent=%d email_sent=%d slot_id=%s",
-                run_id, elapsed, sent_push, sent_email, slot.id)
+        elapsed = _dt()
+        logger.info("[autofill:%s] done elapsed=%s push_sent=%d email_sent=%d slot_id=%s",
+                    run_id, elapsed, sent_push, sent_email, slot.id)
     return f"push={sent_push}, email={sent_email}, recipients={len(users)}, channel={channel}"
 
 @shared_task

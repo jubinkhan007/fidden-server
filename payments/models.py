@@ -132,73 +132,57 @@ class Booking(models.Model):
     def __str__(self):
         return f"Booking {self.id} - {self.status}"
 
-    def cancel_booking(self, *, reason="requested_by_customer", force_full_refund=False):
-        """Cancel booking, optionally force a full refund, and update linked SlotBooking."""
+    def cancel_booking(self, reason="requested_by_customer"):
         if self.status == "cancelled":
             return False, "Booking already cancelled"
-        if self.status in ("completed", "no-show"):
-            return False, f"Cannot cancel a booking in status '{self.status}'"
 
         try:
-            # ---- compute refund_amount ----
-            amt = Decimal(self.payment.amount or 0)
+            hours_before_booking = (self.slot.start_time - timezone.now()).total_seconds() / 3600
+            refund_amount = 0
+            if hours_before_booking > self.shop.free_cancellation_hours:
+                refund_amount = self.payment.amount
+            elif hours_before_booking > self.shop.no_refund_hours:
+                refund_amount = self.payment.amount * (100 - self.shop.cancellation_fee_percentage) / 100
 
-            if force_full_refund:
-                refund_amount = amt
-            else:
-                hours_before = (self.slot.start_time - timezone.now()).total_seconds() / 3600
-                refund_amount = Decimal("0")
-                if hours_before > (self.shop.free_cancellation_hours or 0):
-                    refund_amount = amt
-                elif hours_before > (self.shop.no_refund_hours or 0):
-                    pct = Decimal(100 - (self.shop.cancellation_fee_percentage or 0)) / Decimal(100)
-                    refund_amount = (amt * pct).quantize(Decimal("0.01"))
-
-            # ---- Stripe refund (only when > 0) ----
+            # Refund via Stripe only if > 0
             if refund_amount > 0:
                 refund = stripe.Refund.create(
                     payment_intent=self.stripe_payment_intent_id,
                     amount=int(refund_amount * 100),
-                    reason=reason,  # must be one of: duplicate / fraudulent / requested_by_customer
+                    reason=reason,  # must be one of Stripe's 3 reasons
                 )
                 Refund.objects.create(
                     payment=self.payment,
                     stripe_refund_id=refund.id,
                     amount=refund_amount,
                     status=refund.status,
-                    reason=reason,
+                    reason=reason,     # you can store a separate "local_reason" if desired
                 )
 
-            # ---- mark booking cancelled ----
+            # Update booking
             self.status = "cancelled"
             self.save(update_fields=["status", "updated_at"])
 
-            # ---- payment status: keep 'succeeded' unless actually refunded ----
-            if refund_amount > 0:
-                self.payment.status = "refunded"
-                self.payment.save(update_fields=["status", "updated_at"])
+            # Update payment status
+            self.payment.status = "refunded" if refund_amount > 0 else self.payment.status
+            # (keep 'succeeded' when no refund; do not flip to 'failed')
+            self.payment.save(update_fields=["status", "updated_at"])
 
-            # ---- cancel slot booking + restore capacity ----
-            sb: SlotBooking = self.slot
-            if sb.status != "cancelled":
-                sb.status = "cancelled"
-                if refund_amount > 0 and sb.payment_status != "refund":
-                    sb.payment_status = "refund"
-                sb.save(update_fields=["status", "payment_status"])
+            # Cancel SlotBooking + restore capacity
+            slot_booking: SlotBooking = self.slot
+            if slot_booking.status != "cancelled":
+                slot_booking.status = "cancelled"
+                slot_booking.payment_status = "refund" if refund_amount > 0 else slot_booking.payment_status
+                slot_booking.save(update_fields=["status", "payment_status"])
 
-                sb.slot.capacity_left += 1
-                sb.slot.save(update_fields=["capacity_left"])
+                slot_booking.slot.capacity_left += 1
+                slot_booking.slot.save(update_fields=["capacity_left"])
 
-                sb.shop.capacity += 1
-                sb.shop.save(update_fields=["capacity"])
+                slot_booking.shop.capacity += 1
+                slot_booking.shop.save(update_fields=["capacity"])
 
-            msg = (
-                "Refund processed and booking cancelled successfully"
-                if refund_amount > 0 else
-                "Booking cancelled (no refund due per policy)"
-            )
-            return True, msg
-
+            return True, "Refund processed and booking cancelled successfully" if refund_amount > 0 \
+                else True, "Booking cancelled (no refund due per policy)"
         except Exception as e:
             return False, str(e)
 

@@ -189,13 +189,18 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # ==============================
 # Email Configuration
 # ==============================
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' if DEBUG else 'django.core.mail.backends.smtp.EmailBackend'
+
+#'django.core.mail.backends.console.EmailBackend' if DEBUG else 
+
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
 EMAIL_HOST = os.getenv('EMAIL_HOST', '')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
-EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True').lower() in ('true', '1', 'yes')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'Fidden <no-reply@fidden.com>')
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'true').lower() in ('true','1','yes')
+EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'false').lower() in ('true','1','yes')
+EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', 20))
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'Fidden <no-reply@fidden.test>')
 
 # ==============================
 # Custom User Model
