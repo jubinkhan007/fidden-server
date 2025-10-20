@@ -13,8 +13,7 @@ from api.models import AutoFillLog, Shop, SlotBooking, Revenue, Coupon
 from api.utils.fcm import notify_user
 import logging
 import traceback
-
-from makemigrations import apps
+from django.apps import apps as django_apps
 
 logger = logging.getLogger(__name__)
 
@@ -307,45 +306,72 @@ def handle_payment_status(sender, instance, created, **kwargs):
                 },
             )
 
-            # Update SlotBooking payment status (safe to run multiple times)
-            slot_booking = instance.booking
-            if slot_booking.payment_status != "success":
-                slot_booking.payment_status = "success"
-                slot_booking.save(update_fields=["payment_status"])
-            
-            AutoFillLog = apps.get_model("api", "AutoFillLog")
+            # ---- Close the AutoFillLog loop if this booking filled an offer (with DEBUG logs) ----
+            AutoFillLog = django_apps.get_model("api", "AutoFillLog")
+
+            slot_booking = instance.booking          # payments.SlotBooking
+            shop = slot_booking.shop
+            slot_obj = getattr(slot_booking, "slot", None)  # api.Slot or None
+            slot_id = getattr(slot_obj, "id", None)
+            service_id = getattr(slot_booking, "service_id", None)
 
             ai_settings = getattr(shop, "ai_settings", None)
             scope_hours = getattr(ai_settings, "auto_fill_scope_hours", 48) or 48
             window_start = timezone.now() - timedelta(hours=scope_hours)
 
-            log_to_close = (
+            logger.info(
+                "[AutoFillClose] payment_id=%s booking_obj_id=%s shop_id=%s service_id=%s "
+                "slotbooking_id=%s slot_id=%s window_start=%s",
+                instance.id, booking_obj.id, shop.id, service_id, slot_booking.id, slot_id, window_start.isoformat()
+            )
+
+            # 1) Prefer exact offered slot match (AutoFillLog.offered_slot == this SlotBooking.slot)
+            exact_qs = (
                 AutoFillLog.objects
                 .filter(
                     shop=shop,
                     status__in=("initiated", "outreach_started"),
                     created_at__gte=window_start,
-                    offered_slot=getattr(slot_booking, "slot", None),
+                    offered_slot=slot_obj,  # precise match
                 )
                 .order_by("-created_at")
-                .first()
             )
 
+            exact_ids = list(exact_qs.values_list("id", flat=True)[:10])
+            logger.info(
+                "[AutoFillClose] exact_match_candidates=%s ids=%s (showing up to 10)",
+                exact_qs.count(), exact_ids
+            )
+
+            log_to_close = exact_qs.first()
+
+            # 2) Fallback: any open log for the same service in window (covers “offer original slot” and older logs)
             if not log_to_close:
-                log_to_close = (
+                fallback_qs = (
                     AutoFillLog.objects
                     .select_related("original_booking")
                     .filter(
                         shop=shop,
                         status__in=("initiated", "outreach_started"),
                         created_at__gte=window_start,
-                        original_booking__slot__service_id=slot_booking.service_id,
+                        original_booking__slot__service_id=service_id,
                     )
                     .order_by("-created_at")
-                    .first()
                 )
+                fallback_ids = list(fallback_qs.values_list("id", flat=True)[:10])
+                logger.info(
+                    "[AutoFillClose] fallback_candidates=%s ids=%s (showing up to 10)",
+                    fallback_qs.count(), fallback_ids
+                )
+                log_to_close = fallback_qs.first()
 
             if log_to_close:
+                logger.info(
+                    "[AutoFillClose] MATCHED log_id=%s (offered_slot_id=%s, status=%s). Completing...",
+                    log_to_close.id,
+                    getattr(log_to_close.offered_slot, "id", None),
+                    log_to_close.status,
+                )
                 fields = ["filled_by_booking", "status"]
                 log_to_close.filled_by_booking = booking_obj
                 log_to_close.status = "completed"
@@ -354,6 +380,38 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     log_to_close.revenue_recovered = recovered
                     fields.append("revenue_recovered")
                 log_to_close.save(update_fields=fields)
+                logger.info(
+                    "[AutoFillClose] COMPLETED log_id=%s set fields=%s recovered=%s",
+                    log_to_close.id, fields, recovered
+                )
+            else:
+                # Help debug by showing a few recent open logs for this shop
+                recent_open = (
+                    AutoFillLog.objects
+                    .filter(shop=shop, status__in=("initiated", "outreach_started"))
+                    .order_by("-created_at")[:5]
+                )
+                recent_dump = [
+                    dict(
+                        id=l.id,
+                        created_at=l.created_at.isoformat(),
+                        offered_slot_id=getattr(l.offered_slot, "id", None),
+                        original_booking_id=getattr(l.original_booking, "id", None),
+                        status=l.status,
+                    )
+                    for l in recent_open
+                ]
+                logger.warning(
+                    "[AutoFillClose] NO MATCH. Inspect recent open logs for shop_id=%s: %s",
+                    shop.id, recent_dump
+                )
+
+            # Update SlotBooking payment status (safe to run multiple times)
+            slot_booking = instance.booking
+            if slot_booking.payment_status != "success":
+                slot_booking.payment_status = "success"
+                slot_booking.save(update_fields=["payment_status"])
+
 
             if created_booking:
                 try:
