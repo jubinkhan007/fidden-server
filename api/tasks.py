@@ -136,8 +136,31 @@ def generate_weekly_ai_reports():
             data={"title": report_title},
         )
         notify_user(shop.owner, message=report_title, notification_type="ai_report", data={"summary": push_summary})
-        send_mail(subject=f"[Fidden] {report_title}", message=detailed_message,
-                  from_email=settings.DEFAULT_FROM_EMAIL, recipient_list=[shop.owner.email], fail_silently=False)
+        # inside generate_weekly_ai_reports(), right before send_mail(...)
+        recipient = (shop.owner.email or "").strip()
+        if not recipient:
+            logger.warning("[weekly] shop_id=%s owner_id=%s has no email; skipping email",
+                        shop.id, shop.owner_id)
+        else:
+            try:
+                logger.info(
+                    "[weekly] sending to=%s via host=%s port=%s from=%s",
+                    recipient,
+                    getattr(settings, "EMAIL_HOST", None),
+                    getattr(settings, "EMAIL_PORT", None),
+                    getattr(settings, "DEFAULT_FROM_EMAIL", None),
+                )
+                sent = send_mail(
+                    subject=f"[Fidden] {report_title}",
+                    message=detailed_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[recipient],
+                    fail_silently=False,  # keep False so errors raise
+                )
+                logger.info("[weekly] send_mail returned sent=%s to=%s", sent, recipient)
+            except Exception as e:
+                logger.error("[weekly] send_mail failed to %s: %s", recipient, e, exc_info=True)
+
 
 
 
