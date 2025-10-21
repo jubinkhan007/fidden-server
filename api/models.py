@@ -34,6 +34,10 @@ class Shop(models.Model):
     capacity = models.PositiveIntegerField()
     start_at = models.TimeField()
     close_at = models.TimeField()
+    # NEW: per-day overrides; keys: mon,tue,wed,thu,fri,sat,sun
+    # value: list of [start, end] strings in "HH:MM" 24h format, e.g.
+    # {"mon":[["09:00","14:00"],["15:00","18:00"]],"thu":[["13:00","17:00"]]}
+    business_hours = models.JSONField(default=dict, blank=True)
     # 🆕 Break time fields
     break_start_time = models.TimeField(blank=True, null=True)
     break_end_time = models.TimeField(blank=True, null=True)
@@ -218,6 +222,28 @@ class Shop(models.Model):
             self.update_all_service_deposits()
         else:
             print("No percentage change detected")
+    
+    # helper (not required but handy)
+    def get_intervals_for_date(self, date_obj):
+        """Return a list of (start_time, end_time) for a given date.
+        Uses per-day overrides if present, else falls back to start_at/close_at.
+        """
+        import datetime as _dt
+        day_key = date_obj.strftime("%a").lower()[:3]  # 'Mon'->'mon'
+        overrides = (self.business_hours or {}).get(day_key, [])
+        if overrides:
+            out = []
+            for pair in overrides:
+                try:
+                    s, e = pair
+                    sh, sm = map(int, s.split(":"))
+                    eh, em = map(int, e.split(":"))
+                    out.append((_dt.time(sh, sm), _dt.time(eh, em)))
+                except Exception:
+                    continue
+            return out
+        # default single interval
+        return [(self.start_at, self.close_at)]
 
     def __str__(self):
         return self.name
@@ -252,6 +278,7 @@ class Service(models.Model):
     discount_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True,  default=0)
     description = models.TextField(blank=True, null=True)
     service_img = models.ImageField(upload_to='services/', blank=True, null=True)
+    requires_age_18_plus = models.BooleanField(default=False)
 
     ## adding new field for experimental
     # Deposit settings

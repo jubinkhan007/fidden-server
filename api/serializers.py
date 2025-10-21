@@ -1,3 +1,5 @@
+# api/serializers.py
+
 from rest_framework import serializers
 
 from subscriptions.models import SubscriptionPlan
@@ -76,6 +78,38 @@ class ServiceCategorySerializer(serializers.ModelSerializer):
 
         return rep
 
+
+class BusinessHoursField(serializers.JSONField):
+    """Validates {"mon":[["09:00","14:00"], ...], "thu":[["13:00","17:00"]]}."""
+    valid_days = {"mon","tue","wed","thu","fri","sat","sun"}
+
+    def to_internal_value(self, data):
+        v = super().to_internal_value(data or {})
+        if not isinstance(v, dict):
+            raise serializers.ValidationError("business_hours must be an object")
+        for day, intervals in v.items():
+            if day not in self.valid_days:
+                raise serializers.ValidationError(f"Invalid day key: {day}")
+            if not isinstance(intervals, list):
+                raise serializers.ValidationError(f"{day} must be a list of [start,end] pairs")
+            for pair in intervals:
+                if (not isinstance(pair, (list, tuple))) or len(pair) != 2:
+                    raise serializers.ValidationError(f"{day} items must be [start,end]")
+                for t in pair:
+                    if not isinstance(t, str) or len(t) != 5 or t[2] != ":":
+                        raise serializers.ValidationError(f"Time '{t}' must be 'HH:MM'")
+                    hh, mm = t.split(":")
+                    try:
+                        hh = int(hh); mm = int(mm)
+                        assert 0 <= hh <= 23 and 0 <= mm <= 59
+                    except Exception:
+                        raise serializers.ValidationError(f"Invalid time '{t}'")
+                # ensure start < end
+                if pair[0] >= pair[1]:
+                    raise serializers.ValidationError(f"{day} start must be before end: {pair}")
+        return v
+
+
 class ServiceSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(required=False)
     category = serializers.PrimaryKeyRelatedField(queryset=ServiceCategory.objects.all())
@@ -95,7 +129,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'id', 'title', 'price', 'discount_price', 'description',
             'service_img', 'category', 'duration', 'capacity', 'is_active',
             'disabled_start_times',   # write
-            'disabled_times',         # read
+            'disabled_times', "requires_age_18_plus",         # read
         ]
         read_only_fields = ('shop',)
 
@@ -185,6 +219,7 @@ class VerificationFileSerializer(serializers.ModelSerializer):
 class ShopSerializer(serializers.ModelSerializer):
     #  removed services from response
     owner_id = serializers.IntegerField(source='owner.id', read_only=True)
+    business_hours = BusinessHoursField(required=False)  
     # 👇 for multiple file uploads at creation
     verification_files = serializers.ListField(
         child=serializers.FileField(),
@@ -198,7 +233,7 @@ class ShopSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
-            'shop_img', 'close_days', 'owner_id', 'is_verified', 'status', 
+            'shop_img', 'close_days', "business_hours", 'owner_id', 'is_verified', 'status', 
             'verification_files', 'uploaded_files', 'is_deposit_required',
             'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
@@ -264,6 +299,9 @@ class ShopSerializer(serializers.ModelSerializer):
                 VerificationFile.objects.create(shop=instance, file=f)
 
         return instance
+    
+
+
 
 class ReplySerializer(serializers.ModelSerializer):
     
@@ -510,7 +548,8 @@ class ShopDetailSerializer(serializers.ModelSerializer):
                 'service_img': (
                     request.build_absolute_uri(s.service_img.url)
                     if s.service_img and request else s.service_img.url if s.service_img else None
-                )
+                ),
+                "requires_age_18_plus": s.requires_age_18_plus,
             }
             for s in services
         ]
@@ -606,7 +645,8 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "service_img",
             "badge",
             "distance",  # <-- added distance
-            "is_active" 
+            "is_active",
+            "requires_age_18_plus" 
         ]
     
     def get_badge(self, obj):
@@ -652,6 +692,7 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
             "avg_rating",
             "review_count",
             "reviews",
+            "requires_age_18_plus",
         ]
 
     def get_reviews(self, obj):

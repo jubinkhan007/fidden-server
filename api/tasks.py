@@ -541,68 +541,66 @@ def calculate_analytics():
 def prefill_slots(self, days_ahead=14):
     """
     Prefill slots for the next `days_ahead` days per shop/service.
-    - Idempotent: fills missing slots instead of skipping whole days
-    - Handles cross-month continuous slot creation
-    - Always ensures coverage for `days_ahead` days from today
+    Uses Shop.business_hours overrides; falls back to start_at/close_at.
+    Supports multiple intervals per day (e.g., 09:00-14:00 and 15:00-18:00).
     """
     created_count = 0
     try:
-        # --- CLEAN PREVIOUS / PAST SLOTS ---
-        past_slots = Slot.objects.filter(end_time__lt=timezone.now()).filter(bookings__isnull=True)
-        deleted_count, _ = past_slots.delete()
-        if deleted_count:
-            logger.info(f"[Prefill Slots] Deleted {deleted_count} past slots (without bookings).")
+        past_slots = Slot.objects.filter(end_time__lt=timezone.now(), bookings__isnull=True)
+        past_slots.delete()
 
-        # --- CREATE NEW SLOTS ---
         today = timezone.localdate()
         target_end = today + timedelta(days=days_ahead - 1)
 
         for shop in Shop.objects.prefetch_related("services").all():
             services = shop.services.filter(is_active=True)
-            for service in services:
-                start_date = today  # FIX: Always start from today
-                end_date = target_end
 
-                for offset in range((end_date - start_date).days + 1):
-                    date = start_date + timedelta(days=offset)
+            for service in services:
+                for offset in range((target_end - today).days + 1):
+                    date = today + timedelta(days=offset)
                     weekday = date.strftime("%A").lower()
 
                     if (shop.close_days or []) and weekday in shop.close_days:
                         continue
 
-                    duration = service.duration or 30
-                    start_dt = timezone.make_aware(datetime.combine(date, shop.start_at), timezone.get_current_timezone())
-                    end_dt = timezone.make_aware(datetime.combine(date, shop.close_at), timezone.get_current_timezone())
-                    if end_dt <= start_dt:
+                    # Get intervals for this date
+                    intervals = shop.get_intervals_for_date(date)  # returns list[(time,time)]
+                    if not intervals:
                         continue
 
-                    # Get existing start times for this shop/service/date
+                    duration = service.duration or 30
+
+                    # Existing start times for that day
                     existing_times = set(
                         Slot.objects.filter(shop=shop, service=service, start_time__date=date)
                         .values_list("start_time", flat=True)
                     )
 
-                    current = start_dt
                     batch = []
-                    while current + timedelta(minutes=duration) <= end_dt:
-                        if current not in existing_times:  # only add missing slots
-                            batch.append(Slot(
-                                shop=shop,
-                                service=service,
-                                start_time=current,
-                                end_time=current + timedelta(minutes=duration),
-                                capacity_left=service.capacity,
-                            ))
-                        current += timedelta(minutes=duration)
+                    for (start_t, end_t) in intervals:
+                        start_dt = timezone.make_aware(datetime.combine(date, start_t))
+                        end_dt   = timezone.make_aware(datetime.combine(date, end_t))
+                        if end_dt <= start_dt:
+                            continue
+
+                        current = start_dt
+                        while current + timedelta(minutes=duration) <= end_dt:
+                            if current not in existing_times:
+                                batch.append(Slot(
+                                    shop=shop,
+                                    service=service,
+                                    start_time=current,
+                                    end_time=current + timedelta(minutes=duration),
+                                    capacity_left=service.capacity,
+                                ))
+                            current += timedelta(minutes=duration)
 
                     if batch:
                         Slot.objects.bulk_create(batch, ignore_conflicts=True)
                         created_count += len(batch)
-                        logger.info(f"[Prefill Slots] Created {len(batch)} slots for {shop.name} / {service.title} on {date}")
 
         logger.info(f"[Prefill Slots] Created {created_count} slots across all shops/services.")
         return f"Prefilled {days_ahead} days with {created_count} slots."
-
     except Exception as e:
         logger.error(f"[Prefill Slots] Error: {e}", exc_info=True)
         raise self.retry(exc=e)
