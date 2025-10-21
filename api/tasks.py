@@ -466,6 +466,16 @@ def send_autofill_offers(slot_id, user_ids, channel):
                     run_id, elapsed, sent_push, sent_email, slot.id)
     return f"push={sent_push}, email={sent_email}, recipients={len(users)}, channel={channel}"
 
+@shared_task(name="api.tasks.test_notification_persistence")
+def test_notification_persistence(user_id: int, msg: str = "persistence probe"):
+    from django.contrib.auth import get_user_model
+    U = get_user_model()
+    u = U.objects.filter(id=user_id).first()
+    if not u:
+        return "no such user"
+    n = notify_user(u, msg, notification_type="probe", data={"probe": "1"}, dry_run=True)
+    return f"created notification id={n.id} for user={u.id}"
+
 @shared_task
 def calculate_analytics():
     for shop in Shop.objects.all():
@@ -577,33 +587,84 @@ def prefill_slots(self, days_ahead=14):
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def send_upcoming_slot_reminders(self, window_minutes=30):
-    """Send reminders for upcoming confirmed bookings."""
+    """Send reminders via email, push, and save to DB for upcoming confirmed bookings."""
     now = timezone.now()
     window_end = now + timedelta(minutes=window_minutes)
+
     try:
-        upcoming = SlotBooking.objects.select_related("user", "service", "shop")\
-            .filter(status="confirmed", start_time__gte=now, start_time__lte=window_end)
-        sent_count = 0
-        for b in upcoming:
-            email = getattr(b.user, "email", None)
-            if not email:
-                continue
-            subject = f"Reminder: {b.service.title} at {b.shop.name}"
-            display_name = getattr(b.user, "name", None) or getattr(b.user, "email", "there")
-            msg = (
-                f"Dear {display_name},\n\nYour booking for {b.service.title} "
-                f"starts at {timezone.localtime(b.start_time).strftime('%Y-%m-%d %H:%M')}.\n\nThank you!"
+        from payments.models import Booking
+
+        # If your canonical “confirmed” state is 'confirmed' (matches SlotBooking usage),
+        # use that. If payments.Booking uses a different value, update here.
+        CONFIRMED = "confirmed"
+
+        upcoming = (
+            Booking.objects
+            .select_related(
+                "user", "shop", "slot", "slot__service"  # <-- FIX: pull service via slot
             )
+            .filter(
+                status=CONFIRMED,                  # <-- FIX: use the real confirmed state
+                slot__start_time__gte=now,
+                slot__start_time__lte=window_end,
+            )
+        )
+
+        sent_count = 0
+
+        for b in upcoming:
+            user = b.user
+            shop = b.shop
+            service = b.slot.service  # <-- FIX: service comes from slot
+            start_local = timezone.localtime(b.slot.start_time)
+
+            subject = f"Reminder: {service.title} at {shop.name}"
+            display_name = getattr(user, "name", None) or getattr(user, "email", "there")
+
+            full_message = (
+                f"Hi {display_name},\n\nJust a reminder that your booking for {service.title} "
+                f"at {shop.name} is coming up soon!\n\n"
+                f"Date & Time: {start_local.strftime('%A, %b %d at %I:%M %p')}\n\nSee you there!"
+            )
+            push_body = f"Your {service.title} booking at {shop.name} is at {start_local.strftime('%I:%M %p')}."
+
+            push_data = {
+                "type": "booking_reminder",
+                "booking_id": str(b.id),
+                "shop_id": str(shop.id),
+                "service_id": str(service.id),
+                "start_time": b.slot.start_time.isoformat(),
+                # you can add a deeplink here, too
+            }
+
+            # Email (optional)
+            email = getattr(user, "email", None)
+            if email:
+                try:
+                    send_mail(subject, full_message, settings.DEFAULT_FROM_EMAIL, [email], fail_silently=False)
+                except Exception as e:
+                    logger.warning(f"[Reminder] Failed to send email to {email}: {e}")
+
+            # Persist in DB + send push
             try:
-                send_mail(subject, msg, settings.DEFAULT_FROM_EMAIL, [email], fail_silently=False)
+                notify_user(
+                    user=user,
+                    message=push_body,
+                    notification_type="booking_reminder",
+                    data={**push_data, "title": subject},
+                    dry_run=False,  # ensure we actually send push
+                )
                 sent_count += 1
             except Exception as e:
-                logger.warning(f"[Reminder] Failed to send to {email}: {e}")
-        logger.info(f"[Reminder] Sent {sent_count} reminders for upcoming slots.")
-        return f"Sent {sent_count} reminders."
+                logger.error(f"[Reminder] Failed for booking {b.id} user {user.id}: {e}", exc_info=True)
+
+        logger.info(f"[Reminder] Processed {sent_count} reminders for upcoming slots.")
+        return f"Processed {sent_count} reminders."
+
     except Exception as e:
         logger.error(f"[Reminder Task] Error: {e}", exc_info=True)
         raise self.retry(exc=e)
+
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
