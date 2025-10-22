@@ -1,6 +1,7 @@
 # subscriptions/urls.py
 from django.urls import path
 from .views import (
+    CancelAIAddonView,
     CreateAIAddonCheckoutSessionView,
     SubscriptionPlanListView,
     CreateSubscriptionCheckoutSessionView,
@@ -21,4 +22,5 @@ urlpatterns = [
     path("checkout/return/", CheckoutReturnView.as_view(), name="checkout_return"),
     path("checkout/cancel/", CheckoutCancelView.as_view(), name="checkout_cancel"),
     path("create-ai-addon-checkout-session/", CreateAIAddonCheckoutSessionView.as_view(), name="create-ai-addon-checkout-session"),
+    path("cancel-ai-addon/", CancelAIAddonView.as_view(), name="cancel-ai-addon"),
 ]

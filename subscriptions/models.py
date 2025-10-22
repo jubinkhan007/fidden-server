@@ -1,3 +1,5 @@
+# subscriptions/models.py
+
 from django.db import models
 from django.conf import settings
 from django.db.models.signals import post_save
@@ -117,6 +119,9 @@ class ShopSubscription(models.Model):
     stripe_subscription_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
     has_ai_addon = models.BooleanField(default=False)  # user explicitly bought add-on
     legacy_ai_promo_used = models.BooleanField(default=False)
+    # NEW ↓↓↓
+    ai_subscription_id = models.CharField(max_length=100, blank=True, null=True)
+    ai_subscription_item_id = models.CharField(max_length=100, blank=True, null=True)
 
     @property
     def ai_enabled(self):

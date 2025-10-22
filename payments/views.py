@@ -1,3 +1,5 @@
+# payments/views.py
+
 import os
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -55,16 +57,22 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
     price_id = (items[0].get("price") or {}).get("id")
     ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
     if price_id == ai_price_id:
-        # Handle AI add-on purchase
         meta = sub_obj.get("metadata") or {}
         shop_id = meta.get("shop_id")
         if shop_id:
-            # from api.models import Shop
             try:
                 shop = Shop.objects.get(id=int(shop_id))
                 if hasattr(shop, "subscription"):
-                    shop.subscription.has_ai_addon = True
-                    shop.subscription.save(update_fields=["has_ai_addon"])
+                    ss = shop.subscription
+                    ss.has_ai_addon = True
+                    ss.ai_subscription_id = sub_obj.get("id")
+                    logger.info("Saved AI sub ids: sub=%s item=%s for shop %s",
+            ss.ai_subscription_id, ss.ai_subscription_item_id, shop_hint.id)
+                    # find AI item id
+                    items = (sub_obj.get("items") or {}).get("data") or []
+                    ai_item = next((it for it in items if (it.get("price") or {}).get("id") == ai_price_id), None)
+                    ss.ai_subscription_item_id = (ai_item or {}).get("id")
+                    ss.save(update_fields=["has_ai_addon","ai_subscription_id","ai_subscription_item_id"])
                     logger.info(" AI add-on activated for shop %s", shop_id)
             except Shop.DoesNotExist:
                 logger.warning("⚠️ Shop not found for AI add-on metadata: %s", shop_id)
@@ -492,145 +500,88 @@ class StripeWebhookView(APIView):
 
         # --- Checkout completion → create/attach subscription ---
         if event_type == "checkout.session.completed":
-            try:
-                session = data
-                shop_ref = session.get("client_reference_id")
-                sub_id   = session.get("subscription")
-                logger.info("[checkout] completed session=%s shop_ref=%s sub_id=%s",
-                            session.get("id"), shop_ref, sub_id)
-                shop_hint = None
-                metadata = session.get("subscription_data", {}).get("metadata", {})
-                
-                # Check if this was an AI Addon checkout
-                if metadata.get("addon") == "ai_assistant":
+            session = data
+            shop_ref = session.get("client_reference_id")
+            sub_id   = session.get("subscription")
+
+            shop_hint = None
+            if shop_ref:
+                try:
+                    shop_hint = Shop.objects.get(id=int(shop_ref))
+                    logger.info("[checkout] resolved shop_hint=%s", shop_hint.id)
+                except Exception:
+                    logger.warning("[checkout] bad client_reference_id: %r", shop_ref)
+
+            if sub_id:
+                sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price", "latest_invoice.payment_intent"])
+                sub_meta = sub.get("metadata") or {}
+
+                # Ensure the subscription has shop_id for future handlers
+                if shop_hint:
+                    try:
+                        if str(sub_meta.get("shop_id")) != str(shop_hint.id):
+                            stripe.Subscription.modify(sub["id"],
+                                metadata={**sub_meta, "shop_id": str(shop_hint.id)}
+                            )
+                    except Exception:
+                        logger.exception("Failed to set subscription metadata.shop_id")
+
+                price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
+                ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+                is_ai_addon = (sub_meta.get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids)
+
+                if is_ai_addon:
                     if shop_hint and hasattr(shop_hint, "subscription"):
-                        shop_sub = shop_hint.subscription
-                        shop_sub.has_ai_addon = True
-                        
-                        # 👇 CHECK IF PROMO CODE WAS USED
-                        # Expand total_details to see discount info
-                        session_with_details = stripe.checkout.Session.retrieve(
-                            session["id"],
-                            expand=["total_details.breakdown"]
-                        )
-                        discounts = session_with_details.get("total_details", {}).get("breakdown", {}).get("discounts", [])
-                        
-                        legacy_promo_applied = False
-                        for discount in discounts:
-                            coupon_id = discount.get("discount", {}).get("coupon", {}).get("id")
-                            # Compare against the ID of the 100% off coupon you created
-                            # You might need to store this Coupon ID in settings (e.g., STRIPE_LEGACY_COUPON_ID)
-                            if coupon_id == settings.STRIPE_LEGACY_COUPON_ID: 
-                                legacy_promo_applied = True
-                                break
-                                
-                        if legacy_promo_applied:
-                            shop_sub.legacy_ai_promo_used = True
-                            logger.info("✅ LEGACY500 promo applied for AI Assistant on shop %s", shop_hint.id)
-                        
-                        shop_sub.save() # Save has_ai_addon and legacy_ai_promo_used flags
+                        ss = shop_hint.subscription
+                        ss.has_ai_addon = True
+                        # persist the separate AI subscription & item ids
+                        ss.ai_subscription_id = sub["id"]
+                        ai_item = next((it for it in sub["items"]["data"] if it["price"]["id"] == ai_price_id), None)
+                        ss.ai_subscription_item_id = ai_item["id"] if ai_item else None
+
+                        # detect legacy promo by inspecting invoice discounts (more reliable than Session total_details)
+                        try:
+                            inv = sub.get("latest_invoice")
+                            if isinstance(inv, str):
+                                inv = stripe.Invoice.retrieve(inv, expand=["discounts", "discounts.discount.coupon"])
+                            discounts = inv.get("discounts", []) if inv else []
+                            if any(d.get("discount", {}).get("coupon", {}).get("id") == settings.STRIPE_LEGACY_COUPON_ID
+                                for d in discounts):
+                                ss.legacy_ai_promo_used = True
+                                logger.info("✅ LEGACY promo applied for shop %s", shop_hint.id)
+                        except Exception:
+                            logger.exception("Promo detection failed")
+
+                        ss.save(update_fields=["has_ai_addon","ai_subscription_id","ai_subscription_item_id","legacy_ai_promo_used"])
                         logger.info("✅ AI Assistant add-on enabled for shop %s", shop_hint.id)
                     return Response(status=200)
 
-                if shop_ref:
-                    try:
-                        shop_hint = Shop.objects.get(id=int(shop_ref))
-                        logger.info("[checkout] resolved shop_hint=%s", shop_hint.id)
-                    except Exception:
-                        logger.warning("[checkout] bad client_reference_id: %r", shop_ref)
-
-                #  Retrieve the subscription that was just created for this session
-                #    (this will include the metadata we set when creating the checkout)
-                if sub_id:
-                    sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
-                    sub_meta = sub.get("metadata") or {}
-                    price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
-                    ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
-
-                    #  If this subscription is the AI add-on, mark the DB and return
-                    if (sub_meta.get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids):
-                        if shop_hint and hasattr(shop_hint, "subscription"):
-                            ss = shop_hint.subscription
-                            ss.has_ai_addon = True
-                            ss.save(update_fields=["has_ai_addon"])
-                            logger.info(" AI Assistant add-on activated for shop %s", shop_hint.id)
-                        return Response(status=200)
-
-                    # Otherwise, this is a normal base plan → proceed as before
-                    _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
-                    try:
-                        current_meta = sub.get("metadata") or {}
-                        if shop_hint and str(current_meta.get("shop_id")) != str(shop_hint.id):
-                            stripe.Subscription.modify(sub["id"], metadata={**current_meta, "shop_id": str(shop_hint.id)})
-                    except Exception:
-                        logger.exception("Failed to set subscription metadata.shop_id")
-                    return Response(status=200)
-
-
-                # Fallback (rare): no subscription on session → try line_items
-                # This also helps you debug wrong price ids.
-                try:
-                    session_full = stripe.checkout.Session.retrieve(session["id"], expand=["line_items.data.price"])
-                    li = (session_full.get("line_items") or {}).get("data") or []
-                    price_id = li and (li[0].get("price") or {}).get("id")
-                    logger.info("[checkout] fallback price_id from line_items: %s", price_id)
-                    if price_id and shop_hint:
-                        try:
-                            plan = SubscriptionPlan.objects.get(stripe_price_id=price_id)
-                            ShopSubscription.objects.update_or_create(
-                                shop=shop_hint,
-                                defaults={
-                                    "plan": plan,
-                                    "status": ShopSubscription.STATUS_ACTIVE,
-                                    "stripe_subscription_id": None,  # unknown here
-                                    "start_date": timezone.now(),
-                                    "end_date": timezone.now() + relativedelta(months=1),
-                                },
-                            )
-                            logger.info(" Shop %s set to plan %s via CHECKOUT fallback", shop_hint.id, plan.name)
-                        except SubscriptionPlan.DoesNotExist:
-                            known = list(SubscriptionPlan.objects.values_list("name", "stripe_price_id"))
-                            logger.error("[checkout] fallback: no local plan for price_id=%s. Known: %s", price_id, known)
-                except Exception:
-                    logger.exception("[checkout] fallback retrieval failed")
-
-                return Response(status=200)
-            except Exception:
-                logger.exception("checkout.session.completed error")
-                return Response(status=500)
+                # base plan flow
+                _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
+            return Response(status=200)
 
 
         # --- subscription lifecycle ---
         if event_type in ("customer.subscription.created", "customer.subscription.updated"):
-            sub = data  # already a subscription object
-            try:
-                # Detect AI add-on
-                ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
-                price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
-                if (sub.get("metadata", {}).get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids):
-                    # resolve shop and set has_ai_addon
-                    shop = None
-                    meta = sub.get("metadata") or {}
-                    sid = meta.get("shop_id")
-                    if sid:
-                        try:
-                            shop = Shop.objects.get(id=int(sid))
-                        except Exception:
-                            pass
-                    if not shop:
-                        ss = ShopSubscription.objects.filter(stripe_subscription_id=sub["id"]).select_related("shop").first()
-                        if ss: shop = ss.shop
-                    if shop and hasattr(shop, "subscription"):
-                        shop.subscription.has_ai_addon = True
-                        shop.subscription.save(update_fields=["has_ai_addon"])
-                        logger.info(" (subscription.*) AI add-on active for shop %s", shop.id)
-                    return Response(status=200)
-            except Exception:
-                logger.exception("AI add-on detection failed in subscription.*")
+            sub = data
+            ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+            price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
+            is_ai_addon = (sub.get("metadata", {}).get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids)
+            if is_ai_addon:
+                shop = None
+                sid = (sub.get("metadata") or {}).get("shop_id")
+                if sid:
+                    try: shop = Shop.objects.get(id=int(sid))
+                    except Exception: pass
+                if shop and hasattr(shop, "subscription"):
+                    ss = shop.subscription
+                    ss.has_ai_addon = True
+                    ss.ai_subscription_id = sub["id"]
+                    ai_item = next((it for it in sub["items"]["data"] if it["price"]["id"] == ai_price_id), None)
+                    ss.ai_subscription_item_id = ai_item["id"] if ai_item else None
+                    ss.save(update_fields=["has_ai_addon","ai_subscription_id","ai_subscription_item_id"])
+                return Response(status=200)
 
-            # Not an add-on → normal base plan flow
-            _update_shop_from_subscription_obj(sub)
-            return Response(status=200)
 
 
         if event_type in ("invoice.payment_succeeded", "invoice.paid", "invoice_payment.paid"):
