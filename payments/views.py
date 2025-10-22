@@ -496,8 +496,42 @@ class StripeWebhookView(APIView):
                 session = data
                 shop_ref = session.get("client_reference_id")
                 sub_id   = session.get("subscription")
-
+                logger.info("[checkout] completed session=%s shop_ref=%s sub_id=%s",
+                            session.get("id"), shop_ref, sub_id)
                 shop_hint = None
+                metadata = session.get("subscription_data", {}).get("metadata", {})
+                
+                # Check if this was an AI Addon checkout
+                if metadata.get("addon") == "ai_assistant":
+                    if shop_hint and hasattr(shop_hint, "subscription"):
+                        shop_sub = shop_hint.subscription
+                        shop_sub.has_ai_addon = True
+                        
+                        # 👇 CHECK IF PROMO CODE WAS USED
+                        # Expand total_details to see discount info
+                        session_with_details = stripe.checkout.Session.retrieve(
+                            session["id"],
+                            expand=["total_details.breakdown"]
+                        )
+                        discounts = session_with_details.get("total_details", {}).get("breakdown", {}).get("discounts", [])
+                        
+                        legacy_promo_applied = False
+                        for discount in discounts:
+                            coupon_id = discount.get("discount", {}).get("coupon", {}).get("id")
+                            # Compare against the ID of the 100% off coupon you created
+                            # You might need to store this Coupon ID in settings (e.g., STRIPE_LEGACY_COUPON_ID)
+                            if coupon_id == settings.STRIPE_LEGACY_COUPON_ID: 
+                                legacy_promo_applied = True
+                                break
+                                
+                        if legacy_promo_applied:
+                            shop_sub.legacy_ai_promo_used = True
+                            logger.info("✅ LEGACY500 promo applied for AI Assistant on shop %s", shop_hint.id)
+                        
+                        shop_sub.save() # Save has_ai_addon and legacy_ai_promo_used flags
+                        logger.info("✅ AI Assistant add-on enabled for shop %s", shop_hint.id)
+                    return Response(status=200)
+
                 if shop_ref:
                     try:
                         shop_hint = Shop.objects.get(id=int(shop_ref))

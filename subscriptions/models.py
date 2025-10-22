@@ -116,6 +116,7 @@ class ShopSubscription(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     stripe_subscription_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
     has_ai_addon = models.BooleanField(default=False)  # user explicitly bought add-on
+    legacy_ai_promo_used = models.BooleanField(default=False)
 
     @property
     def ai_enabled(self):

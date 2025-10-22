@@ -252,7 +252,8 @@ STRIPE_AI_PRICE_ID = os.environ.get("STRIPE_AI_PRICE_ID")
 
 STRIPE_SUCCESS_URL = os.getenv('STRIPE_SUCCESS_URL', 'http://localhost:3000/subscription/success')
 STRIPE_CANCEL_URL = os.getenv('STRIPE_CANCEL_URL', 'http://localhost:3000/subscription/cancel')
-
+STRIPE_LEGACY_COUPON_ID = os.environ.get("STRIPE_LEGACY_COUPON_ID")
+STRIPE_LEGACY_PROMO_CODE_ID = os.environ.get("STRIPE_LEGACY_PROMO_CODE_ID")
 # pip install django-redis
 CACHES = {
     "default": {

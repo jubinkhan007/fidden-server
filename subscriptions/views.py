@@ -231,39 +231,103 @@ class CreateAIAddonCheckoutSessionView(APIView):
     def post(self, request):
         try:
             shop = request.user.shop
-            sub = getattr(shop, "subscription", None)
-            if not sub:
-                return Response({"error": "No active subscription found."}, status=404)
+            # Get the subscription *object* to check flags
+            shop_sub = getattr(shop, "subscription", None)
+            if not shop_sub:
+                return Response({"error": "Shop subscription details not found."}, status=status.HTTP_404_NOT_FOUND)
 
-            if sub.ai_source == "included":
-                return Response({"error": "AI Assistant already included in your plan."}, status=400)
-            if sub.ai_source == "addon":
-                return Response({"error": "AI Assistant add-on already active."}, status=400)
+        except Shop.DoesNotExist:
+            return Response({"error": "Create a shop first."}, status=status.HTTP_404_NOT_FOUND)
 
-            if sub.plan.name not in [SubscriptionPlan.FOUNDATION, SubscriptionPlan.MOMENTUM]:
-                return Response({"error": "AI Add-on not available for this plan."}, status=400)
-        except Exception:
-            return Response({"error": "Create a shop first."}, status=404)
+        # Basic eligibility check (already existing logic - combined for clarity)
+        if shop_sub.has_ai_addon:
+             return Response({"error": "AI Assistant add-on already active."}, status=status.HTTP_400_BAD_REQUEST)
+        if getattr(shop_sub.plan, 'ai_assistant', 'addon') == 'included':
+             return Response({"error": "AI Assistant already included in your plan."}, status=status.HTTP_400_BAD_REQUEST)
+        # Add any other plan restrictions if needed
 
         ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
         if not ai_price_id:
-            return Response({"error": "AI add-on price not configured."}, status=500)
+            return Response({"error": "AI add-on price not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        promo_code_input = request.data.get("promo_code", None)
+        legacy_promo_code_id = getattr(settings, "STRIPE_LEGACY_PROMO_CODE_ID", None)
 
         success_url = request.build_absolute_uri(reverse("checkout_return")) + "?session_id={CHECKOUT_SESSION_ID}"
         cancel_url  = request.build_absolute_uri(reverse("checkout_cancel"))
 
-        customer_id = _ensure_shop_customer_id(shop)
-        checkout_session = stripe.checkout.Session.create(
-            mode="subscription",
-            customer=customer_id,
-            line_items=[{"price": ai_price_id, "quantity": 1}],
-            success_url=success_url,
-            cancel_url=cancel_url,
-            client_reference_id=str(shop.id),
-            subscription_data={
-                "metadata": {"shop_id": str(shop.id), "addon": "ai_assistant"}
-            },
-        )
+        try:
+            customer_id = _ensure_shop_customer_id(shop)
+            
+            checkout_params = {
+                "mode": "subscription",
+                "customer": customer_id,
+                "line_items": [{"price": ai_price_id, "quantity": 1}],
+                "success_url": success_url,
+                "cancel_url": cancel_url,
+                "client_reference_id": str(shop.id),
+                "subscription_data": {
+                    "metadata": {"shop_id": str(shop.id), "addon": "ai_assistant"}
+                },
+                "allow_promotion_codes": True, # Allow other codes by default
+            }
+
+            # --- LEGACY500 PROMO CODE LOGIC ---
+            if promo_code_input and promo_code_input.upper() == "LEGACY500":
+                
+                # 1. Check if user already used this promo
+                if shop_sub.legacy_ai_promo_used:
+                    logger.warning(f"Shop {shop.id} attempted to reuse LEGACY500 promo.")
+                    return Response(
+                        {"error": "This promotion code has already been redeemed for your account."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                if not legacy_promo_code_id:
+                     logger.error("LEGACY500 code entered, but STRIPE_LEGACY_PROMO_CODE_ID not set.")
+                     return Response({"error": "Legacy promotion configuration error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+                # 2. Check Stripe Promo Code status (active and within limit)
+                try:
+                    stripe_promo = stripe.PromotionCode.retrieve(legacy_promo_code_id, expand=["coupon"])
+                    
+                    # Check if promotion code itself is active
+                    if not stripe_promo.active:
+                        logger.warning(f"LEGACY500 promotion code ID {legacy_promo_code_id} is inactive in Stripe.")
+                        return Response({"error": "This promotion code is no longer valid."}, status=status.HTTP_400_BAD_REQUEST)
+                        
+                    # Check the underlying coupon's redemption count
+                    coupon = stripe_promo.coupon
+                    if coupon.times_redeemed >= coupon.max_redemptions:
+                        logger.warning(f"LEGACY500 coupon ID {coupon.id} has reached its redemption limit ({coupon.times_redeemed}/{coupon.max_redemptions}).")
+                        # Optionally deactivate the promotion code in Stripe now
+                        # stripe.PromotionCode.update(legacy_promo_code_id, active=False)
+                        return Response({"error": "This promotion code has reached its redemption limit."}, status=status.HTTP_400_BAD_REQUEST)
+
+                except stripe.error.InvalidRequestError as e:
+                     # Handle case where Promo Code ID is invalid
+                     if "No such promotion_code" in str(e):
+                          logger.error(f"STRIPE_LEGACY_PROMO_CODE_ID '{legacy_promo_code_id}' is invalid or does not exist.")
+                          return Response({"error": "Legacy promotion configuration error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                     raise e # Re-raise other Stripe errors
+
+                # 3. Apply the discount automatically
+                checkout_params.pop("allow_promotion_codes", None)
+                checkout_params["discounts"] = [{"promotion_code": legacy_promo_code_id}]
+                logger.info(f"Applying LEGACY500 promo code ID: {legacy_promo_code_id} for shop {shop.id}")
+
+            # --- END LEGACY500 LOGIC ---
+
+            checkout_session = stripe.checkout.Session.create(**checkout_params)
+            return Response({"url": checkout_session.url}, status=status.HTTP_200_OK)
+            
+        except stripe.error.InvalidRequestError as e:
+             # Handle specific errors like expired promo codes if needed
+             logger.error(f"Stripe InvalidRequestError for AI add-on checkout: {e}")
+             return Response({"error": str(e), "code": "STRIPE_INVALID_REQUEST"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Stripe error creating checkout session for AI add-on: %s", e)
+            return Response({"error": "Could not create checkout session.", "code": "STRIPE_ERROR"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"url": checkout_session.url}, status=200)
 
 
