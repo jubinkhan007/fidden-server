@@ -19,6 +19,7 @@ from rest_framework.exceptions import ValidationError
 from api.models import Shop, Coupon
 from api.serializers import SlotBookingSerializer, CouponSerializer
 from accounts.models import User
+from api.utils.slots import assert_slot_bookable
 from .models import Payment, UserStripeCustomer, Booking, TransactionLog, CouponUsage, can_use_coupon
 from subscriptions.models import SubscriptionPlan, ShopSubscription
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
@@ -169,8 +170,18 @@ class CreatePaymentIntentView(APIView):
                     {"detail": extract_validation_error_message(e)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-
+        # HARD GUARD: slot must be in the future and have capacity
+        slot = Slot.objects.select_for_update().filter(id=slot_id).first()
+        if not slot:
+            return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            # Optional tiny grace if you want: grace_minutes=2
+            assert_slot_bookable(slot)  
+        except ValidationError as e:
+            return Response({"detail": str(e.detail[0] if isinstance(e.detail, list) else e.detail)},
+                            status=status.HTTP_400_BAD_REQUEST)
         # 2) Create booking via SlotBookingSerializer
+        # proceed to create the SlotBooking
         serializer = SlotBookingSerializer(
             data={"slot_id": slot_id},
             context={"request": request},
