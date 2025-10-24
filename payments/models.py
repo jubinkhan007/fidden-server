@@ -284,25 +284,34 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
 # Payment post_save: handle succeeded and refunded
 @receiver(post_save, sender=Payment)
 def handle_payment_status(sender, instance, created, **kwargs):
+    """
+    Robust version:
+    - Always defines booking_obj/created_booking before use
+    - Only references them inside the 'succeeded' branch
+    - Wraps all side-effects with try/except
+    """
+    # Make sure these exist even if we never reach the succeeded block
+    booking_obj = None
+    created_booking = False
+
     try:
-        slot_booking = instance.booking 
+        slot_booking = instance.booking
         shop = slot_booking.shop
 
         # ---------------- Payment Succeeded ----------------
         if instance.status == "succeeded":
-            # Update SlotBooking payment status
+            # Idempotent payment status update
             if slot_booking.payment_status != "success":
                 slot_booking.payment_status = "success"
                 slot_booking.save(update_fields=["payment_status"])
-                    
-            # Create Booking if not exists
+
             # Create Booking exactly once for this Payment
             booking_obj, created_booking = Booking.objects.get_or_create(
                 payment=instance,
                 defaults={
                     "user": instance.user,
-                    "shop": instance.booking.shop,
-                    "slot": instance.booking,
+                    "shop": shop,
+                    "slot": slot_booking,
                     "status": "active",
                     "stripe_payment_intent_id": instance.stripe_payment_intent_id,
                 },
@@ -312,18 +321,14 @@ def handle_payment_status(sender, instance, created, **kwargs):
             try:
                 AutoFillLog = django_apps.get_model("api", "AutoFillLog")
 
-                slot_booking = instance.booking  # payments.SlotBooking
-                shop = slot_booking.shop
-
                 ai_settings = getattr(shop, "ai_settings", None)
                 scope_hours = getattr(ai_settings, "auto_fill_scope_hours", 48) or 48
                 window_start = timezone.now() - timedelta(hours=scope_hours)
 
-                # Dump context
                 logger.info(
                     "[AutoFillClose] start shop_id=%s service_id=%s slot_id=%s window_start=%s payment_id=%s booking_obj_id=%s",
                     shop.id, slot_booking.service_id, slot_booking.slot_id,
-                    window_start.isoformat(), instance.id, booking_obj.id
+                    window_start.isoformat(), instance.id, getattr(booking_obj, "id", None)
                 )
 
                 # Prefer exact offered_slot match (SlotBooking.slot -> Slot)
@@ -339,16 +344,8 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     .first()
                 )
 
-                if log_to_close:
-                    logger.info(
-                        "[AutoFillClose] MATCH by offered_slot: log_id=%s offered_slot_id=%s original_booking_id=%s",
-                        log_to_close.id,
-                        getattr(log_to_close.offered_slot, "id", None),
-                        getattr(log_to_close.original_booking, "id", None),
-                    )
-                else:
+                if not log_to_close:
                     # Fallback: any open log for the same service in window
-                    logger.info("[AutoFillClose] No offered_slot match. Trying service fallback...")
                     log_to_close = (
                         AutoFillLog.objects
                         .select_related("original_booking", "offered_slot")
@@ -361,13 +358,6 @@ def handle_payment_status(sender, instance, created, **kwargs):
                         .order_by("-created_at")
                         .first()
                     )
-                    if log_to_close:
-                        logger.info(
-                            "[AutoFillClose] MATCH by service: log_id=%s offered_slot_id=%s original_booking_id=%s",
-                            log_to_close.id,
-                            getattr(log_to_close.offered_slot, "id", None),
-                            getattr(log_to_close.original_booking, "id", None),
-                        )
 
                 if log_to_close:
                     fields = ["filled_by_booking", "status"]
@@ -380,10 +370,9 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     log_to_close.save(update_fields=fields)
                     logger.info(
                         "[AutoFillClose] ✅ COMPLETED log_id=%s recovered=%.2f via booking_id=%s",
-                        log_to_close.id, float(recovered), booking_obj.id
+                        log_to_close.id, float(recovered), getattr(booking_obj, "id", None)
                     )
                 else:
-                    # Print open logs so we can eyeball why we didn’t match
                     open_logs = list(
                         AutoFillLog.objects
                         .select_related("offered_slot", "original_booking")
@@ -402,128 +391,103 @@ def handle_payment_status(sender, instance, created, **kwargs):
             except Exception as e:
                 logger.error("[AutoFillClose] ERROR: %s", e, exc_info=True)
 
-
-            # Update SlotBooking payment status (safe to run multiple times)
-            slot_booking = instance.booking
-            if slot_booking.payment_status != "success":
-                slot_booking.payment_status = "success"
-                slot_booking.save(update_fields=["payment_status"])
-
-
-        if created_booking:
-            try:
-                # Build friendly time strings once
-                start_dt_local = timezone.localtime(slot_booking.start_time)
-                end_dt_local = timezone.localtime(slot_booking.end_time)
-                start_time_str = start_dt_local.strftime("%A, %d %B %Y at %I:%M %p")
-                end_time_str = end_dt_local.strftime("%I:%M %p")
-
-                shop_name = shop.name
-                service_title = slot_booking.service.title
-                customer_name = getattr(instance.user, "name", None) or getattr(instance.user, "email", "")
-
-                # ---- Email to shop owner
-                owner = getattr(slot_booking, "shop", None) and getattr(slot_booking.shop, "owner", None)
-                owner_email = getattr(owner, "email", None)
-                if owner_email:
-                    from_email = settings.DEFAULT_FROM_EMAIL
-                    subject = "New Appointment Booked"
-                    owner_message = (
-                        f"Hello {getattr(owner, 'name', '') or 'Shop Owner'},\n\n"
-                        f"A new appointment has been booked.\n\n"
-                        f"👤 Customer: {customer_name}\n"
-                        f"🏬 Shop: {shop_name}\n"
-                        f"💆 Service: {service_title}\n"
-                        f"🗓 Date & Time: {start_time_str} – {end_time_str}\n\n"
-                        f"Please prepare accordingly."
-                    )
-                    try:
-                        send_mail(subject, owner_message, from_email, [owner_email])
-                    except Exception as email_error:
-                        logger.error(
-                            "Failed to send email to shop owner %s: %s\n%s",
-                            getattr(owner, "id", "unknown"),
-                            str(email_error),
-                            traceback.format_exc()
-                        )
-
-                # ---- Push to shop owner
+            # ---- Owner email & push & SMS (only on first creation) ----
+            if created_booking and booking_obj:
                 try:
-                    if owner:
-                        notify_user(
-                            owner,
-                            message=(
-                                f"New appointment from {customer_name} for {service_title} "
-                                f"on {start_time_str}."
-                            ),
-                            notification_type="booking",
-                            data={
-                                "shop_id": shop.id,
-                                "booking_id": slot_booking.id,
-                                "service": service_title,
-                                "start_time": str(slot_booking.start_time),
-                                "end_time": str(slot_booking.end_time),
-                            },
-                            debug=True
+                    # Friendly time strings
+                    start_dt_local = timezone.localtime(slot_booking.start_time)
+                    end_dt_local = timezone.localtime(slot_booking.end_time)
+                    start_time_str = start_dt_local.strftime("%A, %d %B %Y at %I:%M %p")
+                    end_time_str = end_dt_local.strftime("%I:%M %p")
+
+                    shop_name = shop.name
+                    service_title = slot_booking.service.title
+                    customer_name = getattr(instance.user, "name", None) or getattr(instance.user, "email", "")
+
+                    # Email the shop owner (if present)
+                    owner = getattr(shop, "owner", None)
+                    owner_email = getattr(owner, "email", None)
+                    if owner_email:
+                        from_email = settings.DEFAULT_FROM_EMAIL
+                        subject = "New Appointment Booked"
+                        owner_message = (
+                            f"Hello {getattr(owner, 'name', '') or 'Shop Owner'},\n\n"
+                            f"A new appointment has been booked.\n\n"
+                            f"👤 Customer: {customer_name}\n"
+                            f"🏬 Shop: {shop_name}\n"
+                            f"💆 Service: {service_title}\n"
+                            f"🗓 Date & Time: {start_time_str} – {end_time_str}\n\n"
+                            f"Please prepare accordingly."
                         )
-                except Exception as notify_error:
-                    logger.error(
-                        "Failed to send push notification to shop owner %s: %s\n%s",
-                        getattr(owner, "id", "unknown"),
-                        str(notify_error),
-                        traceback.format_exc()
-                    )
+                        try:
+                            send_mail(subject, owner_message, from_email, [owner_email])
+                        except Exception:
+                            logger.exception("Failed to email shop owner %s", getattr(owner, "id", "unknown"))
 
-                # ---- SMS: Client confirmation
-                client_phone = get_user_phone(instance.user)
-                if client_phone:
-                    client_sms_body = (
-                        f"Fidden Booking Confirmed: {service_title} at {shop_name} on {start_time_str}. See you there!"
-                    )
+                    # Push to owner
                     try:
-                        send_sms(client_phone, client_sms_body)
-                    except Exception as sms_err:
-                        logger.warning("Cannot send booking confirmation SMS to client %s, phone=%s err=%s",
-                                    getattr(instance.user, "id", None), client_phone, sms_err, exc_info=True)
-                else:
-                    logger.warning("Cannot send booking confirmation SMS to client %s, no phone number.",
-                                getattr(instance.user, "id", None))
+                        if owner:
+                            notify_user(
+                                owner,
+                                message=f"New appointment from {customer_name} for {service_title} on {start_time_str}.",
+                                notification_type="booking",
+                                data={
+                                    "shop_id": shop.id,
+                                    "booking_id": slot_booking.id,
+                                    "service": service_title,
+                                    "start_time": str(slot_booking.start_time),
+                                    "end_time": str(slot_booking.end_time),
+                                },
+                                debug=True
+                            )
+                    except Exception:
+                        logger.exception("Failed to push to shop owner %s", getattr(owner, "id", "unknown"))
 
-                # ---- SMS: Owner notification
-                owner_phone = get_user_phone(owner) if owner else None
-                if owner_phone:
-                    owner_sms_body = f"Fidden New Booking: {customer_name} booked {service_title} for {start_time_str}."
-                    try:
-                        send_sms(owner_phone, owner_sms_body)
-                    except Exception as sms_err:
-                        logger.warning("Cannot send new booking SMS to owner %s, phone=%s err=%s",
-                                    getattr(owner, "id", None), owner_phone, sms_err, exc_info=True)
-                else:
-                    logger.warning("Cannot send new booking SMS to owner %s, no phone number.",
-                                getattr(owner, "id", None) if owner else "unknown")
+                    # SMS to client
+                    client_phone = get_user_phone(instance.user)
+                    if client_phone:
+                        try:
+                            send_sms(
+                                client_phone,
+                                f"Fidden Booking Confirmed: {service_title} at {shop_name} on {start_time_str}. See you there!"
+                            )
+                        except Exception:
+                            logger.exception("Cannot send booking confirmation SMS to client %s", getattr(instance.user, "id", None))
+                    else:
+                        logger.info("Client %s has no phone; skipping confirmation SMS.", getattr(instance.user, "id", None))
 
-            except Exception as e:
-                logger.error(
-                    "Post-booking notifications failed for Payment %s: %s\n%s",
-                    instance.id,
-                    str(e),
-                    traceback.format_exc()
-                )
-            # Create payment TransactionLog if not exists
+                    # SMS to owner
+                    owner_phone = get_user_phone(owner) if owner else None
+                    if owner_phone:
+                        try:
+                            send_sms(
+                                owner_phone,
+                                f"Fidden New Booking: {customer_name} booked {service_title} for {start_time_str}."
+                            )
+                        except Exception:
+                            logger.exception("Cannot send new booking SMS to owner %s", getattr(owner, "id", None))
+                    else:
+                        logger.info("Owner has no phone; skipping owner SMS.")
+
+                except Exception:
+                    logger.exception("Post-booking notifications failed for Payment %s", instance.id)
+
+            # Payment transaction log (idempotent)
             if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
                 TransactionLog.objects.get_or_create(
-                transaction_type="payment",
-                payment=instance,
-                defaults={
-                    "user": instance.user,
-                    "shop": instance.booking.shop,
-                    "slot": instance.booking,
-                    "service": instance.booking.service,
-                    "amount": instance.amount,
-                    "currency": instance.currency,
-                    "status": instance.status,
-                },
-            )
+                    transaction_type="payment",
+                    payment=instance,
+                    defaults={
+                        "user": instance.user,
+                        "shop": shop,
+                        "slot": slot_booking,
+                        "service": slot_booking.service,
+                        "amount": instance.amount,
+                        "currency": instance.currency,
+                        "status": instance.status,
+                    },
+                )
+
         # ---------------- Payment Refunded ----------------
         elif instance.status == "refunded":
             if hasattr(instance, "booking_record"):
@@ -546,13 +510,9 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     currency=instance.currency,
                     status=refund.status,
                 )
-    except Exception as e:
-        logger.error(
-            "Payment signal error for Payment %s: %s\n%s",
-            instance.id,
-            str(e),
-            traceback.format_exc()
-        )
+
+    except Exception:
+        logger.exception("Payment signal error for Payment %s", instance.id)
 
 # Refund post_save (optional: for direct Stripe refunds)
 @receiver(post_save, sender=Refund)
