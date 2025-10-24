@@ -6,6 +6,8 @@ from django.conf import settings
 from celery import shared_task
 from django.core.mail import send_mail
 from django.db.models import Count, Avg, Sum, F
+from api.utils.phones import get_user_phone
+from api.utils.sms import send_sms
 from payments.models import Booking
 from .models import AutoFillLog, Notification, PerformanceAnalytics, Revenue, Service, Slot, SlotBooking, Shop
 from api import models
@@ -15,7 +17,7 @@ from django.db import transaction
 from django.contrib.auth import get_user_model
 import time, uuid, json
 from django.utils.timezone import now as tz_now
-
+from api.utils.sms import send_sms
 
 logger = logging.getLogger(__name__)
 
@@ -424,9 +426,11 @@ def send_autofill_offers(slot_id, user_ids, channel):
     }
     logger.info("[autofill:%s] %s payload=%s", run_id, _dt(), _safe(data))
 
-    # 5) Push + Email
+    # 5) Push + Email + SMS
     sent_push = 0
     sent_email = 0
+    sent_sms = 0
+
     # ❶ Persist a Notification for every user (no delivery here)
     for u in users:
         try:
@@ -436,18 +440,18 @@ def send_autofill_offers(slot_id, user_ids, channel):
                 notification_type="autofill_offer",
                 data=data,
                 debug=False,
-                dry_run=True,          # <-- always True: persist only, no push delivery
+                dry_run=True,  # persist only
             )
         except Exception as e:
             logger.warning("[autofill:%s] %s notify_user failed user_id=%s err=%s",
-                        run_id, _dt(), getattr(u, "id", None), e, exc_info=True)
+                           run_id, _dt(), getattr(u, "id", None), e, exc_info=True)
 
     # ❷ Push (deliver only when channel includes push)
     if channel in ("push", "sms_push", "email_push"):
         logger.info("[autofill:%s] %s entering push branch channel=%s", run_id, _dt(), channel)
         for u in users:
             try:
-                send_push_notification(   # <-- deliver push without creating another DB row
+                send_push_notification(
                     user=u,
                     title=subject,
                     message=message_body,
@@ -458,15 +462,41 @@ def send_autofill_offers(slot_id, user_ids, channel):
                 sent_push += 1
             except Exception as e:
                 logger.warning("[autofill:%s] %s push failed user_id=%s err=%s",
-                            run_id, _dt(), getattr(u, "id", None), e, exc_info=True)
+                               run_id, _dt(), getattr(u, "id", None), e, exc_info=True)
 
-    # ❸ Email (unchanged)
-    if channel in ("email", "email_push"):
+        # ❸ SMS (deliver only when channel includes sms)
+    if channel in ("sms", "sms_push", "email_sms", "all"):
+            logger.info("[autofill:%s] %s entering sms branch channel=%s", run_id, _dt(), channel)
+            for u in users:
+                phone = get_user_phone(u)  # central helper
+                if not phone:
+                    logger.debug(
+                        "[autofill:%s] %s user_id=%s has no phone number",
+                        run_id, _dt(), getattr(u, "id", None)
+                    )
+                    continue
+
+                sms_body = (
+                    f"Fidden: Slot available! {slot.service.title} at {slot.shop.name} "
+                    f"{human_time}. Book now: {shortlink}"
+                )
+                try:
+                    if send_sms(phone, sms_body):
+                        sent_sms += 1
+                except Exception as e:
+                    logger.warning(
+                        "[autofill:%s] %s SMS failed user_id=%s phone=%s err=%s",
+                        run_id, _dt(), getattr(u, "id", None), phone, e, exc_info=True
+                    )
+
+
+    # ❹ Email
+    if channel in ("email", "email_push", "email_sms", "all"):
         logger.info("[autofill:%s] %s entering email branch channel=%s", run_id, _dt(), channel)
         for u in users:
             email = getattr(u, "email", None)
             logger.debug("[autofill:%s] %s email candidate user_id=%s email=%s",
-                        run_id, _dt(), getattr(u, "id", None), _redact(email))
+                         run_id, _dt(), getattr(u, "id", None), _redact(email))
             if not email:
                 continue
             try:
@@ -479,15 +509,15 @@ def send_autofill_offers(slot_id, user_ids, channel):
                 )
                 sent_email += 1
                 logger.debug("[autofill:%s] %s email sent user_id=%s email=%s",
-                            run_id, _dt(), getattr(u, "id", None), _redact(email))
+                             run_id, _dt(), getattr(u, "id", None), _redact(email))
             except Exception as e:
                 logger.warning("[autofill:%s] %s email failed user_id=%s email=%s err=%s",
-                            run_id, _dt(), getattr(u, "id", None), _redact(email), e, exc_info=True)
+                               run_id, _dt(), getattr(u, "id", None), _redact(email), e, exc_info=True)
 
-        elapsed = _dt()
-        logger.info("[autofill:%s] done elapsed=%s push_sent=%d email_sent=%d slot_id=%s",
-                    run_id, elapsed, sent_push, sent_email, slot.id)
-    return f"push={sent_push}, email={sent_email}, recipients={len(users)}, channel={channel}"
+    elapsed = _dt()
+    logger.info("[autofill:%s] done elapsed=%s push_sent=%d sms_sent=%d email_sent=%d slot_id=%s",
+                run_id, elapsed, sent_push, sent_sms, sent_email, slot.id)
+    return f"push={sent_push}, sms={sent_sms}, email={sent_email}, recipients={len(users)}, channel={channel}"
 
 @shared_task(name="api.tasks.test_notification_persistence")
 def test_notification_persistence(user_id: int, msg: str = "persistence probe"):
@@ -657,6 +687,13 @@ def send_upcoming_slot_reminders(self, window_minutes=30):
                 "start_time": b.slot.start_time.isoformat(),
                 # you can add a deeplink here, too
             }
+
+            client_phone = getattr(user, 'phone_number', None)
+            if client_phone:
+                sms_body = f"Fidden Reminder: Your {service.title} booking at {shop.name} is at {start_local.strftime('%I:%M %p')} today."
+                send_sms(client_phone, sms_body)
+            else:
+                 logger.warning(f"[Reminder] Cannot send SMS reminder to user {user.id}, no phone number.")
 
             # Email (optional)
             email = getattr(user, "email", None)

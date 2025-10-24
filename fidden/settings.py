@@ -262,3 +262,8 @@ CACHES = {
         "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
     }
 }
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")  # fallback if no messaging service
+TWILIO_ENABLE = os.getenv("TWILIO_ENABLE", True)

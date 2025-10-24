@@ -17,6 +17,9 @@ import logging
 import traceback
 from django.apps import apps as django_apps
 
+from api.utils.phones import get_user_phone
+from api.utils.sms import send_sms
+
 logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -277,6 +280,7 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
         except Exception as e:
             print(f"Stripe customer deletion failed for user {instance.email}: {e}")
 
+# payments/models.py
 # Payment post_save: handle succeeded and refunded
 @receiver(post_save, sender=Payment)
 def handle_payment_status(sender, instance, created, **kwargs):
@@ -406,62 +410,105 @@ def handle_payment_status(sender, instance, created, **kwargs):
                 slot_booking.save(update_fields=["payment_status"])
 
 
-            if created_booking:
-                try:
-                    start_time = timezone.localtime(slot_booking.start_time).strftime("%A, %d %B %Y at %I:%M %p")
-                    end_time = timezone.localtime(slot_booking.end_time).strftime("%I:%M %p")
-                    shop_name = shop.name
-                    service_title = slot_booking.service.title
-                    customer_name = instance.user.name or instance.user.email
+        if created_booking:
+            try:
+                # Build friendly time strings once
+                start_dt_local = timezone.localtime(slot_booking.start_time)
+                end_dt_local = timezone.localtime(slot_booking.end_time)
+                start_time_str = start_dt_local.strftime("%A, %d %B %Y at %I:%M %p")
+                end_time_str = end_dt_local.strftime("%I:%M %p")
 
+                shop_name = shop.name
+                service_title = slot_booking.service.title
+                customer_name = getattr(instance.user, "name", None) or getattr(instance.user, "email", "")
+
+                # ---- Email to shop owner
+                owner = getattr(slot_booking, "shop", None) and getattr(slot_booking.shop, "owner", None)
+                owner_email = getattr(owner, "email", None)
+                if owner_email:
                     from_email = settings.DEFAULT_FROM_EMAIL
-                    to_email = [slot_booking.shop.owner.email]
                     subject = "New Appointment Booked"
-
                     owner_message = (
-                        f"Hello {slot_booking.shop.owner.name or 'Shop Owner'},\n\n"
+                        f"Hello {getattr(owner, 'name', '') or 'Shop Owner'},\n\n"
                         f"A new appointment has been booked.\n\n"
                         f"👤 Customer: {customer_name}\n"
                         f"🏬 Shop: {shop_name}\n"
                         f"💆 Service: {service_title}\n"
-                        f"🗓 Date & Time: {start_time} – {end_time}\n\n"
+                        f"🗓 Date & Time: {start_time_str} – {end_time_str}\n\n"
                         f"Please prepare accordingly."
                     )
+                    try:
+                        send_mail(subject, owner_message, from_email, [owner_email])
+                    except Exception as email_error:
+                        logger.error(
+                            "Failed to send email to shop owner %s: %s\n%s",
+                            getattr(owner, "id", "unknown"),
+                            str(email_error),
+                            traceback.format_exc()
+                        )
 
-                    send_mail(subject, owner_message, from_email, to_email)
-                except Exception as email_error:
-                    logger.error(
-                        "Failed to send email to shop owner %s: %s\n%s",
-                        shop.owner.id if shop.owner else "unknown",
-                        str(email_error),
-                        traceback.format_exc()
-                    )
-
+                # ---- Push to shop owner
                 try:
-                    #  Push notification to shop owner
-                    notify_user(
-                        shop.owner,
-                        message=(
-                            f"New appointment from {customer_name} for {service_title} "
-                            f"on {start_time}."
-                        ),
-                        notification_type="booking",
-                        data={
-                            "shop_id": shop.id,
-                            "booking_id": slot_booking.id,
-                            "service": service_title,
-                            "start_time": str(slot_booking.start_time),
-                            "end_time": str(slot_booking.end_time),
-                        },
-                        debug=True
-                    )
+                    if owner:
+                        notify_user(
+                            owner,
+                            message=(
+                                f"New appointment from {customer_name} for {service_title} "
+                                f"on {start_time_str}."
+                            ),
+                            notification_type="booking",
+                            data={
+                                "shop_id": shop.id,
+                                "booking_id": slot_booking.id,
+                                "service": service_title,
+                                "start_time": str(slot_booking.start_time),
+                                "end_time": str(slot_booking.end_time),
+                            },
+                            debug=True
+                        )
                 except Exception as notify_error:
                     logger.error(
                         "Failed to send push notification to shop owner %s: %s\n%s",
-                        shop.owner.id if shop.owner else "unknown",
+                        getattr(owner, "id", "unknown"),
                         str(notify_error),
                         traceback.format_exc()
                     )
+
+                # ---- SMS: Client confirmation
+                client_phone = get_user_phone(instance.user)
+                if client_phone:
+                    client_sms_body = (
+                        f"Fidden Booking Confirmed: {service_title} at {shop_name} on {start_time_str}. See you there!"
+                    )
+                    try:
+                        send_sms(client_phone, client_sms_body)
+                    except Exception as sms_err:
+                        logger.warning("Cannot send booking confirmation SMS to client %s, phone=%s err=%s",
+                                    getattr(instance.user, "id", None), client_phone, sms_err, exc_info=True)
+                else:
+                    logger.warning("Cannot send booking confirmation SMS to client %s, no phone number.",
+                                getattr(instance.user, "id", None))
+
+                # ---- SMS: Owner notification
+                owner_phone = get_user_phone(owner) if owner else None
+                if owner_phone:
+                    owner_sms_body = f"Fidden New Booking: {customer_name} booked {service_title} for {start_time_str}."
+                    try:
+                        send_sms(owner_phone, owner_sms_body)
+                    except Exception as sms_err:
+                        logger.warning("Cannot send new booking SMS to owner %s, phone=%s err=%s",
+                                    getattr(owner, "id", None), owner_phone, sms_err, exc_info=True)
+                else:
+                    logger.warning("Cannot send new booking SMS to owner %s, no phone number.",
+                                getattr(owner, "id", None) if owner else "unknown")
+
+            except Exception as e:
+                logger.error(
+                    "Post-booking notifications failed for Payment %s: %s\n%s",
+                    instance.id,
+                    str(e),
+                    traceback.format_exc()
+                )
             # Create payment TransactionLog if not exists
             if not TransactionLog.objects.filter(payment=instance, transaction_type="payment").exists():
                 TransactionLog.objects.get_or_create(
