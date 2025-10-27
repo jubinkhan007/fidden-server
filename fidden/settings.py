@@ -267,3 +267,5 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")  # fallback if no messaging service
 TWILIO_ENABLE = os.getenv("TWILIO_ENABLE", True)
+
+ZAPIER_KLAVIYO_WEBHOOK = os.getenv("ZAPIER_KLAVIYO_WEBHOOK", "")

@@ -9,6 +9,7 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 import stripe
+from api.utils.zapier import send_klaviyo_event
 import logging
 from decimal import Decimal
 import json
@@ -20,6 +21,7 @@ from api.models import Shop, Coupon
 from api.serializers import SlotBookingSerializer, CouponSerializer
 from accounts.models import User
 from api.utils.slots import assert_slot_bookable
+from api.utils.zapier import send_klaviyo_event
 from .models import Payment, UserStripeCustomer, Booking, TransactionLog, CouponUsage, can_use_coupon
 from subscriptions.models import SubscriptionPlan, ShopSubscription
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
@@ -47,101 +49,283 @@ STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
 def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
     """
     Persist the plan + correct period window from Stripe.
+    Tolerates 'latest_invoice' being already expanded, and missing/None period timestamps.
     """
+
+    # Make sure we have expanded data we rely on.
+    # Also try to expand latest_invoice.lines.period because we use that to infer start/end.
     if not (sub_obj.get("items") or {}).get("data"):
-        sub_obj = stripe.Subscription.retrieve(sub_obj["id"], expand=["items.data.price"])
+        sub_obj = stripe.Subscription.retrieve(
+            sub_obj["id"],
+            expand=["items.data.price", "latest_invoice.lines.data.period"],
+        )
 
     items = (sub_obj.get("items") or {}).get("data") or []
     if not items:
         logger.error("Subscription %s has no items; cannot map plan", sub_obj.get("id"))
         return
+
     price_id = (items[0].get("price") or {}).get("id")
     ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+
+    # ─────────────────────────────────────────
+    # 1. AI add-on branch (unchanged logic, but safer logging)
+    # ─────────────────────────────────────────
     if price_id == ai_price_id:
         meta = sub_obj.get("metadata") or {}
         shop_id = meta.get("shop_id")
         if shop_id:
             try:
                 shop = Shop.objects.get(id=int(shop_id))
-                if hasattr(shop, "subscription"):
-                    ss = shop.subscription
-                    ss.has_ai_addon = True
-                    ss.ai_subscription_id = sub_obj.get("id")
-                    logger.info("Saved AI sub ids: sub=%s item=%s for shop %s",
-            ss.ai_subscription_id, ss.ai_subscription_item_id, shop_hint.id)
-                    # find AI item id
-                    items = (sub_obj.get("items") or {}).get("data") or []
-                    ai_item = next((it for it in items if (it.get("price") or {}).get("id") == ai_price_id), None)
-                    ss.ai_subscription_item_id = (ai_item or {}).get("id")
-                    ss.save(update_fields=["has_ai_addon","ai_subscription_id","ai_subscription_item_id"])
-                    logger.info(" AI add-on activated for shop %s", shop_id)
             except Shop.DoesNotExist:
                 logger.warning("⚠️ Shop not found for AI add-on metadata: %s", shop_id)
-        return  #  stop here — no need to map to a plan
+                return
 
+            if hasattr(shop, "subscription"):
+                ss = shop.subscription
+                ss.has_ai_addon = True
+                ss.ai_subscription_id = sub_obj.get("id")
+
+                # find AI item id
+                ai_item = next(
+                    (
+                        it
+                        for it in items
+                        if (it.get("price") or {}).get("id") == ai_price_id
+                    ),
+                    None,
+                )
+                ss.ai_subscription_item_id = (ai_item or {}).get("id")
+
+                ss.save(
+                    update_fields=[
+                        "has_ai_addon",
+                        "ai_subscription_id",
+                        "ai_subscription_item_id",
+                    ]
+                )
+                logger.info(
+                    " AI add-on activated for shop %s (sub %s)",
+                    shop_id,
+                    sub_obj.get("id"),
+                )
+        return  # stop here — AI add-on does not map to base plan
+
+    # ─────────────────────────────────────────
+    # 2. Resolve the base plan
+    # ─────────────────────────────────────────
     try:
         plan = SubscriptionPlan.objects.get(stripe_price_id=price_id)
     except SubscriptionPlan.DoesNotExist:
         logger.error("No SubscriptionPlan with stripe_price_id=%s", price_id)
         return
 
+    # ─────────────────────────────────────────
+    # 3. Resolve which shop this subscription belongs to
+    # ─────────────────────────────────────────
     shop = shop_hint
-    # ... (the rest of your 'Resolve the shop' logic can stay as is) ...
+
     if not shop:
         meta = sub_obj.get("metadata") or {}
         sid = meta.get("shop_id")
         if sid:
-            try: shop = Shop.objects.get(id=int(sid))
-            except Exception: pass
+            try:
+                shop = Shop.objects.get(id=int(sid))
+            except Exception:
+                shop = None
+
     if not shop:
-        ss = ShopSubscription.objects.filter(stripe_subscription_id=sub_obj["id"]).select_related("shop").first()
-        if ss: shop = ss.shop
+        ss = (
+            ShopSubscription.objects
+            .filter(stripe_subscription_id=sub_obj["id"])
+            .select_related("shop")
+            .first()
+        )
+        if ss:
+            shop = ss.shop
+
     if not shop:
         cust_id = sub_obj.get("customer")
         if cust_id:
-            usc = UserStripeCustomer.objects.filter(stripe_customer_id=cust_id).select_related("user").first()
-            if usc: shop = Shop.objects.filter(owner=usc.user).order_by("id").first()
+            usc = (
+                UserStripeCustomer.objects
+                .filter(stripe_customer_id=cust_id)
+                .select_related("user")
+                .first()
+            )
+            if usc:
+                shop = Shop.objects.filter(owner=usc.user).order_by("id").first()
+
     if not shop:
-        logger.error("Could not resolve shop for subscription %s", sub_obj.get("id"))
+        logger.error(
+            "Could not resolve shop for subscription %s",
+            sub_obj.get("id"),
+        )
         return
 
+    # ─────────────────────────────────────────
+    # 4. Resolve billing period start / end safely
+    # ─────────────────────────────────────────
     ps_ts = sub_obj.get("current_period_start")
     pe_ts = sub_obj.get("current_period_end")
-    
-    #  FINAL FIX: If timestamps are identical or missing, get them from the invoice's LINE ITEM period.
-    if (not ps_ts or not pe_ts or ps_ts == pe_ts) and sub_obj.get("latest_invoice"):
-        try:
-            inv = stripe.Invoice.retrieve(sub_obj["latest_invoice"], expand=["lines.data.period"])
-            invoice_lines = (inv.get("lines") or {}).get("data") or []
-            if invoice_lines:
-                ps_ts = invoice_lines[0]["period"]["start"]
-                pe_ts = invoice_lines[0]["period"]["end"]
-        except Exception as e:
-            logger.error("Could not retrieve period from invoice lines: %s", str(e))
 
+    needs_invoice_fallback = (
+        not ps_ts or not pe_ts or ps_ts == pe_ts
+    )
+
+    if needs_invoice_fallback and sub_obj.get("latest_invoice"):
+        invoice_obj = None
+        invoice_id = None
+        latest_invoice = sub_obj.get("latest_invoice")
+
+        # Case A: Stripe already expanded latest_invoice into a dict
+        if isinstance(latest_invoice, dict):
+            invoice_obj = latest_invoice
+            invoice_id = latest_invoice.get("id")
+
+        # Case B: latest_invoice is just an ID string, we have to retrieve/expand
+        elif isinstance(latest_invoice, str):
+            invoice_id = latest_invoice
+            try:
+                invoice_obj = stripe.Invoice.retrieve(
+                    invoice_id,
+                    expand=["lines.data.period"],
+                )
+            except Exception as e:
+                logger.exception(
+                    "Could not retrieve invoice %s for sub %s: %s",
+                    invoice_id,
+                    sub_obj.get("id"),
+                    e,
+                )
+                invoice_obj = None
+
+        # Extract period info from invoice lines if we got anything
+        if invoice_obj:
+            try:
+                line_items = (
+                    (invoice_obj.get("lines") or {}).get("data") or []
+                )
+            except AttributeError:
+                line_items = []
+
+            if line_items:
+                period_block = line_items[0].get("period") or {}
+                # only fill them if still missing / bogus
+                ps_ts = ps_ts or period_block.get("start")
+                pe_ts = pe_ts or period_block.get("end")
+
+    # Last resort: if Stripe STILL didn't give us dates, synthesize 1-month window.
+    # This prevents a crash in datetime.fromtimestamp(None)
+    if not ps_ts or not pe_ts:
+        now_utc = timezone.now()
+        # store as epoch seconds
+        ps_ts = ps_ts or int(now_utc.timestamp())
+        pe_ts = pe_ts or int(
+            (now_utc + relativedelta(months=1)).timestamp()
+        )
+
+    # ─────────────────────────────────────────
+    # 5. Convert timestamps to aware datetimes
+    # ─────────────────────────────────────────
+    import datetime as _dt_mod
+
+    start_dt = _dt_mod.datetime.fromtimestamp(
+        ps_ts, tz=_dt_mod.timezone.utc
+    )
+    end_dt = _dt_mod.datetime.fromtimestamp(
+        pe_ts, tz=_dt_mod.timezone.utc
+    )
+
+    # Safety: if identical, bump end by one month
+    if start_dt == end_dt:
+        logger.warning(
+            "Dates identical for sub %s. Forcing +1 month.",
+            sub_obj.get("id"),
+        )
+        end_dt = start_dt + relativedelta(months=1)
+
+    # ─────────────────────────────────────────
+    # 6. Upsert ShopSubscription
+    # ─────────────────────────────────────────
     obj, created = ShopSubscription.objects.get_or_create(
         shop=shop,
         defaults={"plan": plan, "status": ShopSubscription.STATUS_ACTIVE},
     )
-
-    start_dt = datetime.datetime.fromtimestamp(ps_ts, tz=datetime.timezone.utc)
-    end_dt = datetime.datetime.fromtimestamp(pe_ts, tz=datetime.timezone.utc)
-
-    # Sanity check: If dates are still identical after all fallbacks, add one month.
-    if start_dt == end_dt:
-        logger.warning("Dates still identical for sub %s. Manually adding 1 month.", sub_obj.get("id"))
-        end_dt = start_dt + relativedelta(months=1)
 
     obj.plan = plan
     obj.status = ShopSubscription.STATUS_ACTIVE
     obj.stripe_subscription_id = sub_obj.get("id")
     obj.start_date = start_dt
     obj.end_date = end_dt
-    obj.save(update_fields=["plan", "status", "stripe_subscription_id", "start_date", "end_date"])
+    obj.save(
+        update_fields=[
+            "plan",
+            "status",
+            "stripe_subscription_id",
+            "start_date",
+            "end_date",
+        ]
+    )
 
-    logger.info(" Shop %s set to plan %s via subscription %s (%s → %s)",
-                shop.id, plan.name, sub_obj.get("id"),
-                obj.start_date.isoformat(), obj.end_date.isoformat())
+    try:
+        owner = shop.owner  # shop.owner is the account paying
+        email = getattr(owner, "email", None)
+
+        if email:
+            profile_payload = {
+                "plan": plan.name if plan else None,
+                "plan_status": obj.status,  # active / trialing / etc.
+                "ai_addon": bool(getattr(obj, "has_ai_addon", False)),
+                "legacy_500": bool(getattr(obj, "legacy_ai_promo_used", False)),
+                "next_billing_date": obj.end_date.isoformat() if obj.end_date else None,
+                "trial_end": obj.end_date.isoformat() if obj.status == "trialing" else None,
+                "stripe_customer_id": (
+                    getattr(
+                        getattr(owner, "stripe_customer", None),
+                        "stripe_customer_id",
+                        None,
+                    )
+                ),
+                "stripe_subscription_id": sub_obj.get("id"),
+                "price_id": price_id,
+                "shop_id": shop.id,
+            }
+
+            # figure out event name
+            if created:
+                ev_name = "Subscription Purchased"
+            else:
+                ev_name = "Subscription Updated"
+
+            event_props = {
+                "shop_id": shop.id,
+                "plan_name": plan.name if plan else None,
+                "status": obj.status,
+                "period_start": obj.start_date.isoformat() if obj.start_date else None,
+                "period_end": obj.end_date.isoformat() if obj.end_date else None,
+                "application_fee_percent": getattr(plan, "commission_rate", None),
+            }
+
+            send_klaviyo_event(
+                email=email,
+                event_name=ev_name,
+                profile=profile_payload,
+                event_props=event_props,
+            )
+
+    except Exception as e:
+        logger.error("[klaviyo] sub sync failed for shop %s: %s", shop.id, e, exc_info=True)
+
+    logger.info(
+        " Shop %s set to plan %s via subscription %s (%s → %s)",
+        shop.id,
+        plan.name,
+        sub_obj.get("id"),
+        obj.start_date.isoformat(),
+        obj.end_date.isoformat(),
+    )
+
 
 
 
@@ -472,8 +656,13 @@ class StripeWebhookView(APIView):
         logger.info("Signature present: %s", bool(sig_header))
         logger.info("=" * 80)
 
+        # 1. Verify Stripe signature
         try:
-            event = stripe.Webhook.construct_event(payload, sig_header, settings.STRIPE_ENDPOINT_SECRET)
+            event = stripe.Webhook.construct_event(
+                payload,
+                sig_header,
+                settings.STRIPE_ENDPOINT_SECRET
+            )
             logger.info(" Webhook signature verified")
         except ValueError as e:
             logger.error("❌ Invalid payload: %s", str(e))
@@ -485,9 +674,16 @@ class StripeWebhookView(APIView):
         event_type = event["type"]
         data = event["data"]["object"]
 
-        logger.info("📨 Event: %s (livemode=%s, id=%s)", event_type, bool(event.get("livemode")), event.get("id"))
+        logger.info(
+            "📨 Event: %s (livemode=%s, id=%s)",
+            event_type,
+            bool(event.get("livemode")),
+            event.get("id")
+        )
 
-        # --- payments (keep your existing handlers) ---
+        # ------------------------------------------------------------------
+        # Payment-related events
+        # ------------------------------------------------------------------
         if event_type == "payment_intent.succeeded":
             self._update_payment_status(data, "succeeded")
             return Response(status=200)
@@ -504,16 +700,21 @@ class StripeWebhookView(APIView):
             self._update_payment_status(data, "failed")
             return Response(status=200)
 
-        # --- Connect transfers (optional) ---
+        # ------------------------------------------------------------------
+        # Transfer events (Connect payouts etc.)
+        # ------------------------------------------------------------------
         if event_type.startswith("transfer."):
             logger.info("Transfer event: %s %s", event_type, data.get("id"))
             return Response(status=200)
 
-        # --- Checkout completion → create/attach subscription ---
+        # ------------------------------------------------------------------
+        # checkout.session.completed
+        # - customer just purchased a plan or add-on through Checkout
+        # ------------------------------------------------------------------
         if event_type == "checkout.session.completed":
             session = data
             shop_ref = session.get("client_reference_id")
-            sub_id   = session.get("subscription")
+            sub_id = session.get("subscription")
 
             shop_hint = None
             if shop_ref:
@@ -524,88 +725,195 @@ class StripeWebhookView(APIView):
                     logger.warning("[checkout] bad client_reference_id: %r", shop_ref)
 
             if sub_id:
-                sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price", "latest_invoice.payment_intent"])
+                sub = stripe.Subscription.retrieve(
+                    sub_id,
+                    expand=["items.data.price", "latest_invoice.payment_intent"]
+                )
                 sub_meta = sub.get("metadata") or {}
 
-                # Ensure the subscription has shop_id for future handlers
+                # ensure subscription.metadata.shop_id is set in Stripe for future webhooks
                 if shop_hint:
                     try:
                         if str(sub_meta.get("shop_id")) != str(shop_hint.id):
-                            stripe.Subscription.modify(sub["id"],
+                            stripe.Subscription.modify(
+                                sub["id"],
                                 metadata={**sub_meta, "shop_id": str(shop_hint.id)}
                             )
                     except Exception:
-                        logger.exception("Failed to set subscription metadata.shop_id")
+                        logger.exception(
+                            "Failed to set subscription metadata.shop_id"
+                        )
 
-                price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
+                price_ids = [
+                    it["price"]["id"]
+                    for it in (sub.get("items", {}).get("data") or [])
+                ]
                 ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
-                is_ai_addon = (sub_meta.get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids)
+                is_ai_addon = (
+                    sub_meta.get("addon") == "ai_assistant"
+                    or (ai_price_id and ai_price_id in price_ids)
+                )
 
                 if is_ai_addon:
+                    # Mark AI add-on active and legacy promo if applicable
                     if shop_hint and hasattr(shop_hint, "subscription"):
                         ss = shop_hint.subscription
                         ss.has_ai_addon = True
-                        # persist the separate AI subscription & item ids
                         ss.ai_subscription_id = sub["id"]
-                        ai_item = next((it for it in sub["items"]["data"] if it["price"]["id"] == ai_price_id), None)
-                        ss.ai_subscription_item_id = ai_item["id"] if ai_item else None
 
-                        # detect legacy promo by inspecting invoice discounts (more reliable than Session total_details)
+                        ai_item = next(
+                            (
+                                it
+                                for it in (sub.get("items", {}).get("data") or [])
+                                if (it.get("price") or {}).get("id") == ai_price_id
+                            ),
+                            None,
+                        )
+                        ss.ai_subscription_item_id = (
+                            ai_item.get("id") if ai_item else None
+                        )
+
+                        # Check invoice discounts for legacy promo
                         try:
                             inv = sub.get("latest_invoice")
                             if isinstance(inv, str):
-                                inv = stripe.Invoice.retrieve(inv, expand=["discounts", "discounts.discount.coupon"])
+                                inv = stripe.Invoice.retrieve(
+                                    inv,
+                                    expand=[
+                                        "discounts",
+                                        "discounts.discount.coupon",
+                                    ],
+                                )
                             discounts = inv.get("discounts", []) if inv else []
-                            if any(d.get("discount", {}).get("coupon", {}).get("id") == settings.STRIPE_LEGACY_COUPON_ID
-                                for d in discounts):
+                            if any(
+                                d.get("discount", {})
+                                .get("coupon", {})
+                                .get("id")
+                                == settings.STRIPE_LEGACY_COUPON_ID
+                                for d in discounts
+                            ):
                                 ss.legacy_ai_promo_used = True
-                                logger.info("✅ LEGACY promo applied for shop %s", shop_hint.id)
+                                logger.info(
+                                    "✅ LEGACY promo applied for shop %s",
+                                    shop_hint.id,
+                                )
                         except Exception:
                             logger.exception("Promo detection failed")
 
-                        ss.save(update_fields=["has_ai_addon","ai_subscription_id","ai_subscription_item_id","legacy_ai_promo_used"])
-                        logger.info("✅ AI Assistant add-on enabled for shop %s", shop_hint.id)
+                        ss.save(
+                            update_fields=[
+                                "has_ai_addon",
+                                "ai_subscription_id",
+                                "ai_subscription_item_id",
+                                "legacy_ai_promo_used",
+                            ]
+                        )
+                        logger.info(
+                            "✅ AI Assistant add-on enabled for shop %s",
+                            shop_hint.id,
+                        )
                     return Response(status=200)
 
-                # base plan flow
+                # base plan purchase / upgrade
                 _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
+
             return Response(status=200)
 
-
-        # --- subscription lifecycle ---
-        if event_type in ("customer.subscription.created", "customer.subscription.updated"):
+        # ------------------------------------------------------------------
+        # customer.subscription.created / updated
+        # - Subscription lifecycle events from Stripe
+        # ------------------------------------------------------------------
+        if event_type in (
+            "customer.subscription.created",
+            "customer.subscription.updated",
+        ):
             sub = data
             ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
-            price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
-            is_ai_addon = (sub.get("metadata", {}).get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids)
+            price_ids = [
+                it["price"]["id"]
+                for it in (sub.get("items", {}).get("data") or [])
+            ]
+            is_ai_addon = (
+                sub.get("metadata", {}).get("addon") == "ai_assistant"
+                or (ai_price_id and ai_price_id in price_ids)
+            )
+
             if is_ai_addon:
                 shop = None
                 sid = (sub.get("metadata") or {}).get("shop_id")
                 if sid:
-                    try: shop = Shop.objects.get(id=int(sid))
-                    except Exception: pass
+                    try:
+                        shop = Shop.objects.get(id=int(sid))
+                    except Exception:
+                        shop = None
+                if not shop:
+                    ss = (
+                        ShopSubscription.objects.filter(
+                            stripe_subscription_id=sub["id"]
+                        )
+                        .select_related("shop")
+                        .first()
+                    )
+                    if ss:
+                        shop = ss.shop
+
                 if shop and hasattr(shop, "subscription"):
                     ss = shop.subscription
                     ss.has_ai_addon = True
                     ss.ai_subscription_id = sub["id"]
-                    ai_item = next((it for it in sub["items"]["data"] if it["price"]["id"] == ai_price_id), None)
-                    ss.ai_subscription_item_id = ai_item["id"] if ai_item else None
-                    ss.save(update_fields=["has_ai_addon","ai_subscription_id","ai_subscription_item_id"])
+
+                    ai_item = next(
+                        (
+                            it
+                            for it in (sub.get("items", {}).get("data") or [])
+                            if (it.get("price") or {}).get("id") == ai_price_id
+                        ),
+                        None,
+                    )
+                    ss.ai_subscription_item_id = (
+                        ai_item.get("id") if ai_item else None
+                    )
+                    ss.save(
+                        update_fields=[
+                            "has_ai_addon",
+                            "ai_subscription_id",
+                            "ai_subscription_item_id",
+                        ]
+                    )
                 return Response(status=200)
 
+            # non-AI plan changes
+            _update_shop_from_subscription_obj(sub)
+            return Response(status=200)
 
-
-        if event_type in ("invoice.payment_succeeded", "invoice.paid", "invoice_payment.paid"):
+        # ------------------------------------------------------------------
+        # invoice.* (paid / succeeded etc.)
+        # - Recurring billing events
+        # ------------------------------------------------------------------
+        if event_type in (
+            "invoice.payment_succeeded",
+            "invoice.paid",
+            "invoice_payment.paid",
+        ):
             sub_id = data.get("subscription")
             if sub_id:
                 try:
-                    sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
-                    ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
-                    price_ids = [it["price"]["id"] for it in (sub.get("items", {}).get("data") or [])]
+                    sub = stripe.Subscription.retrieve(
+                        sub_id, expand=["items.data.price"]
+                    )
 
-                    #  Short-circuit AI add-on invoices
-                    if (sub.get("metadata", {}).get("addon") == "ai_assistant") or (ai_price_id and ai_price_id in price_ids):
-                        # resolve shop and set has_ai_addon
+                    ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+                    price_ids = [
+                        it["price"]["id"]
+                        for it in (sub.get("items", {}).get("data") or [])
+                    ]
+
+                    # AI add-on renewal
+                    if (
+                        sub.get("metadata", {}).get("addon")
+                        == "ai_assistant"
+                    ) or (ai_price_id and ai_price_id in price_ids):
+                        # mark add-on active
                         shop = None
                         meta = sub.get("metadata") or {}
                         sid = meta.get("shop_id")
@@ -613,41 +921,125 @@ class StripeWebhookView(APIView):
                             try:
                                 shop = Shop.objects.get(id=int(sid))
                             except Exception:
-                                pass
+                                shop = None
                         if not shop:
-                            ss = ShopSubscription.objects.filter(stripe_subscription_id=sub["id"]).select_related("shop").first()
-                            if ss: shop = ss.shop
+                            ss = (
+                                ShopSubscription.objects.filter(
+                                    stripe_subscription_id=sub["id"]
+                                )
+                                .select_related("shop")
+                                .first()
+                            )
+                            if ss:
+                                shop = ss.shop
                         if shop and hasattr(shop, "subscription"):
                             shop.subscription.has_ai_addon = True
-                            shop.subscription.save(update_fields=["has_ai_addon"])
-                            logger.info(" (invoice.*) AI add-on active for shop %s", shop.id)
+                            shop.subscription.save(
+                                update_fields=["has_ai_addon"]
+                            )
+                            logger.info(
+                                "(invoice.*) AI add-on active for shop %s",
+                                shop.id,
+                            )
                         return Response(status=200)
 
-                    # Otherwise it’s a base plan invoice
+                    # normal plan invoice paid
                     _update_shop_from_subscription_obj(sub)
                 except Exception as e:
-                    logger.exception("invoice handler failed for %s: %s", sub_id, e)
+                    logger.exception(
+                        "invoice handler failed for %s: %s", sub_id, e
+                    )
             return Response(status=200)
 
-
-        # --- subscription cancelled ---
+        # ------------------------------------------------------------------
+        # customer.subscription.deleted
+        # - Merchant cancelled or subscription ended
+        # ------------------------------------------------------------------
         if event_type == "customer.subscription.deleted":
-            stripe_sub = data
+            stripe_sub = data  # <-- local var for this event
+
             try:
-                shop_sub = ShopSubscription.objects.get(stripe_subscription_id=stripe_sub['id'])
-                foundation = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                # 1. Downgrade their plan in our DB
+                shop_sub = ShopSubscription.objects.get(
+                    stripe_subscription_id=stripe_sub["id"]
+                )
+            except ShopSubscription.DoesNotExist:
+                # nothing to downgrade, but we still want to attempt Klaviyo
+                shop_sub = None
+
+            if shop_sub:
+                try:
+                    foundation = SubscriptionPlan.objects.get(
+                        name=SubscriptionPlan.FOUNDATION
+                    )
+                except SubscriptionPlan.DoesNotExist:
+                    foundation = None  # fallback if somehow missing
+
+                # Keep them "active" on Foundation basically forever
                 shop_sub.plan = foundation
                 shop_sub.status = ShopSubscription.STATUS_ACTIVE
                 shop_sub.stripe_subscription_id = None
                 shop_sub.end_date = timezone.now() + relativedelta(years=100)
                 shop_sub.save()
-            except ShopSubscription.DoesNotExist:
-                pass
+
+                # 2. Sync to Klaviyo (cancellation event + profile update)
+                owner = shop_sub.shop.owner
+                email = getattr(owner, "email", None)
+
+                if email:
+                    profile_payload = {
+                        "plan": (
+                            shop_sub.plan.name if shop_sub.plan else None
+                        ),
+                        "plan_status": "canceled",
+                        "ai_addon": bool(
+                            getattr(shop_sub, "has_ai_addon", False)
+                        ),
+                        "legacy_500": bool(
+                            getattr(shop_sub, "legacy_ai_promo_used", False)
+                        ),
+                        "next_billing_date": None,
+                        "trial_end": None,
+                        "stripe_customer_id": getattr(
+                            getattr(owner, "stripe_customer", None),
+                            "stripe_customer_id",
+                            None,
+                        ),
+                        "stripe_subscription_id": stripe_sub.get("id"),
+                        "price_id": None,
+                        "shop_id": shop_sub.shop.id,
+                    }
+
+                    event_props = {
+                        "shop_id": shop_sub.shop.id,
+                        "reason": "user_cancelled",
+                    }
+
+                    try:
+                        send_klaviyo_event(
+                            email=email,
+                            event_name="Subscription Canceled",
+                            profile=profile_payload,
+                            event_props=event_props,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "[klaviyo] cancel sync failed: %s",
+                            e,
+                            exc_info=True,
+                        )
+
             return Response(status=200)
 
+        # ------------------------------------------------------------------
+        # Fallback
+        # ------------------------------------------------------------------
         logger.warning("⚠️ Unhandled event: %s", event_type)
         return Response(status=200)
 
+    # ---------------------------------
+    # helper on the view (unchanged)
+    # ---------------------------------
     def _update_payment_status(self, stripe_obj, new_status):
         intent_id = stripe_obj.get("id")
         object_type = stripe_obj.get("object")
@@ -658,24 +1050,48 @@ class StripeWebhookView(APIView):
         logger.info("   - New status: %s", new_status)
 
         if object_type == "charge":
+            # charges don't directly have our Payment row,
+            # so map back to the payment_intent
             intent_id = stripe_obj.get("payment_intent")
-            logger.info("   - Resolved payment_intent from charge: %s", intent_id)
+            logger.info(
+                "   - Resolved payment_intent from charge: %s", intent_id
+            )
 
         try:
-            payment = Payment.objects.get(stripe_payment_intent_id=intent_id)
+            payment = Payment.objects.get(
+                stripe_payment_intent_id=intent_id
+            )
             old_status = payment.status
             payment.status = new_status
             payment.save(update_fields=["status"])
-            logger.info(" Payment #%s updated: %s → %s (intent: %s)",
-                       payment.id, old_status, new_status, intent_id)
-            logger.info("   - Booking ID: %s", payment.booking.id if hasattr(payment, 'booking') else 'N/A')
+
+            logger.info(
+                " Payment #%s updated: %s → %s (intent: %s)",
+                payment.id,
+                old_status,
+                new_status,
+                intent_id,
+            )
+            logger.info(
+                "   - Booking ID: %s",
+                payment.booking.id if hasattr(payment, "booking") else "N/A",
+            )
             logger.info("   - User: %s", payment.user.email)
             logger.info("   - Amount: %s", payment.amount)
+
         except Payment.DoesNotExist:
-            logger.error("❌ Payment NOT FOUND for intent: %s", intent_id)
+            logger.error(
+                "❌ Payment NOT FOUND for intent: %s", intent_id
+            )
             logger.error("   - Checking all payments in DB...")
-            all_intents = Payment.objects.values_list('stripe_payment_intent_id', flat=True)
-            logger.error("   - Existing payment intents: %s", list(all_intents)[:10])
+            all_intents = list(
+                Payment.objects.values_list(
+                    "stripe_payment_intent_id", flat=True
+                )[:10]
+            )
+            logger.error(
+                "   - Existing payment intents: %s", all_intents
+            )
 
 class VerifyShopOnboardingView(APIView):
     permission_classes = [IsAuthenticated]
