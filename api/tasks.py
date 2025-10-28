@@ -8,6 +8,7 @@ from django.core.mail import send_mail
 from django.db.models import Count, Avg, Sum, F
 from api.utils.phones import get_user_phone
 from api.utils.sms import send_sms
+from api.utils.zapier import send_klaviyo_event
 from payments.models import Booking
 from .models import AutoFillLog, Notification, PerformanceAnalytics, Revenue, Service, Slot, SlotBooking, Shop
 from api import models
@@ -138,6 +139,40 @@ def generate_weekly_ai_reports():
             data={"title": report_title},
         )
         notify_user(shop.owner, message=report_title, notification_type="ai_report", data={"summary": push_summary})
+
+        
+        try:
+            owner = shop.owner
+            email = getattr(owner, "email", None)
+
+            if email:
+                profile_payload = {
+                    "plan": getattr(getattr(shop, "subscription", None).plan, "name", None) if hasattr(shop, "subscription") else None,
+                    "plan_status": getattr(getattr(shop, "subscription", None), "status", None) if hasattr(shop, "subscription") else None,
+                    "ai_addon": bool(getattr(getattr(shop, "subscription", None), "has_ai_addon", False)),
+                    "legacy_500": bool(getattr(getattr(shop, "subscription", None), "legacy_ai_promo_used", False)),
+                    "shop_id": shop.id,
+                }
+
+                event_props = {
+                    "shop_id": shop.id,
+                    "total_appointments": total_appointments,
+                    "total_revenue": float(total_revenue),
+                    "no_shows_filled": no_shows_filled,
+                    "top_service": top_service_name,
+                    "top_service_count": top_service_count,
+                    "next_week_open_slots": next_week_open_slots,
+                }
+
+                send_klaviyo_event(
+                    email=email,
+                    event_name="Weekly Recap Ready",
+                    profile=profile_payload,
+                    event_props=event_props,
+                )
+        except Exception as e:
+            logger.error("[klaviyo] weekly recap sync failed: %s", e, exc_info=True)
+
         # inside generate_weekly_ai_reports(), right before send_mail(...)
         recipient = (shop.owner.email or "").strip()
         if not recipient:

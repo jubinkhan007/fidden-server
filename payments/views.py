@@ -21,7 +21,6 @@ from api.models import Shop, Coupon
 from api.serializers import SlotBookingSerializer, CouponSerializer
 from accounts.models import User
 from api.utils.slots import assert_slot_bookable
-from api.utils.zapier import send_klaviyo_event
 from .models import Payment, UserStripeCustomer, Booking, TransactionLog, CouponUsage, can_use_coupon
 from subscriptions.models import SubscriptionPlan, ShopSubscription
 from .serializers import userBookingSerializer, ownerBookingSerializer, TransactionLogSerializer, ApplyCouponSerializer
@@ -45,7 +44,7 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
 
-
+# paymetns/views.py
 def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
     """
     Persist the plan + correct period window from Stripe.
@@ -643,6 +642,7 @@ class SaveCardView(APIView):
 
         return Response({"client_secret": setup_intent.client_secret}, status=200)
 
+# payments/views.py
 @method_decorator(csrf_exempt, name="dispatch")
 class StripeWebhookView(APIView):
     authentication_classes = []
@@ -799,6 +799,40 @@ class StripeWebhookView(APIView):
                                 )
                         except Exception:
                             logger.exception("Promo detection failed")
+                        
+                        try:
+                            owner = shop_hint.owner  # or ss.shop.owner if you have `shop_hint`
+                            email = getattr(owner, "email", None)
+
+                            if email:
+                                profile_payload = {
+                                    "plan": getattr(ss.plan, "name", None),
+                                    "plan_status": ss.status,
+                                    "ai_addon": True,
+                                    "legacy_500": bool(ss.legacy_ai_promo_used),
+                                    "stripe_customer_id": getattr(
+                                        getattr(owner, "stripe_customer", None),
+                                        "stripe_customer_id",
+                                        None,
+                                    ),
+                                    "stripe_subscription_id": ss.ai_subscription_id or ss.stripe_subscription_id,
+                                    "price_id": None,  # optional
+                                    "shop_id": ss.shop.id,
+                                }
+
+                                event_props = {
+                                    "shop_id": ss.shop.id,
+                                    "legacy_500": bool(ss.legacy_ai_promo_used),
+                                }
+
+                                send_klaviyo_event(
+                                    email=email,
+                                    event_name="AI Addon Started",
+                                    profile=profile_payload,
+                                    event_props=event_props,
+                                )
+                        except Exception as e:
+                            logger.error("[klaviyo] AI addon start sync failed: %s", e, exc_info=True)
 
                         ss.save(
                             update_fields=[
@@ -1050,48 +1084,85 @@ class StripeWebhookView(APIView):
         logger.info("   - New status: %s", new_status)
 
         if object_type == "charge":
-            # charges don't directly have our Payment row,
-            # so map back to the payment_intent
             intent_id = stripe_obj.get("payment_intent")
-            logger.info(
-                "   - Resolved payment_intent from charge: %s", intent_id
-            )
+            logger.info("   - Resolved payment_intent from charge: %s", intent_id)
 
+        payment = None
         try:
-            payment = Payment.objects.get(
-                stripe_payment_intent_id=intent_id
-            )
+            payment = Payment.objects.get(stripe_payment_intent_id=intent_id)
             old_status = payment.status
             payment.status = new_status
             payment.save(update_fields=["status"])
 
             logger.info(
                 " Payment #%s updated: %s → %s (intent: %s)",
-                payment.id,
-                old_status,
-                new_status,
-                intent_id,
+                payment.id, old_status, new_status, intent_id
             )
             logger.info(
                 "   - Booking ID: %s",
-                payment.booking.id if hasattr(payment, "booking") else "N/A",
+                getattr(getattr(payment, "booking", None), "id", "N/A"),
             )
             logger.info("   - User: %s", payment.user.email)
             logger.info("   - Amount: %s", payment.amount)
 
         except Payment.DoesNotExist:
-            logger.error(
-                "❌ Payment NOT FOUND for intent: %s", intent_id
-            )
+            logger.error("❌ Payment NOT FOUND for intent: %s", intent_id)
             logger.error("   - Checking all payments in DB...")
             all_intents = list(
                 Payment.objects.values_list(
                     "stripe_payment_intent_id", flat=True
                 )[:10]
             )
-            logger.error(
-                "   - Existing payment intents: %s", all_intents
-            )
+            logger.error("   - Existing payment intents: %s", all_intents)
+
+        # ⬇️ Only attempt Klaviyo if we actually got a Payment row
+        if not payment:
+            return
+
+        try:
+            user = payment.user
+            email = getattr(user, "email", None)
+
+            booking = getattr(payment, "booking", None)
+            shop = getattr(booking, "shop", None)
+
+            sub_obj = getattr(shop, "subscription", None)
+            plan_obj = getattr(sub_obj, "plan", None)
+            plan_name = getattr(plan_obj, "name", None)
+
+            if email:
+                profile_payload = {
+                    "plan": plan_name,
+                    "plan_status": getattr(sub_obj, "status", None),
+                    "ai_addon": bool(getattr(sub_obj, "has_ai_addon", False)),
+                    "legacy_500": bool(getattr(sub_obj, "legacy_ai_promo_used", False)),
+                    "stripe_customer_id": getattr(
+                        getattr(user, "stripe_customer", None),
+                        "stripe_customer_id",
+                        None,
+                    ),
+                    "shop_id": getattr(shop, "id", None),
+                }
+
+                event_props = {
+                    "booking_id": getattr(booking, "id", None),
+                    "amount": str(payment.amount),
+                    "currency": "usd",
+                    "status": new_status,
+                    "is_deposit": payment.is_deposit,
+                    "remaining_amount": str(payment.remaining_amount),
+                }
+
+                send_klaviyo_event(
+                    email=email,
+                    event_name="Payment Succeeded" if new_status == "succeeded" else "Payment Failed",
+                    profile=profile_payload,
+                    event_props=event_props,
+                )
+        except Exception as e:
+            logger.error("[klaviyo] payment sync failed: %s", e, exc_info=True)
+
+
 
 class VerifyShopOnboardingView(APIView):
     permission_classes = [IsAuthenticated]
