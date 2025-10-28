@@ -267,40 +267,29 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
         ]
     )
 
+    # Build normalized profile for Klaviyo/Zapier
     try:
-        owner = shop.owner  # shop.owner is the account paying
+        owner = shop.owner  # paying account
         email = getattr(owner, "email", None)
 
         if email:
-            profile_payload = {
-                "plan": plan.name if plan else None,
-                "plan_status": obj.status,  # active / trialing / etc.
-                "ai_addon": bool(getattr(obj, "has_ai_addon", False)),
-                "legacy_500": bool(getattr(obj, "legacy_ai_promo_used", False)),
-                "next_billing_date": obj.end_date.isoformat() if obj.end_date else None,
-                "trial_end": obj.end_date.isoformat() if obj.status == "trialing" else None,
-                "stripe_customer_id": (
-                    getattr(
-                        getattr(owner, "stripe_customer", None),
-                        "stripe_customer_id",
-                        None,
-                    )
-                ),
-                "stripe_subscription_id": sub_obj.get("id"),
-                "price_id": price_id,
-                "shop_id": shop.id,
-            }
+            profile_payload = build_profile_payload_for_shop(
+                shop=shop,
+                shop_sub=obj,
+                stripe_subscription_id=sub_obj.get("id"),
+                price_id=price_id,
+                cancel_at_period_end=bool(sub_obj.get("cancel_at_period_end")),
+                is_canceled=False,
+                is_at_risk=False,
+            )
 
-            # figure out event name
-            if created:
-                ev_name = "Subscription Purchased"
-            else:
-                ev_name = "Subscription Updated"
+            # figure out event name ("Subscription Purchased" vs "Subscription Updated")
+            ev_name = "Subscription Purchased" if created else "Subscription Updated"
 
             event_props = {
                 "shop_id": shop.id,
-                "plan_name": plan.name if plan else None,
-                "status": obj.status,
+                "plan_name": profile_payload["plan"],
+                "status": profile_payload["plan_status"],
                 "period_start": obj.start_date.isoformat() if obj.start_date else None,
                 "period_end": obj.end_date.isoformat() if obj.end_date else None,
                 "application_fee_percent": getattr(plan, "commission_rate", None),
@@ -642,6 +631,100 @@ class SaveCardView(APIView):
 
         return Response({"client_secret": setup_intent.client_secret}, status=200)
 
+
+# --- helpers for Klaviyo profile + status normalization ---
+
+def normalize_plan_status(
+    *,
+    sub_status: str | None,
+    cancel_at_period_end: bool = False,
+    is_canceled: bool = False,
+    is_at_risk: bool = False,
+) -> str:
+    """
+    Force plan_status to one of:
+    'active' | 'trialing' | 'scheduled_cancel' | 'canceled' | 'at_risk'
+    """
+    if is_at_risk:
+        return "at_risk"
+    if is_canceled:
+        return "canceled"
+    if cancel_at_period_end:
+        return "scheduled_cancel"
+
+    # default mapping from our ShopSubscription.status / Stripe status
+    s = (sub_status or "").lower()
+    # common values we might see internally:
+    #   "active", "trialing", "canceled", "inactive", etc.
+    if "trial" in s:
+        return "trialing"
+    if "active" in s:
+        return "active"
+
+    # fallback
+    return "active"
+
+
+def build_profile_payload_for_shop(
+    *,
+    shop,
+    shop_sub,
+    stripe_subscription_id: str | None,
+    price_id: str | None,
+    cancel_at_period_end: bool = False,
+    is_canceled: bool = False,
+    is_at_risk: bool = False,
+) -> dict:
+    """
+    Central place to shape the profile dict we send to Zapier/Klaviyo.
+    This enforces the normalized plan_status contract.
+    """
+
+    owner = getattr(shop, "owner", None)
+    stripe_customer_id = getattr(
+        getattr(owner, "stripe_customer", None),
+        "stripe_customer_id",
+        None,
+    )
+
+    # end_date in ShopSubscription = next billing date / period end
+    next_billing_iso = (
+        shop_sub.end_date.isoformat()
+        if getattr(shop_sub, "end_date", None)
+        else None
+    )
+
+    # if "trialing", spec wants trial_end also
+    trial_end = (
+        shop_sub.end_date.isoformat()
+        if normalize_plan_status(
+            sub_status=getattr(shop_sub, "status", None),
+            cancel_at_period_end=cancel_at_period_end,
+            is_canceled=is_canceled,
+            is_at_risk=is_at_risk,
+        )
+        == "trialing"
+        else None
+    )
+
+    return {
+        "plan": getattr(getattr(shop_sub, "plan", None), "name", None),
+        "plan_status": normalize_plan_status(
+            sub_status=getattr(shop_sub, "status", None),
+            cancel_at_period_end=cancel_at_period_end,
+            is_canceled=is_canceled,
+            is_at_risk=is_at_risk,
+        ),
+        "ai_addon": bool(getattr(shop_sub, "has_ai_addon", False)),
+        "legacy_500": bool(getattr(shop_sub, "legacy_ai_promo_used", False)),
+        "next_billing_date": next_billing_iso,
+        "trial_end": trial_end,
+        "stripe_customer_id": stripe_customer_id,
+        "stripe_subscription_id": stripe_subscription_id,
+        "price_id": price_id,
+        "shop_id": getattr(shop, "id", None),
+    }
+
 # payments/views.py
 @method_decorator(csrf_exempt, name="dispatch")
 class StripeWebhookView(APIView):
@@ -732,6 +815,7 @@ class StripeWebhookView(APIView):
                 sub_meta = sub.get("metadata") or {}
 
                 # ensure subscription.metadata.shop_id is set in Stripe for future webhooks
+                # make sure Stripe sub.metadata.shop_id is set
                 if shop_hint:
                     try:
                         if str(sub_meta.get("shop_id")) != str(shop_hint.id):
@@ -740,9 +824,7 @@ class StripeWebhookView(APIView):
                                 metadata={**sub_meta, "shop_id": str(shop_hint.id)}
                             )
                     except Exception:
-                        logger.exception(
-                            "Failed to set subscription metadata.shop_id"
-                        )
+                        logger.exception("Failed to set subscription metadata.shop_id")
 
                 price_ids = [
                     it["price"]["id"]
@@ -805,20 +887,18 @@ class StripeWebhookView(APIView):
                             email = getattr(owner, "email", None)
 
                             if email:
-                                profile_payload = {
-                                    "plan": getattr(ss.plan, "name", None),
-                                    "plan_status": ss.status,
-                                    "ai_addon": True,
-                                    "legacy_500": bool(ss.legacy_ai_promo_used),
-                                    "stripe_customer_id": getattr(
-                                        getattr(owner, "stripe_customer", None),
-                                        "stripe_customer_id",
-                                        None,
-                                    ),
-                                    "stripe_subscription_id": ss.ai_subscription_id or ss.stripe_subscription_id,
-                                    "price_id": None,  # optional
-                                    "shop_id": ss.shop.id,
-                                }
+                                profile_payload = build_profile_payload_for_shop(
+                                    shop=ss.shop,
+                                    shop_sub=ss,
+                                    stripe_subscription_id=ss.ai_subscription_id or ss.stripe_subscription_id,
+                                    price_id=None,
+                                    cancel_at_period_end=False,
+                                    is_canceled=False,
+                                    is_at_risk=False,
+                                )
+                                # Force ai_addon / legacy_500 to reflect the new state (in case builder didn't yet see it)
+                                profile_payload["ai_addon"] = True
+                                profile_payload["legacy_500"] = bool(ss.legacy_ai_promo_used)
 
                                 event_props = {
                                     "shop_id": ss.shop.id,
@@ -847,9 +927,10 @@ class StripeWebhookView(APIView):
                             shop_hint.id,
                         )
                     return Response(status=200)
-
-                # base plan purchase / upgrade
-                _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
+                
+                # non-AI plan changes
+                _update_shop_from_subscription_obj(sub)
+                return Response(status=200)
 
             return Response(status=200)
 
@@ -990,80 +1071,124 @@ class StripeWebhookView(APIView):
         # - Merchant cancelled or subscription ended
         # ------------------------------------------------------------------
         if event_type == "customer.subscription.deleted":
-            stripe_sub = data  # <-- local var for this event
+            stripe_sub = data  # Stripe subscription object that ended
 
+            ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+            price_ids = [
+                it.get("price", {}).get("id")
+                for it in (stripe_sub.get("items", {}).get("data") or [])
+            ]
+            is_ai_addon = (
+                (stripe_sub.get("metadata", {}) or {}).get("addon") == "ai_assistant"
+                or (ai_price_id and ai_price_id in price_ids)
+            )
+
+            # Try to locate the ShopSubscription row for this subscription
+            shop_sub = (
+                ShopSubscription.objects
+                .filter(stripe_subscription_id=stripe_sub.get("id"))
+                .select_related("shop", "plan")
+                .first()
+            )
+
+            if is_ai_addon:
+                # AI add-on was cancelled
+                if shop_sub:
+                    ss = shop_sub
+                else:
+                    # fallback: try to infer shop via metadata.shop_id
+                    ss = None
+                    sid = (stripe_sub.get("metadata") or {}).get("shop_id")
+                    if sid:
+                        try:
+                            shop = Shop.objects.get(id=int(sid))
+                            ss = getattr(shop, "subscription", None)
+                        except Exception:
+                            ss = None
+
+                if ss:
+                    # turn off AI flags
+                    ss.has_ai_addon = False
+                    ss.ai_subscription_id = None
+                    ss.ai_subscription_item_id = None
+                    ss.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
+
+                    # send Klaviyo "AI Addon Canceled"
+                    owner = ss.shop.owner
+                    email = getattr(owner, "email", None)
+                    if email:
+                        profile_payload = build_profile_payload_for_shop(
+                            shop=ss.shop,
+                            shop_sub=ss,
+                            stripe_subscription_id=getattr(ss, "stripe_subscription_id", None),
+                            price_id=getattr(getattr(ss, "plan", None), "stripe_price_id", None)
+                                if hasattr(ss, "plan") else None,
+                            cancel_at_period_end=False,
+                            is_canceled=False,   # base plan might still be active
+                            is_at_risk=False,
+                        )
+
+                        event_props = {
+                            "shop_id": ss.shop.id,
+                            "reason": "ai_addon_cancelled",
+                        }
+
+                        send_klaviyo_event(
+                            email=email,
+                            event_name="AI Addon Canceled",
+                            profile=profile_payload,
+                            event_props=event_props,
+                        )
+
+                return Response(status=200)
+
+            # ELSE: base subscription canceled → fall back to your existing downgrade logic
             try:
-                # 1. Downgrade their plan in our DB
-                shop_sub = ShopSubscription.objects.get(
-                    stripe_subscription_id=stripe_sub["id"]
-                )
-            except ShopSubscription.DoesNotExist:
-                # nothing to downgrade, but we still want to attempt Klaviyo
-                shop_sub = None
-
-            if shop_sub:
-                try:
-                    foundation = SubscriptionPlan.objects.get(
-                        name=SubscriptionPlan.FOUNDATION
-                    )
-                except SubscriptionPlan.DoesNotExist:
-                    foundation = None  # fallback if somehow missing
-
-                # Keep them "active" on Foundation basically forever
-                shop_sub.plan = foundation
-                shop_sub.status = ShopSubscription.STATUS_ACTIVE
-                shop_sub.stripe_subscription_id = None
-                shop_sub.end_date = timezone.now() + relativedelta(years=100)
-                shop_sub.save()
-
-                # 2. Sync to Klaviyo (cancellation event + profile update)
-                owner = shop_sub.shop.owner
-                email = getattr(owner, "email", None)
-
-                if email:
-                    profile_payload = {
-                        "plan": (
-                            shop_sub.plan.name if shop_sub.plan else None
-                        ),
-                        "plan_status": "canceled",
-                        "ai_addon": bool(
-                            getattr(shop_sub, "has_ai_addon", False)
-                        ),
-                        "legacy_500": bool(
-                            getattr(shop_sub, "legacy_ai_promo_used", False)
-                        ),
-                        "next_billing_date": None,
-                        "trial_end": None,
-                        "stripe_customer_id": getattr(
-                            getattr(owner, "stripe_customer", None),
-                            "stripe_customer_id",
-                            None,
-                        ),
-                        "stripe_subscription_id": stripe_sub.get("id"),
-                        "price_id": None,
-                        "shop_id": shop_sub.shop.id,
-                    }
-
-                    event_props = {
-                        "shop_id": shop_sub.shop.id,
-                        "reason": "user_cancelled",
-                    }
-
+                if shop_sub:
+                    # move them to Foundation "forever"
                     try:
+                        foundation = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                    except SubscriptionPlan.DoesNotExist:
+                        foundation = None
+
+                    shop_sub.plan = foundation
+                    shop_sub.status = ShopSubscription.STATUS_ACTIVE  # stays usable in app
+                    shop_sub.stripe_subscription_id = None
+                    shop_sub.end_date = timezone.now() + relativedelta(years=100)
+                    shop_sub.save()
+
+                    owner = shop_sub.shop.owner
+                    email = getattr(owner, "email", None)
+
+                    if email:
+                        # build profile with plan_status="canceled"
+                        profile_payload = build_profile_payload_for_shop(
+                            shop=shop_sub.shop,
+                            shop_sub=shop_sub,
+                            stripe_subscription_id=stripe_sub.get("id"),
+                            price_id=None,
+                            cancel_at_period_end=False,
+                            is_canceled=True,
+                            is_at_risk=False,
+                        )
+
+                        event_props = {
+                            "shop_id": shop_sub.shop.id,
+                            "reason": "user_cancelled",
+                        }
+
                         send_klaviyo_event(
                             email=email,
                             event_name="Subscription Canceled",
                             profile=profile_payload,
                             event_props=event_props,
                         )
-                    except Exception as e:
-                        logger.error(
-                            "[klaviyo] cancel sync failed: %s",
-                            e,
-                            exc_info=True,
-                        )
+
+            except Exception as e:
+                logger.error("[klaviyo] cancel sync failed: %s", e, exc_info=True)
 
             return Response(status=200)
+
 
         # ------------------------------------------------------------------
         # Fallback
@@ -1123,29 +1248,26 @@ class StripeWebhookView(APIView):
             user = payment.user
             email = getattr(user, "email", None)
 
-            booking = getattr(payment, "booking", None)
-            shop = getattr(booking, "shop", None)
+            shop = getattr(payment.booking, "shop", None) if hasattr(payment, "booking") else None
+            shop_sub = getattr(shop, "subscription", None) if shop else None
 
-            sub_obj = getattr(shop, "subscription", None)
-            plan_obj = getattr(sub_obj, "plan", None)
-            plan_name = getattr(plan_obj, "name", None)
+            # Figure out if this is billing-risk
+            at_risk = (new_status == "failed")
 
-            if email:
-                profile_payload = {
-                    "plan": plan_name,
-                    "plan_status": getattr(sub_obj, "status", None),
-                    "ai_addon": bool(getattr(sub_obj, "has_ai_addon", False)),
-                    "legacy_500": bool(getattr(sub_obj, "legacy_ai_promo_used", False)),
-                    "stripe_customer_id": getattr(
-                        getattr(user, "stripe_customer", None),
-                        "stripe_customer_id",
-                        None,
-                    ),
-                    "shop_id": getattr(shop, "id", None),
-                }
+            if email and shop and shop_sub:
+                profile_payload = build_profile_payload_for_shop(
+                    shop=shop,
+                    shop_sub=shop_sub,
+                    stripe_subscription_id=getattr(shop_sub, "stripe_subscription_id", None),
+                    price_id=getattr(getattr(shop_sub, "plan", None), "stripe_price_id", None)
+                        if hasattr(shop_sub, "plan") else None,
+                    cancel_at_period_end=False,  # we don't know here; it's fine
+                    is_canceled=False,
+                    is_at_risk=at_risk,
+                )
 
                 event_props = {
-                    "booking_id": getattr(booking, "id", None),
+                    "booking_id": getattr(payment.booking, "id", None),
                     "amount": str(payment.amount),
                     "currency": "usd",
                     "status": new_status,

@@ -4,14 +4,20 @@ import logging
 import requests
 from django.conf import settings
 from django.utils import timezone
+from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
 ZAPIER_WEBHOOK_URL = getattr(
     settings,
     "ZAPIER_KLAVIYO_WEBHOOK",
-    None,  # set this in prod env
+    None,
 )
+
+def _json_default(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return str(obj)
 
 def send_klaviyo_event(
     *,
@@ -20,13 +26,6 @@ def send_klaviyo_event(
     profile: dict,
     event_props: dict | None = None,
 ):
-    """
-    Fire-and-forget POST to Zapier, which will:
-    1. upsert Klaviyo profile w/ `profile`
-    2. attach `event_name` + `event_props` as a Klaviyo event
-
-    This should NEVER raise in prod paths.
-    """
     if not ZAPIER_WEBHOOK_URL:
         logger.warning("[klaviyo] ZAPIER_KLAVIYO_WEBHOOK not configured; skipping")
         return False
@@ -43,7 +42,7 @@ def send_klaviyo_event(
         resp = requests.post(
             ZAPIER_WEBHOOK_URL,
             headers={"Content-Type": "application/json"},
-            data=json.dumps(payload),
+            data=json.dumps(payload, default=_json_default),
             timeout=3,
         )
         logger.info(
