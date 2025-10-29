@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     AIReportView,
+    LatestWeeklySummaryView,
     PerformanceAnalyticsView,
     ShopListCreateView,
     ShopRetrieveUpdateDestroyView,
@@ -76,4 +77,6 @@ urlpatterns = [
     path('ai-settings/', AIAutoFillSettingsView.as_view(), name='ai-settings'),
     path('slots/<int:slot_id>/hold/', HoldSlotAndBookView.as_view(), name='hold-slot'),
     path('ai-report/', AIReportView.as_view(), name='ai-report'),
+    # api/urls.py
+    path("weekly-summary/latest/", LatestWeeklySummaryView.as_view(),name="weekly-summary-latest"),
 ]

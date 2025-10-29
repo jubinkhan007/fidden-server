@@ -28,7 +28,8 @@ from .models import (
     Device,
     Notification,
     Revenue,
-    Coupon
+    Coupon,
+    WeeklySummary
 )
 from payments.models import Booking
 from .serializers import (
@@ -55,6 +56,7 @@ from .serializers import (
     SuggestionSerializer,
     CouponSerializer,
     UserCouponRetrieveSerializer,
+    WeeklySummarySerializer,
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 from datetime import datetime, timedelta
@@ -1550,3 +1552,42 @@ class AIReportView(APIView):
         shop.ai_partner_name = partner_name
         shop.save(update_fields=["ai_partner_name"])
         return Response({"success": True, "partner_name": partner_name}, status=status.HTTP_200_OK)
+    
+# api/views.py
+
+class LatestWeeklySummaryView(APIView):
+    """
+    GET /weekly-summary/latest/
+    Returns the most recent WeeklySummary for the logged-in provider.
+    Used by the Flutter 'Weekly Recap' screen.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # Assumption: 1 owner ↔ 1 shop. If you support multiple shops per owner,
+        # filter by ?shop_id=... instead.
+        shop = Shop.objects.filter(owner=user).first()
+        if not shop:
+            return Response(
+                {"detail": "No shop found for this user."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        summary = (
+            WeeklySummary.objects
+            .filter(shop=shop)
+            .order_by("-week_end_date", "-created_at")
+            .first()
+        )
+
+        if not summary:
+            return Response(
+                {"detail": "No weekly summary available yet."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        data = WeeklySummarySerializer(summary).data
+        return Response(data, status=status.HTTP_200_OK)

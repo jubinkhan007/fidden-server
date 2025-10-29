@@ -1,4 +1,5 @@
 # api/tasks.py
+from decimal import Decimal
 import logging
 from datetime import datetime, timedelta
 from django.utils import timezone
@@ -9,8 +10,8 @@ from django.db.models import Count, Avg, Sum, F
 from api.utils.phones import get_user_phone
 from api.utils.sms import send_sms
 from api.utils.zapier import send_klaviyo_event
-from payments.models import Booking
-from .models import AutoFillLog, Notification, PerformanceAnalytics, Revenue, Service, Slot, SlotBooking, Shop
+from payments.models import Booking, TransactionLog
+from .models import AutoFillLog, Notification, PerformanceAnalytics, Revenue, Service, Slot, SlotBooking, Shop, WeeklySummary
 from api import models
 from .utils.fcm import notify_user, send_push_notification
 from subscriptions.models import SubscriptionPlan
@@ -33,171 +34,365 @@ from django.db.models import Q
 from subscriptions.models import SubscriptionPlan, ShopSubscription
 
 # in api/tasks.py
-@shared_task(name="api.tasks.generate_weekly_ai_reports")
-def generate_weekly_ai_reports():
+@shared_task(name="api.tasks.generate_weekly_ai_reports", bind=True, max_retries=2, default_retry_delay=60)
+def generate_weekly_ai_reports(self):
     logger.info("Starting weekly AI report generation...")
-    end_date = timezone.now()
-    start_date = end_date - timedelta(days=7)
 
-    eligible_shops = (
-        Shop.objects.filter(
-            Q(subscription__has_ai_addon=True) |
-            Q(subscription__plan__ai_assistant=SubscriptionPlan.AI_INCLUDED),
-            subscription__status=ShopSubscription.STATUS_ACTIVE,
-            subscription__end_date__gt=timezone.now(),
-        )
-        .distinct()
-        .select_related("subscription", "subscription__plan", "owner")
-    )
+    end_dt = timezone.now()
+    start_dt = end_dt - timedelta(days=7)
 
+    prev_start = start_dt - timedelta(days=7)
+    prev_end = start_dt
+
+    eligible_shops = Shop.objects.select_related("owner").all()
     if not eligible_shops.exists():
         logger.info("No shops eligible for AI reports this week.")
-        return
+        return "No shops"
 
     for shop in eligible_shops.iterator():
-        # Base set: bookings PAID this week, not cancelled
+        owner = shop.owner
+        if not owner:
+            continue
+
+        #
+        # 1. BOOKINGS THIS WEEK
+        #
         paid_this_week = (
             Booking.objects
             .filter(
                 shop=shop,
-                created_at__range=(start_date, end_date),
-                payment__status='succeeded',
+                status="completed",
+                created_at__gte=start_dt,
+                created_at__lte=end_dt,
             )
-            .exclude(status='cancelled')
+            .select_related("slot", "slot__service")  # slot is SlotBooking, slot.service is Service
         )
 
         total_appointments = paid_this_week.count()
-        total_revenue = paid_this_week.aggregate(total=Sum('payment__amount'))['total'] or 0
 
-        # No-shows filled: only count logs whose filled booking exists & was created this week
+        #
+        # 2. REVENUE THIS WEEK (sum TransactionLog.payment-type rows for this shop in window)
+        #
+        total_revenue = (
+            TransactionLog.objects
+            .filter(
+                shop=shop,
+                transaction_type="payment",
+                created_at__gte=start_dt,
+                created_at__lte=end_dt,
+            )
+            .aggregate(s=Sum("amount"))["s"]
+            or Decimal("0.00")
+        )
+
+        #
+        # 3. PREVIOUS WEEK REVENUE (for growth_rate)
+        #
+        prev_revenue = (
+            TransactionLog.objects
+            .filter(
+                shop=shop,
+                transaction_type="payment",
+                created_at__gte=prev_start,
+                created_at__lte=prev_end,
+            )
+            .aggregate(s=Sum("amount"))["s"]
+            or Decimal("0.00")
+        )
+
+        if prev_revenue > 0:
+            growth_rate = float(((total_revenue - prev_revenue) / prev_revenue) * 100)
+        else:
+            growth_rate = 0.0
+
+        #
+        # 4. REBOOKING RATE
+        #    % of unique clients from last 7 days who ALSO booked (completed) >=2 times in last 30 days
+        #
+        last_30 = end_dt - timedelta(days=30)
+
+        clients_this_week = paid_this_week.values_list("user_id", flat=True).distinct()
+
+        rebooked_clients = (
+            Booking.objects
+            .filter(
+                shop=shop,
+                status="completed",
+                user_id__in=clients_this_week,
+                created_at__gte=last_30,
+                created_at__lte=end_dt,
+            )
+            .values("user_id")
+            .annotate(c=Count("id"))
+            .filter(c__gte=2)
+            .count()
+        )
+
+        unique_clients = len(set(clients_this_week))
+        rebooking_rate = (rebooked_clients / unique_clients * 100.0) if unique_clients else 0.0
+
+        #
+        # 5. NO-SHOW RECOVERY
+        #
         no_shows_filled = (
             AutoFillLog.objects
             .filter(
                 shop=shop,
-                status='completed',
+                status="completed",
+                created_at__gte=start_dt,
+                created_at__lte=end_dt,
                 filled_by_booking__isnull=False,
-                filled_by_booking__created_at__range=(start_date, end_date),
             )
-            .values('filled_by_booking_id')
+            .values("filled_by_booking_id")
             .distinct()
             .count()
         )
 
-        # Top service among paid bookings this week
-        top_service_name = None
+        #
+        # 6. TOP SERVICE
+        #
+        top_service_name = ""
         top_service_count = 0
-        top_service_data = (
-            paid_this_week.values('slot__service_id')
-            .annotate(count=Count('id'))
-            .order_by('-count')
+        top_service_row = (
+            paid_this_week
+            .values("slot__service_id", "slot__service__title")
+            .annotate(cnt=Count("id"))
+            .order_by("-cnt")
             .first()
         )
-        if top_service_data and top_service_data['slot__service_id']:
-            svc = Service.objects.filter(id=top_service_data['slot__service_id']).first()
-            if svc:
-                top_service_name = svc.title
-                top_service_count = top_service_data['count']
+        if top_service_row:
+            top_service_name = top_service_row["slot__service__title"] or ""
+            top_service_count = top_service_row["cnt"]
 
-        PerformanceAnalytics.objects.update_or_create(
-            shop=shop,
-            defaults={
-                'total_revenue': total_revenue,
-                'total_bookings': total_appointments,
-                'no_shows_filled': no_shows_filled,
-                'top_service': top_service_name,
-                'week_start_date': start_date.date(),
-                'updated_at': timezone.now(),
-            },
-        )
+        #
+        # 7. NEXT WEEK FORECAST
+        #
+        next_week_start = (end_dt + timedelta(days=1)).date()
+        next_week_end = next_week_start + timedelta(days=6)
 
-        next_week_open_slots = Slot.objects.filter(
+        open_slots_next_week = Slot.objects.filter(
             shop=shop,
-            start_time__gt=end_date,
-            start_time__lte=end_date + timedelta(days=7),
+            start_time__date__gte=next_week_start,
+            start_time__date__lte=next_week_end,
             capacity_left__gt=0,
         ).count()
 
-        report_title = "Your Weekly Business Snapshot ✨"
-        push_summary = f"Your report is in! You earned ${total_revenue:.2f} and filled {no_shows_filled} no-shows."
-        top_line = (
-            f"📈 Your most popular service was {top_service_name} with {top_service_count} bookings."
-            if top_service_name else
-            "📈 No standout service this week — let’s drive more bookings!"
+        avg_ticket = (total_revenue / total_appointments) if total_appointments else Decimal("0.00")
+        forecast_estimated_revenue = avg_ticket * Decimal(open_slots_next_week)
+
+        #
+        # 8. COACHING TEXT / CTA CARDS
+        #
+        ai_motivation = (
+            "You didn’t just serve clients — you built confidence and trust this week. "
+            "Let’s carry that momentum into next week."
         )
-        forecast_line = f"🗓️ You’ve got {next_week_open_slots} open slots next week—let’s get them filled!"
+
+        revenue_booster_text = (
+            f"Promote your {top_service_name} first thing Monday. "
+            f"It was booked {top_service_count} times this week and drove great reviews. "
+            "Want me to generate an IG caption + booking link?"
+            if top_service_name
+            else
+            "Promote your top service in Stories Monday morning. "
+            "Ask people to DM you for a spot — I can draft the caption + link."
+        )
+
+        retention_play_text = (
+            "Some clients haven’t rebooked yet. Offer them a ‘Next Week Loyalty Boost’ — "
+            "10% off if they book within 7 days. Want me to prep that SMS blast?"
+        )
+
+        ai_recommendations = {
+            "revenue_booster": {
+                "headline": "Revenue Booster",
+                "text": revenue_booster_text,
+                "cta_label": "Yes, Create It",
+                "cta_action": "generate_marketing_caption",
+            },
+            "retention_play": {
+                "headline": "Retention Play",
+                "text": retention_play_text,
+                "cta_label": "Send via SMS",
+                "cta_action": "send_loyalty_sms",
+            },
+            "forecast": {
+                "open_slots_next_week": open_slots_next_week,
+                "forecast_estimated_revenue": float(forecast_estimated_revenue),
+            },
+        }
+
+        #
+        # 9. SAVE WeeklySummary
+        #
+        summary = WeeklySummary.objects.create(
+            shop=shop,
+            provider=owner,
+            week_start_date=start_dt.date(),
+            week_end_date=end_dt.date(),
+            total_appointments=total_appointments,
+            revenue_generated=total_revenue,
+            rebooking_rate=rebooking_rate,
+            growth_rate=growth_rate,
+            no_shows_filled=no_shows_filled,
+            top_service=top_service_name,
+            top_service_count=top_service_count,
+            open_slots_next_week=open_slots_next_week,
+            forecast_estimated_revenue=forecast_estimated_revenue,
+            ai_motivation=ai_motivation,
+            ai_recommendations=ai_recommendations,
+            delivered_channels=[],
+        )
+
+        deep_link = f"fidden://weekly-recap/{summary.id}"
+
+        #
+        # 10. APP NOTIFICATION + PUSH
+        #
+        report_title = "Your Weekly Business Snapshot ✨"
+        push_summary = (
+            f"Hey {getattr(owner, 'name', '') or ''} — you wrapped another great week. "
+            f"${float(total_revenue):.2f} earned, {no_shows_filled} no-shows saved. "
+            "Tap to see your gameplan."
+        )
+
         detailed_message = (
-            f"Here's your weekly wrap-up from your AI partner, {shop.ai_partner_name or 'Amara'}!\n\n"
-            f"✅ You completed {total_appointments} appointments, earning ${total_revenue:.2f}.\n"
-            f"🎯 You automatically filled {no_shows_filled} no-show slots!\n"
-            f"{top_line}\n{forecast_line}\n\nYou're building something great. Let's keep the momentum going! 💪"
+            f"Here's your weekly wrap-up from your AI partner, "
+            f"{shop.ai_partner_name or 'Amara'}!\n\n"
+            f"✨ You served {total_appointments} clients this week.\n"
+            f"💵 You earned ${float(total_revenue):.2f} in total bookings.\n"
+            f"🔁 Rebooking rate: {rebooking_rate:.0f}%.\n"
+            f"⏱ You filled {no_shows_filled} last-minute cancellations.\n"
+            f"🗓 {open_slots_next_week} open slots next week.\n\n"
+            "You’re not just running a business — you’re building a movement. "
+            "Let’s make next week your strongest yet."
         )
 
         Notification.objects.create(
-            recipient=shop.owner,
+            recipient=owner,
             message=detailed_message,
             notification_type="ai_report",
-            data={"title": report_title},
+            data={
+                "title": report_title,
+                "deep_link": deep_link,
+                "weekly_summary_id": str(summary.id),
+            },
         )
-        notify_user(shop.owner, message=report_title, notification_type="ai_report", data={"summary": push_summary})
 
-        
         try:
-            owner = shop.owner
-            email = getattr(owner, "email", None)
+            notify_user(
+                owner,
+                message=report_title,
+                notification_type="ai_report",
+                data={
+                    "summary": push_summary,
+                    "deep_link": deep_link,
+                    "weekly_summary_id": str(summary.id),
+                },
+            )
+            delivered_channels = ["in_app", "push"]
+        except Exception:
+            logger.exception("notify_user failed for owner %s", owner.id)
+            delivered_channels = ["in_app"]
 
-            if email:
+        #
+        # 11. EMAIL COPY
+        #
+        recipient_email = (getattr(owner, "email", "") or "").strip()
+        if recipient_email:
+            email_subject = f"[Fidden] {report_title}"
+            email_body = (
+                detailed_message
+                + "\n\n"
+                + ai_motivation
+                + "\n\nRevenue Booster:\n- "
+                + revenue_booster_text
+                + "\n\nRetention Play:\n- "
+                + retention_play_text
+            )
+            try:
+                send_mail(
+                    subject=email_subject,
+                    message=email_body,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[recipient_email],
+                    fail_silently=False,
+                )
+                delivered_channels.append("email")
+            except Exception:
+                logger.exception("Failed to send weekly summary email to %s", recipient_email)
+
+        summary.delivered_channels = delivered_channels
+        summary.save(update_fields=["delivered_channels"])
+
+        #
+        # 12. PERFORMANCE ANALYTICS SNAPSHOT
+        #
+        PerformanceAnalytics.objects.update_or_create(
+            shop=shop,
+            defaults={
+                "total_revenue": total_revenue,
+                "total_bookings": total_appointments,
+                "no_shows_filled": no_shows_filled,
+                "top_service": top_service_name,
+                "week_start_date": start_dt.date(),
+                "updated_at": timezone.now(),
+            },
+        )
+
+        #
+        # 13. KLAVIYO EVENT ENRICHMENT
+        #
+        try:
+            email_for_klaviyo = getattr(owner, "email", None)
+            if email_for_klaviyo:
                 profile_payload = {
-                    "plan": getattr(getattr(shop, "subscription", None).plan, "name", None) if hasattr(shop, "subscription") else None,
-                    "plan_status": getattr(getattr(shop, "subscription", None), "status", None) if hasattr(shop, "subscription") else None,
-                    "ai_addon": bool(getattr(getattr(shop, "subscription", None), "has_ai_addon", False)),
-                    "legacy_500": bool(getattr(getattr(shop, "subscription", None), "legacy_ai_promo_used", False)),
+                    "plan": getattr(
+                        getattr(getattr(shop, "subscription", None), "plan", None),
+                        "name",
+                        None,
+                    ),
+                    "plan_status": getattr(
+                        getattr(shop, "subscription", None),
+                        "status",
+                        None,
+                    ),
+                    "ai_addon": bool(
+                        getattr(getattr(shop, "subscription", None), "ai_assistant", False)
+                    ),
                     "shop_id": shop.id,
                 }
 
                 event_props = {
                     "shop_id": shop.id,
+                    "weekly_summary_id": str(summary.id),
+                    "week_start": str(start_dt.date()),
+                    "week_end": str(end_dt.date()),
                     "total_appointments": total_appointments,
                     "total_revenue": float(total_revenue),
+                    "growth_rate": growth_rate,
+                    "rebooking_rate": rebooking_rate,
                     "no_shows_filled": no_shows_filled,
                     "top_service": top_service_name,
                     "top_service_count": top_service_count,
-                    "next_week_open_slots": next_week_open_slots,
+                    "open_slots_next_week": open_slots_next_week,
+                    "forecast_estimated_revenue": float(forecast_estimated_revenue),
+                    "ai_motivation": ai_motivation,
+                    "ai_recommendations": ai_recommendations,
+                    "deep_link": deep_link,
                 }
 
                 send_klaviyo_event(
-                    email=email,
+                    email=email_for_klaviyo,
                     event_name="Weekly Recap Ready",
                     profile=profile_payload,
                     event_props=event_props,
                 )
-        except Exception as e:
-            logger.error("[klaviyo] weekly recap sync failed: %s", e, exc_info=True)
+        except Exception:
+            logger.exception("[klaviyo] weekly recap sync failed for shop %s", shop.id)
 
-        # inside generate_weekly_ai_reports(), right before send_mail(...)
-        recipient = (shop.owner.email or "").strip()
-        if not recipient:
-            logger.warning("[weekly] shop_id=%s owner_id=%s has no email; skipping email",
-                        shop.id, shop.owner_id)
-        else:
-            try:
-                logger.info(
-                    "[weekly] sending to=%s via host=%s port=%s from=%s",
-                    recipient,
-                    getattr(settings, "EMAIL_HOST", None),
-                    getattr(settings, "EMAIL_PORT", None),
-                    getattr(settings, "DEFAULT_FROM_EMAIL", None),
-                )
-                sent = send_mail(
-                    subject=f"[Fidden] {report_title}",
-                    message=detailed_message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[recipient],
-                    fail_silently=False,  # keep False so errors raise
-                )
-                logger.info("[weekly] send_mail returned sent=%s to=%s", sent, recipient)
-            except Exception as e:
-                logger.error("[weekly] send_mail failed to %s: %s", recipient, e, exc_info=True)
-
+    logger.info("Finished weekly AI report generation for all shops.")
+    return "ok"
 
 
 

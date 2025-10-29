@@ -1109,3 +1109,38 @@ class AIReportSerializer(serializers.ModelSerializer):
             'motivational_nudge',
             'week_start_date',
         ]
+
+# api/serializers.py
+
+from rest_framework import serializers
+from .models import WeeklySummary
+
+class WeeklySummarySerializer(serializers.ModelSerializer):
+    deep_link = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WeeklySummary
+        fields = [
+            "id",
+            "week_start_date",
+            "week_end_date",
+            "total_appointments",
+            "revenue_generated",
+            "rebooking_rate",
+            "growth_rate",
+            "no_shows_filled",
+            "top_service",
+            "top_service_count",
+            "open_slots_next_week",
+            "forecast_estimated_revenue",
+            "ai_motivation",
+            "ai_recommendations",
+            "delivered_channels",
+            "deep_link",
+            "created_at",
+        ]
+
+    def get_deep_link(self, obj):
+        # match the scheme you already use in the mobile app
+        # (you showed `fidden://book/<id>` in logs earlier)
+        return f"fidden://weekly-recap/{obj.id}"

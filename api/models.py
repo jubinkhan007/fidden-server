@@ -776,6 +776,84 @@ class PerformanceAnalytics(models.Model):
         return f"Analytics for {self.shop.name}"
     
 
+
+
+# api/models.py (add this)
+
+import uuid
+from django.conf import settings
+from django.db import models
+
+class WeeklySummary(models.Model):
+    """
+    One row per shop per generated weekly recap.
+    This powers the 'Your Week at a Glance' screen and Klaviyo/email content.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    shop = models.ForeignKey(
+        'api.Shop',
+        related_name='weekly_summaries',
+        on_delete=models.CASCADE,
+    )
+    provider = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name='weekly_summaries',
+        on_delete=models.CASCADE,
+    )
+
+    # Week window that this summary covers
+    week_start_date = models.DateField()
+    week_end_date = models.DateField()
+
+    # Core performance metrics
+    total_appointments = models.PositiveIntegerField(default=0)
+    revenue_generated = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    rebooking_rate = models.FloatField(default=0.0)         # percent (0-100)
+    growth_rate = models.FloatField(default=0.0)            # WoW % revenue delta
+    no_shows_filled = models.PositiveIntegerField(default=0)
+    top_service = models.CharField(max_length=255, blank=True)
+    top_service_count = models.PositiveIntegerField(default=0)
+    open_slots_next_week = models.PositiveIntegerField(default=0)
+
+    # Forecast helpers (e.g. "Estimated revenue: $2,850")
+    forecast_estimated_revenue = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0
+    )
+
+    # AI / coaching layer
+    ai_motivation = models.TextField(blank=True)  # "You didn't just style hair..."
+    # Two action cards + any CTA context we want to show in-app
+    ai_recommendations = models.JSONField(default=dict, blank=True)
+    # Example structure:
+    # {
+    #   "revenue_booster": {
+    #        "text": "...",
+    #        "cta_label": "Yes, Create It",
+    #        "cta_action": "generate_marketing_caption"
+    #   },
+    #   "retention_play": {
+    #        "text": "...",
+    #        "cta_label": "Send via SMS",
+    #        "cta_action": "send_loyalty_sms"
+    #   }
+    # }
+
+    delivered_channels = models.JSONField(default=list, blank=True)
+    # e.g. ["push", "in_app", "email"]
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-week_end_date", "-created_at"]
+
+    def __str__(self):
+        return f"WeeklySummary<{self.shop_id} {self.week_start_date}→{self.week_end_date}>"
+
+
+
+
 class AIAutoFillSettings(models.Model):
     """ Provider-specific settings for the No-Show Auto-Fill feature. """
     shop = models.OneToOneField(Shop, on_delete=models.CASCADE, related_name='ai_settings')

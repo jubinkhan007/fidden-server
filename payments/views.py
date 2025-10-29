@@ -999,8 +999,66 @@ class StripeWebhookView(APIView):
 
             # non-AI plan changes
             _update_shop_from_subscription_obj(sub)
-            return Response(status=200)
+            # ---- NEW: fire Klaviyo profile/event for scheduled cancel info ----
+            try:
+                # figure out which shop this sub belongs to (same logic as _update_shop_from_subscription_obj, but we repeat minimal bits)
+                target_shop = None
+                meta = sub.get("metadata") or {}
+                sid = meta.get("shop_id")
+                if sid:
+                    try:
+                        target_shop = Shop.objects.get(id=int(sid))
+                    except Exception:
+                        target_shop = None
+                if not target_shop:
+                    tmp_ss = (
+                        ShopSubscription.objects
+                        .filter(stripe_subscription_id=sub["id"])
+                        .select_related("shop","plan")
+                        .first()
+                    )
+                    if tmp_ss:
+                        target_shop = tmp_ss.shop
 
+                if target_shop and hasattr(target_shop, "subscription"):
+                    ss = target_shop.subscription
+                    owner = target_shop.owner
+                    email = getattr(owner, "email", None)
+
+                    if email:
+                        profile_payload = build_profile_payload_for_shop(
+                            shop=target_shop,
+                            shop_sub=ss,
+                            stripe_subscription_id=sub.get("id"),
+                            price_id=(
+                                # grab first price_id from sub.items
+                                (sub.get("items", {}) or {})
+                                    .get("data", [{}])[0]
+                                    .get("price", {})
+                                    .get("id")
+                            ),
+                            cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
+                            is_canceled=False,
+                            is_at_risk=False,
+                        )
+
+                        event_props = {
+                            "shop_id": target_shop.id,
+                            "status": profile_payload["plan_status"],
+                            "cancel_at_period_end": bool(sub.get("cancel_at_period_end")),
+                        }
+
+                        send_klaviyo_event(
+                            email=email,
+                            event_name="Subscription Updated",
+                            profile=profile_payload,
+                            event_props=event_props,
+                        )
+
+            except Exception as e:
+                logger.error("[klaviyo] sub.updated Klaviyo sync failed: %s", e, exc_info=True)
+
+            return Response(status=200)
         # ------------------------------------------------------------------
         # invoice.* (paid / succeeded etc.)
         # - Recurring billing events
@@ -1241,6 +1299,7 @@ class StripeWebhookView(APIView):
             logger.error("   - Existing payment intents: %s", all_intents)
 
         # ⬇️ Only attempt Klaviyo if we actually got a Payment row
+        # ⬇️ Only attempt Klaviyo if we actually got a Payment row
         if not payment:
             return
 
@@ -1251,19 +1310,18 @@ class StripeWebhookView(APIView):
             shop = getattr(payment.booking, "shop", None) if hasattr(payment, "booking") else None
             shop_sub = getattr(shop, "subscription", None) if shop else None
 
-            # Figure out if this is billing-risk
-            at_risk = (new_status == "failed")
+            # "At risk" means: this payment failed.
+            billing_at_risk = (new_status == "failed")
 
             if email and shop and shop_sub:
                 profile_payload = build_profile_payload_for_shop(
                     shop=shop,
                     shop_sub=shop_sub,
                     stripe_subscription_id=getattr(shop_sub, "stripe_subscription_id", None),
-                    price_id=getattr(getattr(shop_sub, "plan", None), "stripe_price_id", None)
-                        if hasattr(shop_sub, "plan") else None,
-                    cancel_at_period_end=False,  # we don't know here; it's fine
+                    price_id=getattr(getattr(shop_sub, "plan", None), "stripe_price_id", None) if hasattr(shop_sub, "plan") else None,
+                    cancel_at_period_end=False,
                     is_canceled=False,
-                    is_at_risk=at_risk,
+                    is_at_risk=billing_at_risk,    # ← <-- THIS is the magic
                 )
 
                 event_props = {
@@ -1277,10 +1335,15 @@ class StripeWebhookView(APIView):
 
                 send_klaviyo_event(
                     email=email,
-                    event_name="Payment Succeeded" if new_status == "succeeded" else "Payment Failed",
+                    event_name=(
+                        "Payment Succeeded"
+                        if new_status == "succeeded"
+                        else "Payment Failed"
+                    ),
                     profile=profile_payload,
                     event_props=event_props,
                 )
+
         except Exception as e:
             logger.error("[klaviyo] payment sync failed: %s", e, exc_info=True)
 
