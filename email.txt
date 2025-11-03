@@ -1,0 +1,5 @@
+From: Fidden <no-reply@fidden.test>
+To: you@example.com
+Subject: Mailtrap SMTP test
+
+Hello from curl over SMTP!

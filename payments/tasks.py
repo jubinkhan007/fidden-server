@@ -236,7 +236,7 @@ def send_smart_rebooking_prompts():
     return f"Sent {sent_count} rebooking prompts."
 
 
-@shared_task
+@shared_task(name="api.tasks.send_auto_followups")
 def send_auto_followups():
     """
     Sends follow-up notifications (review prompts) approx. 24 hours

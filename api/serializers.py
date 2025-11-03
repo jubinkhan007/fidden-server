@@ -1144,3 +1144,9 @@ class WeeklySummarySerializer(serializers.ModelSerializer):
         # match the scheme you already use in the mobile app
         # (you showed `fidden://book/<id>` in logs earlier)
         return f"fidden://weekly-recap/{obj.id}"
+
+
+# serializers.py
+class WeeklySummaryActionSerializer(serializers.Serializer):
+    summary_id = serializers.UUIDField()
+    preview_only = serializers.BooleanField(required=False, default=False)

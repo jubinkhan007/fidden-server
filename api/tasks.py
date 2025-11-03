@@ -957,25 +957,52 @@ def send_upcoming_slot_reminders(self, window_minutes=30):
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def cleanup_old_cancelled_bookings(self, days=7, batch_size=1000):
-    """Cleanup old cancelled bookings, restore slot capacity."""
+    """
+    Cleanup old cancelled bookings, restore slot capacity.
+    Locks a small batch with SELECT ... FOR UPDATE SKIP LOCKED inside a transaction.
+    """
+    cutoff = timezone.now() - timedelta(days=days)
+    total_deleted = 0
+
     try:
-        cutoff = timezone.now() - timedelta(days=days)
-        total_deleted = 0
         while True:
-            old_bookings = SlotBooking.objects.select_for_update()\
-                .filter(status="cancelled", start_time__lt=cutoff).order_by("id")[:batch_size]
-            if not old_bookings.exists():
-                break
-            for booking in old_bookings:
-                slot = booking.slot
-                slot.capacity_left += 1
-                slot.save(update_fields=['capacity_left'])
-                booking.delete()
-                total_deleted += 1
-            if old_bookings.count() < batch_size:
-                break
-        logger.info(f"[Cleanup] Deleted {total_deleted} old cancelled bookings (older than {days} days).")
-        return f"Deleted {total_deleted} old cancelled bookings."
+            # Lock a small batch atomically
+            with transaction.atomic():
+                batch = list(
+                    SlotBooking.objects
+                    .select_for_update(skip_locked=True)  # requires PostgreSQL
+                    .select_related("slot")
+                    .filter(status="cancelled", start_time__lt=cutoff)
+                    .order_by("id")[:batch_size]
+                )
+
+                if not batch:
+                    break
+
+                # Count how many bookings we’re restoring per slot
+                incr_by_slot = {}
+                for b in batch:
+                    incr_by_slot[b.slot_id] = incr_by_slot.get(b.slot_id, 0) + 1
+
+                # Bulk bump capacity using F() so it’s atomic
+                for slot_id, inc in incr_by_slot.items():
+                    Slot.objects.filter(id=slot_id).update(
+                        capacity_left=F("capacity_left") + inc
+                    )
+
+                # Bulk delete the batch
+                SlotBooking.objects.filter(id__in=[b.id for b in batch]).delete()
+
+                total_deleted += len(batch)
+
+                # If we got less than a full batch, likely done
+                if len(batch) < batch_size:
+                    break
+
+        msg = f"[Cleanup] Deleted {total_deleted} old cancelled bookings (older than {days} days)."
+        logger.info(msg)
+        return msg
+
     except Exception as e:
         logger.error(f"[Cleanup Task] Error: {e}", exc_info=True)
         raise self.retry(exc=e)

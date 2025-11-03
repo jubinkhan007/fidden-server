@@ -1,8 +1,10 @@
 from django.urls import path
 from .views import (
     AIReportView,
+    GenerateMarketingCaptionView,
     LatestWeeklySummaryView,
     PerformanceAnalyticsView,
+    SendLoyaltyEmailView,
     ShopListCreateView,
     ShopRetrieveUpdateDestroyView,
     ServiceListCreateView,
@@ -79,4 +81,6 @@ urlpatterns = [
     path('ai-report/', AIReportView.as_view(), name='ai-report'),
     # api/urls.py
     path("weekly-summary/latest/", LatestWeeklySummaryView.as_view(),name="weekly-summary-latest"),
+    path("weekly-summary/generate_marketing_caption/", GenerateMarketingCaptionView.as_view()),
+    path("weekly-summary/send_loyalty_email/", SendLoyaltyEmailView.as_view()),
 ]

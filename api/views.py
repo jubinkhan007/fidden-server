@@ -9,6 +9,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.db.models import Avg, Sum
 from django.core.cache import cache
+from django.core.mail import send_mail
 from django.utils.timezone import make_aware
 from .models import (
     AutoFillLog,
@@ -56,6 +57,7 @@ from .serializers import (
     SuggestionSerializer,
     CouponSerializer,
     UserCouponRetrieveSerializer,
+    WeeklySummaryActionSerializer,
     WeeklySummarySerializer,
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
@@ -1591,3 +1593,144 @@ class LatestWeeklySummaryView(APIView):
 
         data = WeeklySummarySerializer(summary).data
         return Response(data, status=status.HTTP_200_OK)
+    
+
+# -------------------------------
+# 1️⃣ Generate Marketing Caption
+# -------------------------------
+class GenerateMarketingCaptionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        ser = WeeklySummaryActionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        summary_id = ser.validated_data["summary_id"]
+        preview_only = ser.validated_data["preview_only"]
+
+        shop = getattr(request.user, "shop", None)
+        if not shop:
+            return Response({"detail": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        summary = get_object_or_404(WeeklySummary, id=summary_id, shop=shop)
+
+        # Resolve a service to link to (prefer the week's top service)
+        service = None
+        if summary.top_service:
+            service = Service.objects.filter(shop=shop, title__iexact=summary.top_service).first()
+        if not service:
+            service = Service.objects.filter(shop=shop).order_by("-rating").first() or Service.objects.filter(shop=shop).first()
+
+        # --- Build links ---
+        # Universal link (for IG, browsers): your web domain mapped to app via intent filters / app links
+        if service:
+            universal_link = f"https://your-app.com/book/{service.id}?utm=ig_revenue_booster"
+            deep_link = f"fidden://book/{service.id}"
+        else:
+            # Fallback: shop-level booking entry (keeps same route pattern)
+            universal_link = f"https://your-app.com/book/{shop.id}?utm=ig_revenue_booster"
+            deep_link = f"fidden://book/{shop.id}"
+
+        # --- Caption text intended for clients on Instagram ---
+        times = f"{summary.top_service_count} times" if summary.top_service_count else "a bunch"
+        name = summary.top_service or "Our top service"
+
+        caption = (
+            f"{name} was booked {times} this week! 💈✨\n\n"
+            f"Keep that momentum going — book your next appointment today!\n\n"
+            f"{universal_link}"
+        )
+        # (We return the deep link separately so you can copy/use it elsewhere if needed.)
+
+        if not preview_only:
+            channels = set(summary.delivered_channels or [])
+            channels.add("ig_caption")
+            summary.delivered_channels = sorted(list(channels))
+            summary.save(update_fields=["delivered_channels"])
+
+        return Response({
+            "ok": True,
+            "caption": caption,
+            "share_url": universal_link,   # keep for IG
+            "deep_link": deep_link,        # opens app directly (fidden://book/<id>)
+            "preview_only": preview_only,
+        }, status=status.HTTP_200_OK)
+        
+
+# -------------------------------
+# 2️⃣ Send Retention Email
+# -------------------------------
+class SendLoyaltyEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        ser = WeeklySummaryActionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        summary_id = ser.validated_data["summary_id"]
+        preview_only = ser.validated_data["preview_only"]
+
+        shop = getattr(request.user, "shop", None)
+        if not shop:
+            return Response({"detail": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        summary = get_object_or_404(WeeklySummary, id=summary_id, shop=shop)
+
+        # Step 1. Create 10% coupon valid 7 days
+        valid_until = timezone.now().date() + timedelta(days=7)
+        coupon = Coupon.objects.create(
+            shop=shop,
+            description="Next Week Loyalty Boost (10% off)",
+            amount=10,
+            in_percentage=True,
+            validity_date=valid_until,
+            is_active=True,
+        )
+
+        # Step 2. Find clients who haven’t rebooked since the summary period
+        recent_clients = (
+            Booking.objects.filter(shop=shop, status="completed")
+            .values_list("user__email", flat=True)
+            .distinct()
+        )
+
+        rebooked = set(
+            Booking.objects.filter(shop=shop, created_at__gte=summary.week_end_date)
+            .values_list("user__email", flat=True)
+            .distinct()
+        )
+
+        target_emails = [email for email in recent_clients if email not in rebooked]
+
+        # Step 3. Compose the email
+        subject = f"Next Week Loyalty Boost from {shop.name} 💈"
+        message = (
+            f"Hey there!\n\n"
+            f"We miss you at {shop.name}! As a thank-you, here's a 10% off coupon if you book within the next 7 days.\n\n"
+            f"Use code **{coupon.code}** at checkout.\n"
+            f"Valid until {valid_until.strftime('%b %d, %Y')}.\n\n"
+            f"Book now 👉 https://your-app.com/shops/{shop.id}?coupon={coupon.code}\n\n"
+            f"See you soon!\n— {shop.name}"
+        )
+
+        # Step 4. Send emails (or preview)
+        if not preview_only:
+            for email in target_emails:
+                if email:
+                    send_mail(
+                        subject=subject,
+                        message=message,
+                        from_email="noreply@your-app.com",
+                        recipient_list=[email],
+                        fail_silently=True,
+                    )
+            summary.delivered_channels = list(set(summary.delivered_channels + ["email_retention"]))
+            summary.save(update_fields=["delivered_channels"])
+
+        return Response({
+            "ok": True,
+            "coupon_code": coupon.code,
+            "valid_until": str(valid_until),
+            "subject": subject,
+            "preview_message": message,
+            "audience_size": len(target_emails),
+            "preview_only": preview_only,
+        })

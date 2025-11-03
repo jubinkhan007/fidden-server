@@ -33,7 +33,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from api.models import Slot
 from api.serializers import SlotSerializer
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 import datetime
@@ -342,30 +342,45 @@ class CreatePaymentIntentView(APIView):
                     {"detail": extract_validation_error_message(e)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-        # HARD GUARD: slot must be in the future and have capacity
-        slot = Slot.objects.select_for_update().filter(id=slot_id).first()
-        if not slot:
-            return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # ─────────────────────────────────────────────────────────────
+        # 2) ATOMIC BLOCK: lock slot, re-check, and create the Booking
+        #    (release the lock as soon as we have a booking)
+        # ─────────────────────────────────────────────────────────────
         try:
-            # Optional tiny grace if you want: grace_minutes=2
-            assert_slot_bookable(slot)  
-        except ValidationError as e:
-            return Response({"detail": str(e.detail[0] if isinstance(e.detail, list) else e.detail)},
-                            status=status.HTTP_400_BAD_REQUEST)
-        # 2) Create booking via SlotBookingSerializer
-        # proceed to create the SlotBooking
-        serializer = SlotBookingSerializer(
-            data={"slot_id": slot_id},
-            context={"request": request},
-        )
-        try:
-            serializer.is_valid(raise_exception=True)
-            booking = serializer.save()
-        except ValidationError as e:
-            return Response(
-                {"detail": extract_validation_error_message(e)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            with transaction.atomic():
+                # lock the specific slot row for concurrency safety
+                slot = (
+                    Slot.objects
+                    .select_for_update()
+                    .select_related("service", "service__shop")
+                    .filter(id=slot_id)
+                    .first()
+                )
+                if not slot:
+                    return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
+
+                # hard guard (future, capacity, disabled times, etc.)
+                try:
+                    assert_slot_bookable(slot)
+                except ValidationError as e:
+                    return Response(
+                        {"detail": str(e.detail[0] if isinstance(e.detail, list) else e.detail)},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # create the booking while the slot is locked
+                serializer = SlotBookingSerializer(
+                    data={"slot_id": slot_id},
+                    context={"request": request},
+                )
+                serializer.is_valid(raise_exception=True)
+                booking = serializer.save()
+        except DatabaseError as e:
+            logger.exception("DB error while locking/booking slot %s: %s", slot_id, e)
+            return Response({"detail": "Could not reserve this slot. Please try another time."},
+                            status=status.HTTP_409_CONFLICT)
+        # ─────────── lock released here ───────────
 
         try:
             # 3) Ensure Stripe Customer for user
@@ -387,20 +402,14 @@ class CreatePaymentIntentView(APIView):
             # 5) Resolve a plan for commission (do NOT gate booking)
             shop_subscription = getattr(shop, "subscription", None)
             plan = getattr(shop_subscription, "plan", None)
-
             if not plan:
-                # Fall back to Foundation, then any plan; else no commission
                 try:
                     plan = (
-                        SubscriptionPlan.objects.filter(
-                            name=SubscriptionPlan.FOUNDATION
-                        ).first()
+                        SubscriptionPlan.objects.filter(name=SubscriptionPlan.FOUNDATION).first()
                         or SubscriptionPlan.objects.order_by("id").first()
                     )
                 except Exception:
                     plan = None
-
-                # Soft-seed a ShopSubscription for legacy shops (optional)
                 if not shop_subscription and plan:
                     ShopSubscription.objects.update_or_create(
                         shop=shop,
@@ -414,29 +423,27 @@ class CreatePaymentIntentView(APIView):
                     )
                     shop_subscription = getattr(shop, "subscription", None)
 
-            # 6) Price minus coupon
+            # 6) Price (consider discount price), then deposit logic
             total_amount = (
                 booking.service.discount_price
                 if booking.service.discount_price > 0
                 else booking.service.price
             )
-            total_amount = float(total_amount)
-
-            # 5. Calculate final price after coupon
-            total_amount = booking.service.discount_price if booking.service.discount_price > 0 else booking.service.price
-            full_service_amount = total_amount  # Save original amount before deposit calculation
+            full_service_amount = total_amount
 
             if shop.is_deposit_required:
                 service = booking.service
-                # Use the pre-calculated deposit amount from service
                 deposit_amount = service.deposit_amount if service.deposit_amount else full_service_amount
                 total_amount = min(deposit_amount, full_service_amount)
             else:
                 deposit_amount = full_service_amount
 
-            remaining_balance = full_service_amount - total_amount if shop.is_deposit_required else Decimal('0.00')
+            remaining_balance = (
+                full_service_amount - total_amount if shop.is_deposit_required else Decimal("0.00")
+            )
             total_amount = float(total_amount)
 
+            # 7) Apply coupon (after deposit calc)
             if coupon:
                 if coupon.in_percentage:
                     discount = (total_amount * float(coupon.amount)) / 100.0
@@ -446,18 +453,17 @@ class CreatePaymentIntentView(APIView):
                 # record usage only after successful validation
                 coupon_serializer.create_usage()
 
-            # 7) Compute application fee (commission)
-            application_fee_cents = 0
+            # 8) Compute application fee (commission)
             try:
                 commission_rate = float(plan.commission_rate) if plan and plan.commission_rate is not None else 0.0
             except Exception:
                 commission_rate = 0.0
-
+            application_fee_cents = 0
             if commission_rate > 0:
                 commission = (total_amount * commission_rate) / 100.0
                 application_fee_cents = int(round(commission * 100))
 
-            # 8) Create PaymentIntent (Connect destination charges)
+            # 9) Create PaymentIntent (Connect destination charges)
             amount_cents = int(round(total_amount * 100))
             payment_intent_params = {
                 "amount": amount_cents,
@@ -472,13 +478,10 @@ class CreatePaymentIntentView(APIView):
 
             intent = stripe.PaymentIntent.create(**payment_intent_params)
 
-            print(f"PaymentIntent created: {intent.id}")
-            print(f"About to create payment for booking {booking.id}")
-
-            # 9) Persist Payment row
+            # 10) Persist Payment row (small atomic to keep consistency)
             with transaction.atomic():
                 Payment.objects.update_or_create(
-                booking=booking,
+                    booking=booking,
                     defaults={
                         "user": user,
                         "amount": total_amount,
@@ -489,18 +492,16 @@ class CreatePaymentIntentView(APIView):
                         "status": "pending",
                         "is_deposit": shop.is_deposit_required,
                         "balance_paid": 0,
-                        "deposit_amount": deposit_amount if shop.is_deposit_required else 0,  # Fix: use calculated deposit_amount
+                        "deposit_amount": deposit_amount if shop.is_deposit_required else 0,
                         "remaining_amount": remaining_balance,
-                        "deposit_paid": 0,   # 👈 add this
+                        "deposit_paid": 0,
                         "tips_amount": 0,
                         "application_fee_amount": 0,
                         "payment_type": "full",
-
                     },
                 )
-                # print(f" Payment saved: ID={payment.id}, Created={created}")
 
-            # 10) Ephemeral key for mobile SDKs
+            # 11) Ephemeral key for mobile SDKs
             ephemeral_key = stripe.EphemeralKey.create(
                 customer=user_customer.stripe_customer_id,
                 stripe_version="2024-04-10",
@@ -521,13 +522,9 @@ class CreatePaymentIntentView(APIView):
             )
 
         except Exception as e:
-            # If needed, your Celery auto-cancel can clean up failed payments/holds later.
             import traceback
-            print(f"ERROR in payment creation: {str(e)}")
-            print(f"Traceback: {traceback.format_exc()}")
             logger.error(f"Payment creation failed: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
