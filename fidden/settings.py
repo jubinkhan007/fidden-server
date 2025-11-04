@@ -150,16 +150,31 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LOGGING = {
-  "version": 1,
-  "disable_existing_loggers": False,
-  "handlers": {
-    "console": {"class": "logging.StreamHandler"},
-  },
-  "loggers": {
-    "": {"handlers": ["console"], "level": "INFO"},
-  },
-}
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[%(asctime)s] %(levelname)s %(name)s:%(lineno)s — %(message)s"
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "loggers": {
+        # Root logger
+        "": {"handlers": ["console"], "level": "INFO"},
 
+        # Django core
+        "django": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+        "django.request": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+
+        # Email backend
+        "django.core.mail": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+    },
+}
 # ==============================
 # Internationalization
 # ==============================
@@ -187,7 +202,7 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # ==============================
-# Email Configuration
+# Email Configuration in settings.py
 # ==============================
 
 #'django.core.mail.backends.console.EmailBackend' if DEBUG else 

@@ -213,8 +213,8 @@ def generate_weekly_ai_reports(self):
             "retention_play": {
                 "headline": "Retention Play",
                 "text": retention_play_text,
-                "cta_label": "Send via SMS",
-                "cta_action": "send_loyalty_sms",
+                "cta_label": "Send via Email",
+                "cta_action": "send_loyalty_email",   # <-- changed from send_loyalty_sms
             },
             "forecast": {
                 "open_slots_next_week": open_slots_next_week,

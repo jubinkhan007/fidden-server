@@ -1,5 +1,6 @@
 # api/views.py
-
+import random
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -11,6 +12,7 @@ from django.db.models import Avg, Sum
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.utils.timezone import make_aware
+from django.core.mail import EmailMultiAlternatives, get_connection
 from .models import (
     AutoFillLog,
     PerformanceAnalytics,
@@ -61,7 +63,7 @@ from .serializers import (
     WeeklySummarySerializer,
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from django.utils import timezone
 from django.db.models import Avg, Count, Q, Value, FloatField, OuterRef, Subquery
 from django.db.models.functions import Coalesce
@@ -1596,65 +1598,301 @@ class LatestWeeklySummaryView(APIView):
     
 
 # -------------------------------
-# 1️⃣ Generate Marketing Caption
+# 1️⃣ Generate Marketing Caption  (FIXED)
 # -------------------------------
 class GenerateMarketingCaptionView(APIView):
+    """
+    Customer-focused IG caption with heavy, AI-ish variety.
+    Deterministic randomness (seeded) so the same week/service yields the same copy.
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         ser = WeeklySummaryActionSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         summary_id = ser.validated_data["summary_id"]
-        preview_only = ser.validated_data["preview_only"]
+        preview_only = ser.validated_data.get("preview_only", False)
 
         shop = getattr(request.user, "shop", None)
         if not shop:
             return Response({"detail": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
-
         summary = get_object_or_404(WeeklySummary, id=summary_id, shop=shop)
 
-        # Resolve a service to link to (prefer the week's top service)
+        # ----- Choose service (prefer weekly top, else best rated, else any) -----
         service = None
         if summary.top_service:
             service = Service.objects.filter(shop=shop, title__iexact=summary.top_service).first()
         if not service:
-            service = Service.objects.filter(shop=shop).order_by("-rating").first() or Service.objects.filter(shop=shop).first()
+            service = (
+                Service.objects.filter(shop=shop, is_active=True)
+                .annotate(avg_rating=Avg("ratings__rating"))
+                .order_by("-avg_rating", "-id")
+                .first()
+                or Service.objects.filter(shop=shop, is_active=True).first()
+            )
+        if not service:
+            return Response({"detail": "No active services found for this shop."},
+                            status=status.HTTP_400_BAD_REQUEST)
 
-        # --- Build links ---
-        # Universal link (for IG, browsers): your web domain mapped to app via intent filters / app links
-        if service:
-            universal_link = f"https://your-app.com/book/{service.id}?utm=ig_revenue_booster"
-            deep_link = f"fidden://book/{service.id}"
-        else:
-            # Fallback: shop-level booking entry (keeps same route pattern)
-            universal_link = f"https://your-app.com/book/{shop.id}?utm=ig_revenue_booster"
-            deep_link = f"fidden://book/{shop.id}"
+        # ----- Personalization facts -----
+        base_price = service.discount_price if (service.discount_price and service.discount_price > 0) else service.price
 
-        # --- Caption text intended for clients on Instagram ---
-        times = f"{summary.top_service_count} times" if summary.top_service_count else "a bunch"
-        name = summary.top_service or "Our top service"
+        rating_agg = RatingReview.objects.filter(service=service).aggregate(avg=Avg("rating"), cnt=Count("id"))
+        avg_rating = (rating_agg.get("avg") or 0)
+        review_count = (rating_agg.get("cnt") or 0)
 
-        caption = (
-            f"{name} was booked {times} this week! 💈✨\n\n"
-            f"Keep that momentum going — book your next appointment today!\n\n"
-            f"{universal_link}"
+        weekly_count = None
+        if summary.top_service and service.title.lower() == (summary.top_service or "").lower():
+            weekly_count = summary.top_service_count or None
+
+        now = timezone.now()
+        next_slot = (
+            Slot.objects.filter(shop=shop, service=service, start_time__gte=now, capacity_left__gt=0)
+            .order_by("start_time")
+            .first()
         )
-        # (We return the deep link separately so you can copy/use it elsewhere if needed.)
+        next_slot_str = None
+        if next_slot:
+            try:
+                local_dt = timezone.localtime(next_slot.start_time)
+            except Exception:
+                local_dt = next_slot.start_time
+            # Example: Fri, Nov 7 • 3:30 PM
+            # (portable fallback if %-d %-I isn’t supported)
+            fmt = "%a, %b %d • %I:%M %p"
+            next_slot_str = local_dt.strftime(fmt).replace(" 0", " ")
 
+        today = date.today()
+        coupon = (
+            Coupon.objects.filter(
+                shop=shop,
+                services__id=service.id,
+                is_active=True,
+                validity_date__gte=today,
+            )
+            .order_by("-in_percentage", "-amount")
+            .first()
+        )
+
+        web_host = getattr(settings, "APP_WEB_HOST", "https://your-app.com").rstrip("/")
+        utm = "utm=ig_revenue_booster"
+        share_url = f"{web_host}/services/{service.id}?{utm}&shop_id={shop.id}"
+        deep_link = f"fidden://service/{service.id}?shop_id={shop.id}"
+
+        link_for_caption = deep_link
+
+        def money(v):
+            try:
+                return f"৳{int(v):,}"
+            except Exception:
+                return f"৳{v}"
+
+        def coupon_line(c):
+            if not c:
+                return ""
+            if c.in_percentage:
+                return f"Use code **{c.code}** to save {int(c.amount)}% (limited time)."
+            return f"Use code **{c.code}** to save {money(c.amount)} (limited time)."
+
+        cat = (getattr(getattr(service, "category", None), "name", "") or "")
+        city = (shop.location or "").split(",")[0].strip() if shop.location else ""
+
+        # ----- Deterministic RNG for variety -----
+        rng_seed = f"{summary.id}-{service.id}-{summary.week_end_date.isoformat()}"
+        rng = random.Random(hash(rng_seed))
+
+        # ----- Hashtags -----
+        base_tags = [
+            "#BookNow", "#SelfCare", "#FreshLook", "#PamperYourself", "#LocalFav",
+            "#LimitedSlots", "#TreatYourself", "#LookGoodFeelGood", "#TimeForYou", "#GlowDay",
+        ]
+        cat_map = {
+            "Hair": ["#HairCare", "#Haircut", "#SalonVibes", "#StyleRefresh"],
+            "Beauty": ["#BeautyTime", "#GlowUp", "#SkinCare", "#BeautyBoost"],
+            "Spa": ["#SpaDay", "#Relax", "#Wellness", "#Unwind"],
+            "Nails": ["#NailArt", "#Manicure", "#NailCare", "#PolishPerfection"],
+            "Fitness": ["#Fitness", "#Recovery", "#Wellbeing", "#MoveBetter"],
+        }
+        cat_key = next((k for k in cat_map if k.lower() in cat.lower()), None)
+        cat_tags = cat_map.get(cat_key, [])
+        cat = (getattr(getattr(service, "category", None), "name", "") or "")
+        raw_city = (shop.location or "").split(",")[0].strip() if shop.location else ""
+        def _safe_city_tag(s: str):
+            if not s:
+                return None
+            # if any digit is present, assume it's not a clean city name (likely coords or address w/ numbers)
+            if any(ch.isdigit() for ch in s):
+                return None
+            return f"#{''.join(s.title().split())}"
+
+        city_tag = _safe_city_tag(raw_city)
+
+        tag_pick = rng.sample(base_tags, k=min(3, len(base_tags))) + rng.sample(cat_tags, k=min(2, len(cat_tags)))
+        if city_tag and rng.random() < 0.7:
+            tag_pick.append(city_tag)
+        tag_pick = tag_pick[: rng.randint(3, 6)]
+        hashtags = " ".join(tag_pick)
+
+        # ----- Persona & tone bits (expanded) -----
+        ai_name = shop.ai_partner_name or "Amara"
+        openers = [
+            f"Hi, I’m {ai_name} — your AI booking buddy 🤖",
+            f"{ai_name} here — I found something you’ll love ✨",
+            f"Your AI concierge {ai_name} checking in 💬",
+            f"Psst… {ai_name} found a perfect pick for you 👀",
+            f"{ai_name} (AI) with a quick tip for your next self-care moment 💡",
+            f"From your AI assistant {ai_name}: a little upgrade for your week 🚀",
+            f"Curated by {ai_name} (AI) for you 🌟",
+            f"{ai_name} here — because great days start with great bookings 😊",
+            f"Small nudge from {ai_name}: make time for you today 💖",
+            f"{ai_name} says: treat yourself, you’ve earned it 🌿",
+            f"A quick rec from {ai_name} — tailored to you 🎯",
+            f"Your timeline called. {ai_name} answered with a glow-up ✨",
+            f"{ai_name} again — I’m holding a spot you’ll want ⏳",
+            f"{ai_name} here. Signal detected: pamper mode ✅",
+            f"{ai_name} speaking: this one’s trending for a reason 🔥",
+        ]
+        opener = rng.choice(openers)
+
+        # ----- Value props (dynamic facts → bullet lines) -----
+        value_props = []
+        if weekly_count and weekly_count > 0:
+            times = f"{weekly_count} time{'s' if weekly_count != 1 else ''}"
+            value_props.append(f"Our community loved it — booked **{times}** this week.")
+        if avg_rating and review_count:
+            star = f"{avg_rating:.1f}★" if avg_rating else "⭐️"
+            value_props.append(f"Rated **{star}** by {review_count}+ clients.")
+        if base_price:
+            value_props.append(f"Starts at **{money(base_price)}**.")
+        if next_slot_str:
+            value_props.append(f"Next open slot: **{next_slot_str}**.")
+        if coupon:
+            value_props.append(coupon_line(coupon))
+        if not value_props:
+            value_props.append("Limited spots this week. Don’t miss out!")
+
+        # Bullet styles & bridges
+        bullet_styles = [
+            ("- ", "\n"),
+            ("• ", "\n"),
+            ("— ", "\n"),
+            ("✅ ", "\n"),
+            ("✨ ", "\n"),
+        ]
+        bullet_prefix, bullet_join = rng.choice(bullet_styles)
+
+        bridges = [
+            "Why it’s a great pick:",
+            "Clients are choosing this for a reason:",
+            "Here’s what makes it worth it:",
+            "Quick highlights:",
+            "Top reasons to book:",
+            "Why you’ll love it:",
+        ]
+        bridge = rng.choice(bridges)
+
+        bullets = bullet_join.join(f"{bullet_prefix}{vp}" for vp in value_props)
+
+        # ----- CTA & FOMO variants -----
+        ctas = [
+            "Book in a few taps:",
+            "Secure your spot now:",
+            "Lock this in today:",
+            "Tap to view details & book:",
+            "Ready when you are — book now:",
+            "Let’s do this — reserve your time:",
+            "Your moment awaits:",
+        ]
+        cta = rng.choice(ctas)
+
+        fm_variants = [
+            "Spots move fast on weekends ⏳",
+            "Only a few openings left this week ⌛",
+            "Early birds get the best times 🐦",
+            "Treat yourself before the rush 💫",
+            "Perfect for a mid-week reset 🌙",
+        ]
+        fomo_line = rng.choice(fm_variants) if rng.random() < 0.7 else None
+
+        ps_variants = [
+            "P.S. I’ll remind you before your slot — I’ve got you. 🤝",
+            "P.S. You can reschedule from your profile anytime.",
+            "P.S. Got a friend? Share this and go together!",
+            "P.S. New here? Creating an account takes ~30 seconds.",
+        ]
+        ps_line = rng.choice(ps_variants) if rng.random() < 0.45 else None
+
+        # ----- Template shells (more shapes) -----
+        name = service.title or "Our top service"
+        shells = [
+            # 1) Classic opener + bridge + bullets + CTA
+            "{opener}\n\n**{name}** is trending this week 🔥\n{bridge}\n{bullets}\n\n{cta}\n{url}\n\n{hashtags}",
+
+            # 2) Question hook + bullets
+            "Thinking about **{name}**? ✨\n{bridge}\n{bullets}\n\n{cta} {url}\n\n{hashtags}",
+
+            # 3) Minimalist vibe
+            "**{name}** — the glow-up pick ✨\n{bullets}\n\n{cta} {url}\n\n{hashtags}",
+
+            # 4) Concierge voice
+            "{opener}\nYour self-care pick: **{name}** 🌿\n{bullets}\n\n{cta}\n{url}\n\n{hashtags}",
+
+            # 5) Social proof lead
+            "{opener}\nClients can’t stop booking **{name}** 💬\n{bridge}\n{bullets}\n\n{cta}\n{url}\n\n{hashtags}",
+
+            # 6) Short & punchy
+            "**{name}**. Little time, big impact. ⚡\n{bullets}\n\n{cta} {url}\n\n{hashtags}",
+
+            # 7) Dialogue vibe
+            "{opener}\nLet me save you a scroll — try **{name}** today 🙌\n{bridge}\n{bullets}\n\n{cta}\n{url}\n\n{hashtags}",
+
+            # 8) Momentum / energy
+            "Ready for **{name}**? Let’s make it happen 🚀\n{bullets}\n\n{cta}\n{url}\n\n{hashtags}",
+
+            # 9) Care / nurture tone
+            "Gentle nudge from {ai_name}: book **{name}** and breathe a little easier today 💖\n{bullets}\n\n{cta}\n{url}\n\n{hashtags}",
+
+            # 10) “List-first”
+            "{opener}\nTop reasons **{name}** is a win:\n{bullets}\n\n{cta} {url}\n\n{hashtags}",
+        ]
+        shell = rng.choice(shells)
+
+        # Build caption
+        caption = shell.format(
+            opener=opener,
+            name=name,
+            bridge=bridge,
+            bullets=bullets,
+            cta=cta,
+            url=link_for_caption,
+            hashtags=hashtags,
+            ai_name=ai_name,
+        )
+
+        if fomo_line:
+            caption += f"\n\n{fomo_line}"
+        if coupon and rng.random() < 0.9:
+            caption += "\n\n" + coupon_line(coupon)
+        if ps_line:
+            caption += f"\n\n{ps_line}"
+
+        # Persist channel delivery marker (only when not previewing)
         if not preview_only:
             channels = set(summary.delivered_channels or [])
             channels.add("ig_caption")
             summary.delivered_channels = sorted(list(channels))
             summary.save(update_fields=["delivered_channels"])
 
-        return Response({
-            "ok": True,
-            "caption": caption,
-            "share_url": universal_link,   # keep for IG
-            "deep_link": deep_link,        # opens app directly (fidden://book/<id>)
-            "preview_only": preview_only,
-        }, status=status.HTTP_200_OK)
-        
+        return Response(
+            {
+                "ok": True,
+                "caption": caption,
+                "share_url": share_url,
+                "deep_link": deep_link,
+                "preview_only": preview_only,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 # -------------------------------
 # 2️⃣ Send Retention Email
@@ -1674,63 +1912,127 @@ class SendLoyaltyEmailView(APIView):
 
         summary = get_object_or_404(WeeklySummary, id=summary_id, shop=shop)
 
-        # Step 1. Create 10% coupon valid 7 days
+        # ---------- 1) Create 10% coupon valid 7 days ----------
         valid_until = timezone.now().date() + timedelta(days=7)
-        coupon = Coupon.objects.create(
-            shop=shop,
-            description="Next Week Loyalty Boost (10% off)",
-            amount=10,
-            in_percentage=True,
-            validity_date=valid_until,
-            is_active=True,
-        )
 
-        # Step 2. Find clients who haven’t rebooked since the summary period
+        with transaction.atomic():
+            coupon = Coupon.objects.create(
+                shop=shop,
+                description="Next Week Loyalty Boost (10% off)",
+                amount=10,
+                in_percentage=True,
+                validity_date=valid_until,
+                is_active=not preview_only,  # keep inactive for previews
+            )
+
+        # ---------- 2) Build audience ----------
+        # Clients who completed during the summary window…
         recent_clients = (
-            Booking.objects.filter(shop=shop, status="completed")
+            Booking.objects.filter(
+                shop=shop,
+                status="completed",
+                created_at__date__gte=summary.week_start_date,
+                created_at__date__lte=summary.week_end_date,
+            )
             .values_list("user__email", flat=True)
             .distinct()
         )
 
+        # …who have NOT rebooked since the summary ended
         rebooked = set(
-            Booking.objects.filter(shop=shop, created_at__gte=summary.week_end_date)
+            Booking.objects.filter(
+                shop=shop,
+                created_at__date__gte=summary.week_end_date,
+            )
             .values_list("user__email", flat=True)
             .distinct()
         )
 
-        target_emails = [email for email in recent_clients if email not in rebooked]
+        target_emails = sorted(
+            {e.strip().lower() for e in recent_clients if e and e.strip()} - {e for e in rebooked if e}
+        )
 
-        # Step 3. Compose the email
-        subject = f"Next Week Loyalty Boost from {shop.name} 💈"
-        message = (
+        # ---------- 3) Compose message ----------
+        subj_base = f"Next Week Loyalty Boost from {shop.name} 💈"
+        subject = f"[PREVIEW] {subj_base}" if preview_only else subj_base
+
+        # Deep link for ShopDetailsScreen
+        booking_url = f"fidden://shop/{shop.id}?coupon={coupon.code}"
+
+        text_message = (
             f"Hey there!\n\n"
             f"We miss you at {shop.name}! As a thank-you, here's a 10% off coupon if you book within the next 7 days.\n\n"
-            f"Use code **{coupon.code}** at checkout.\n"
+            f"Use code {coupon.code} at checkout.\n"
             f"Valid until {valid_until.strftime('%b %d, %Y')}.\n\n"
-            f"Book now 👉 https://your-app.com/shops/{shop.id}?coupon={coupon.code}\n\n"
+            f"Book now 👉 {booking_url}\n\n"
             f"See you soon!\n— {shop.name}"
         )
 
-        # Step 4. Send emails (or preview)
-        if not preview_only:
-            for email in target_emails:
-                if email:
-                    send_mail(
-                        subject=subject,
-                        message=message,
-                        from_email="noreply@your-app.com",
-                        recipient_list=[email],
-                        fail_silently=True,
-                    )
-            summary.delivered_channels = list(set(summary.delivered_channels + ["email_retention"]))
+        html_message = f"""
+            <p>Hey there!</p>
+            <p>We miss you at <strong>{shop.name}</strong>! As a thank-you, here’s a <strong>10% off</strong> coupon if you book within the next 7 days.</p>
+            <p><strong>Code:</strong> {coupon.code}<br/>
+               <strong>Valid until:</strong> {valid_until.strftime('%b %d, %Y')}</p>
+            <p><a href="{booking_url}">Book now</a></p>
+            <p>See you soon!<br/>— {shop.name}</p>
+        """
+
+        # ---------- 4) Send (or preview) ----------
+        if not preview_only and target_emails:
+            # Send in a single connection for performance; batch in chunks of 100
+            sent = 0
+            chunk_size = 100
+            from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@your-app.com")
+            reply_to = [getattr(settings, "SUPPORT_EMAIL", from_email)]
+
+            with get_connection() as conn:
+                for i in range(0, len(target_emails), chunk_size):
+                    batch = target_emails[i : i + chunk_size]
+                    messages = []
+                    for email in batch:
+                        msg = EmailMultiAlternatives(
+                            subject=subject,
+                            body=text_message,
+                            from_email=from_email,
+                            to=[email],
+                            reply_to=reply_to,
+                            connection=conn,
+                        )
+                        msg.attach_alternative(html_message, "text/html")
+                        messages.append(msg)
+                    try:
+                        sent += conn.send_messages(messages) or 0
+                    except Exception:
+                        logger.exception("Failed sending loyalty emails batch for shop=%s", shop.id)
+
+            # stamp channel once delivered
+            delivered = set(summary.delivered_channels or [])
+            delivered.add("email_retention")
+            summary.delivered_channels = list(delivered)
             summary.save(update_fields=["delivered_channels"])
 
-        return Response({
-            "ok": True,
-            "coupon_code": coupon.code,
-            "valid_until": str(valid_until),
-            "subject": subject,
-            "preview_message": message,
-            "audience_size": len(target_emails),
-            "preview_only": preview_only,
-        })
+            return Response(
+                {
+                    "ok": True,
+                    "coupon_code": coupon.code,
+                    "valid_until": str(valid_until),
+                    "subject": subject,
+                    "audience_size": len(target_emails),
+                    "sent": sent,
+                    "preview_only": False,
+                }
+            )
+
+        # PREVIEW response (no delivery)
+        return Response(
+            {
+                "ok": True,
+                "coupon_code": coupon.code,
+                "valid_until": str(valid_until),
+                "subject": subject,
+                "preview_text": text_message,
+                "preview_html": html_message,
+                "audience_size": len(target_emails),
+                "preview_only": True,
+            }
+        )
