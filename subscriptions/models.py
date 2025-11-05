@@ -100,7 +100,7 @@ class SubscriptionPlan(models.Model):
             return 0
         return self.PRIORITY_BASE_WEIGHT + self.tier_weight * self.TIER_MULTIPLIER
 
-
+# in subscriptions/models.py
 class ShopSubscription(models.Model):
     STATUS_ACTIVE = "active"
     STATUS_EXPIRED = "expired"

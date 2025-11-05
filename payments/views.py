@@ -764,9 +764,18 @@ class StripeWebhookView(APIView):
         # ------------------------------------------------------------------
         # Payment-related events
         # ------------------------------------------------------------------
-        if event_type == "payment_intent.succeeded":
+        # Subscription created or updated
+        if event_type in ("customer.subscription.created", "customer.subscription.updated"):
+            self.handle_subscription_created_or_updated(data)
+
+        # Payment succeeded
+        elif event_type == "payment_intent.succeeded":
             self._update_payment_status(data, "succeeded")
             return Response(status=200)
+
+        # Handle AI add-on and other events
+        elif event_type == "checkout.session.completed":
+            self.handle_checkout_session_completed(data)
         elif event_type == "payment_intent.payment_failed":
             self._update_payment_status(data, "failed")
             return Response(status=200)
@@ -1250,6 +1259,126 @@ class StripeWebhookView(APIView):
         # ------------------------------------------------------------------
         logger.warning("⚠️ Unhandled event: %s", event_type)
         return Response(status=200)
+    
+    
+    def handle_subscription_created_or_updated(self, data):
+        sub = data
+        ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+        price_ids = [
+            it["price"]["id"]
+            for it in (sub.get("items", {}).get("data") or [])
+        ]
+        is_ai_addon = (
+            sub.get("metadata", {}).get("addon") == "ai_assistant"
+            or (ai_price_id and ai_price_id in price_ids)
+        )
+
+        if is_ai_addon:
+            shop = None
+            sid = (sub.get("metadata") or {}).get("shop_id")
+            if sid:
+                try:
+                    shop = Shop.objects.get(id=int(sid))
+                except Exception:
+                    shop = None
+
+            if shop and hasattr(shop, "subscription"):
+                ss = shop.subscription
+                ss.has_ai_addon = True
+                ss.ai_subscription_id = sub["id"]
+
+                ai_item = next(
+                    (
+                        it
+                        for it in (sub.get("items", {}).get("data") or [])
+                        if (it.get("price") or {}).get("id") == ai_price_id
+                    ),
+                    None,
+                )
+                ss.ai_subscription_item_id = (
+                    ai_item.get("id") if ai_item else None
+                )
+                ss.save(
+                    update_fields=[
+                        "has_ai_addon",
+                        "ai_subscription_id",
+                        "ai_subscription_item_id",
+                    ]
+                )
+
+                # Send Klaviyo event
+                self.send_klaviyo_event_for_ai_addon_started(shop, ss)
+
+        else:
+            _update_shop_from_subscription_obj(sub)
+
+    def handle_checkout_session_completed(self, data):
+        session = data
+        shop_ref = session.get("client_reference_id")
+        sub_id = session.get("subscription")
+
+        if sub_id:
+            sub = stripe.Subscription.retrieve(
+                sub_id,
+                expand=["items.data.price", "latest_invoice.payment_intent"]
+            )
+            sub_meta = sub.get("metadata") or {}
+            shop_hint = None
+
+            if shop_ref:
+                try:
+                    shop_hint = Shop.objects.get(id=int(shop_ref))
+                    logger.info("[checkout] resolved shop_hint=%s", shop_hint.id)
+                except Exception:
+                    logger.warning("[checkout] bad client_reference_id: %r", shop_ref)
+
+            if shop_hint:
+                self.send_klaviyo_event_for_subscription_purchased(shop_hint, sub, sub_meta)
+
+    def send_klaviyo_event_for_ai_addon_started(self, shop, ss):
+        email = shop.owner.email
+        profile_payload = build_profile_payload_for_shop(
+            shop=shop,
+            shop_sub=ss,
+            stripe_subscription_id=ss.ai_subscription_id,
+            price_id=None,
+            cancel_at_period_end=False,
+            is_canceled=False,
+            is_at_risk=False,
+        )
+        event_props = {
+            "shop_id": ss.shop.id,
+            "legacy_500": bool(ss.legacy_ai_promo_used),
+        }
+
+        send_klaviyo_event(
+            email=email,
+            event_name="AI Addon Started",
+            profile=profile_payload,
+            event_props=event_props,
+        )
+
+    def send_klaviyo_event_for_subscription_purchased(self, shop_hint, sub, sub_meta):
+        email = shop_hint.owner.email
+        profile_payload = build_profile_payload_for_shop(
+            shop=shop_hint,
+            plan=sub_meta.get("plan"),
+            stripe_subscription_id=sub.get("id"),
+            cancel_at_period_end=False,
+            is_canceled=False,
+            is_at_risk=False
+        )
+        event_props = {
+            "shop_id": shop_hint.id,
+            "plan_status": sub_meta.get("plan_status"),
+        }
+
+        send_klaviyo_event(
+            email=email,
+            event_name="Subscription Purchased",
+            profile=profile_payload,
+            event_props=event_props,
+        )
 
     # ---------------------------------
     # helper on the view (unchanged)
