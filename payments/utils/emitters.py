@@ -10,7 +10,7 @@ def ts_to_iso(ts):
     # robust for int/None
     return datetime.fromtimestamp(int(ts), tz=datetime.timezone.utc).isoformat()
 
-def emit_subscription_updated_to_zapier(*, sub, shop, previous_plan_name: str, current_plan_name: str):
+def emit_subscription_updated_to_zapier(sub, shop, previous_plan_name, current_plan_name, extra_fields=None):
     """
     sub: stripe.Subscription (expanded with items & latest_invoice.*)
     shop: Shop model instance
@@ -45,22 +45,34 @@ def emit_subscription_updated_to_zapier(*, sub, shop, previous_plan_name: str, c
     price_id = ((items[0] or {}).get("price") or {}).get("id") if items else None
 
     payload = {
-        "event": "Subscription Updated",
-        "email": shop.owner.email if getattr(shop, "owner", None) else None,
+        "event_name": "Subscription Updated",
+        "metric": "Subscription Updated",
+        "email": getattr(shop.owner, "email", None),
         "shop_id": shop.id,
-        "shop_name": shop.name,
+        "shop_name": getattr(shop, "name", None),
         "subscription_id": sub.get("id"),
         "price_id": price_id,
         "previous_plan": previous_plan_name,
         "current_plan": current_plan_name,
-        "plan_status": sub.get("status"),  # 'active' etc.
-        "period_start_iso": period_start_iso,
-        "period_end_iso": period_end_iso,
-        "next_billing_date_iso": ts_to_iso(sub.get("current_period_end")),  # or sub.get('billing_cycle_anchor') if you prefer
+        "plan_status": sub.get("status"),
+        "period_start_iso": ts_to_iso(sub.get("current_period_start")),
+        "period_end_iso": ts_to_iso(sub.get("current_period_end")),
+        "next_billing_date_iso": ts_to_iso(sub.get("current_period_end")),
         "invoice_id": invoice_id,
-        "amount_paid": amount_paid,  # cents
+        "payment_intent_id": payment_intent_id,
+        "charge_id": charge_id,
+        "amount_paid": amount_paid,
         "currency": currency,
+        "dedupe_key": f"{sub.get('id')}:{ts_to_iso(sub.get('current_period_start'))}",
     }
+
+    if extra_fields:
+        payload.update(extra_fields)
+
+    try:
+        requests.post(settings.ZAPIER_KLAVIYO_WEBHOOK, json=payload, timeout=10)
+    except Exception:
+        logger.exception("[zapier] emit_subscription_updated_to_zapier failed")
 
     try:
         hook = settings.ZAPIER_SUBSCRIPTION_UPDATED_HOOK

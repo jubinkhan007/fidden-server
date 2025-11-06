@@ -108,6 +108,7 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
         shop=shop,
         previous_plan_name=previous_plan_name,
         current_plan_name=new_plan.name,
+        extra_fields={"shop_name": getattr(shop, "name", None)},  # <- added
     )
 
 
@@ -1049,6 +1050,10 @@ class StripeWebhookView(APIView):
 
                         event_props = {
                             "shop_id": shop_sub.shop.id,
+                            "shop_name": getattr(shop_sub.shop, "name", None),
+                            "previous_plan": getattr(getattr(shop_sub, "plan", None), "name", None),
+                            "current_plan": "Canceled",
+                            "status": "canceled",
                             "reason": "user_cancelled",
                         }
 
@@ -1058,7 +1063,6 @@ class StripeWebhookView(APIView):
                             profile=profile_payload,
                             event_props=event_props,
                         )
-
             except Exception as e:
                 logger.error("[klaviyo] cancel sync failed: %s", e, exc_info=True)
 
