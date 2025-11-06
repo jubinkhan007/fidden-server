@@ -678,11 +678,13 @@ class StripeWebhookView(APIView):
         elif event_type == "payment_intent.canceled":
             self._update_payment_status(data, "cancelled")
             return Response(status=200)
+        
+        # Ignore charge events; they are redundant with payment_intent events
         elif event_type == "charge.succeeded":
-            self._update_payment_status(data, "succeeded")
+            logger.info("Ignoring charge.succeeded, handled by payment_intent.succeeded")
             return Response(status=200)
         elif event_type == "charge.failed":
-            self._update_payment_status(data, "failed")
+            logger.info("Ignoring charge.failed, handled by payment_intent.failed")
             return Response(status=200)
 
         # ------------------------------------------------------------------
