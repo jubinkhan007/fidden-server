@@ -44,7 +44,14 @@ def generate_weekly_ai_reports(self):
     prev_start = start_dt - timedelta(days=7)
     prev_end = start_dt
 
-    eligible_shops = Shop.objects.select_related("owner").all()
+    eligible_shops = Shop.objects.select_related(
+        "owner", "subscription", "subscription__plan"
+    ).filter(
+        # EITHER the plan includes AI (like Icon)
+        Q(subscription__plan__ai_assistant=SubscriptionPlan.AI_INCLUDED) |
+        # OR the user has purchased the AI add-on
+        Q(subscription__has_ai_addon=True)
+    ).distinct()
     if not eligible_shops.exists():
         logger.info("No shops eligible for AI reports this week.")
         return "No shops"

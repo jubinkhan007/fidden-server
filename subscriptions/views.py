@@ -231,27 +231,53 @@ class CreateAIAddonCheckoutSessionView(APIView):
     def post(self, request):
         try:
             shop = request.user.shop
-            # Get the subscription *object* to check flags
             shop_sub = getattr(shop, "subscription", None)
             if not shop_sub:
                 return Response({"error": "Shop subscription details not found."}, status=status.HTTP_404_NOT_FOUND)
-
         except Shop.DoesNotExist:
             return Response({"error": "Create a shop first."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Basic eligibility check (already existing logic - combined for clarity)
+        # 1. Basic eligibility check (unchanged)
         if shop_sub.has_ai_addon:
              return Response({"error": "AI Assistant add-on already active."}, status=status.HTTP_400_BAD_REQUEST)
         if getattr(shop_sub.plan, 'ai_assistant', 'addon') == 'included':
              return Response({"error": "AI Assistant already included in your plan."}, status=status.HTTP_400_BAD_REQUEST)
-        # Add any other plan restrictions if needed
 
         ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
         if not ai_price_id:
             return Response({"error": "AI add-on price not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        promo_code_input = request.data.get("promo_code", None)
         legacy_promo_code_id = getattr(settings, "STRIPE_LEGACY_PROMO_CODE_ID", None)
+        apply_legacy_promo = False
+
+        # --- 2. START: AUTOMATIC LEGACY PROMO CHECK ---
+        # Instead of checking user input, we proactively check if the user is eligible.
+        if legacy_promo_code_id and not shop_sub.legacy_ai_promo_used:
+            try:
+                # Check Stripe Promo Code status (active and within limit)
+                stripe_promo = stripe.PromotionCode.retrieve(legacy_promo_code_id, expand=["coupon"])
+                coupon = stripe_promo.coupon
+                
+                if stripe_promo.active and coupon.times_redeemed < coupon.max_redemptions:
+                    # If the code is valid and user hasn't used it, flag it to be applied
+                    apply_legacy_promo = True
+                    logger.info(f"Shop {shop.id} is eligible for LEGACY500. Applying automatically.")
+                else:
+                    logger.warning(
+                        f"LEGACY500 promo {legacy_promo_code_id} is no longer valid (active={stripe_promo.active}, "
+                        f"redeemed={coupon.times_redeemed}/{coupon.max_redemptions})."
+                    )
+                    
+            except stripe.error.InvalidRequestError as e:
+                 logger.error(f"Error checking STRIPE_LEGACY_PROMO_CODE_ID '{legacy_promo_code_id}': {e}")
+                 # Don't crash, just proceed without the discount.
+            except Exception as e:
+                 logger.error(f"Unexpected error checking legacy promo code: {e}", exc_info=True)
+                 # Don't crash, just proceed without the discount.
+        
+        elif shop_sub.legacy_ai_promo_used:
+            logger.info(f"Shop {shop.id} has already redeemed LEGACY500. Skipping auto-apply.")
+        # --- END: AUTOMATIC LEGACY PROMO CHECK ---
 
         success_url = request.build_absolute_uri(reverse("checkout_return")) + "?session_id={CHECKOUT_SESSION_ID}"
         cancel_url  = request.build_absolute_uri(reverse("checkout_cancel"))
@@ -269,67 +295,26 @@ class CreateAIAddonCheckoutSessionView(APIView):
                 "subscription_data": {
                     "metadata": {"shop_id": str(shop.id), "addon": "ai_assistant"}
                 },
-                "allow_promotion_codes": True, # Allow other codes by default
             }
 
-            # --- LEGACY500 PROMO CODE LOGIC ---
-            if promo_code_input and promo_code_input.upper() == "LEGACY500":
-                
-                # 1. Check if user already used this promo
-                if shop_sub.legacy_ai_promo_used:
-                    logger.warning(f"Shop {shop.id} attempted to reuse LEGACY500 promo.")
-                    return Response(
-                        {"error": "This promotion code has already been redeemed for your account."},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
-                if not legacy_promo_code_id:
-                     logger.error("LEGACY500 code entered, but STRIPE_LEGACY_PROMO_CODE_ID not set.")
-                     return Response({"error": "Legacy promotion configuration error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-                # 2. Check Stripe Promo Code status (active and within limit)
-                try:
-                    stripe_promo = stripe.PromotionCode.retrieve(legacy_promo_code_id, expand=["coupon"])
-                    
-                    # Check if promotion code itself is active
-                    if not stripe_promo.active:
-                        logger.warning(f"LEGACY500 promotion code ID {legacy_promo_code_id} is inactive in Stripe.")
-                        return Response({"error": "This promotion code is no longer valid."}, status=status.HTTP_400_BAD_REQUEST)
-                        
-                    # Check the underlying coupon's redemption count
-                    coupon = stripe_promo.coupon
-                    if coupon.times_redeemed >= coupon.max_redemptions:
-                        logger.warning(f"LEGACY500 coupon ID {coupon.id} has reached its redemption limit ({coupon.times_redeemed}/{coupon.max_redemptions}).")
-                        # Optionally deactivate the promotion code in Stripe now
-                        # stripe.PromotionCode.update(legacy_promo_code_id, active=False)
-                        return Response({"error": "This promotion code has reached its redemption limit."}, status=status.HTTP_400_BAD_REQUEST)
-
-                except stripe.error.InvalidRequestError as e:
-                     # Handle case where Promo Code ID is invalid
-                     if "No such promotion_code" in str(e):
-                          logger.error(f"STRIPE_LEGACY_PROMO_CODE_ID '{legacy_promo_code_id}' is invalid or does not exist.")
-                          return Response({"error": "Legacy promotion configuration error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                     raise e # Re-raise other Stripe errors
-
-                # 3. Apply the discount automatically
-                checkout_params.pop("allow_promotion_codes", None)
+            # --- 3. APPLY PROMO IF FLAG IS SET ---
+            if apply_legacy_promo:
+                # Apply the discount automatically
                 checkout_params["discounts"] = [{"promotion_code": legacy_promo_code_id}]
-                logger.info(f"Applying LEGACY500 promo code ID: {legacy_promo_code_id} for shop {shop.id}")
-
-            # --- END LEGACY500 LOGIC ---
+                logger.info(f"Automatically applying LEGACY500 promo code ID: {legacy_promo_code_id} for shop {shop.id}")
+            else:
+                # Otherwise, just allow other codes to be entered manually
+                checkout_params["allow_promotion_codes"] = True
 
             checkout_session = stripe.checkout.Session.create(**checkout_params)
             return Response({"url": checkout_session.url}, status=status.HTTP_200_OK)
             
-        except stripe.error.InvalidRequestError as e:
-             # Handle specific errors like expired promo codes if needed
-             logger.error(f"Stripe InvalidRequestError for AI add-on checkout: {e}")
-             return Response({"error": str(e), "code": "STRIPE_INVALID_REQUEST"}, status=status.HTTP_400_BAD_REQUEST)
+        except stripe.error.StripeError as e:
+             logger.error(f"Stripe error for AI add-on checkout: {e}", exc_info=True)
+             return Response({"error": str(e), "code": "STRIPE_ERROR"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            logger.exception("Stripe error creating checkout session for AI add-on: %s", e)
-            return Response({"error": "Could not create checkout session.", "code": "STRIPE_ERROR"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        return Response({"url": checkout_session.url}, status=200)
-
+            logger.exception("Unexpected error creating checkout session for AI add-on: %s", e)
+            return Response({"error": "Could not create checkout session.", "code": "UNEXPECTED_ERROR"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 
@@ -512,7 +497,9 @@ class CreateSubscriptionCheckoutSessionView(APIView):
 
 class CancelSubscriptionView(APIView):
     """
-    Cancels a user's active paid subscription and reverts them to the Foundation plan.
+    Cancels a user's active paid subscription by deleting it in Stripe.
+    The 'customer.subscription.deleted' webhook will handle downgrading
+    the plan in the local database.
     """
     permission_classes = [IsAuthenticated]
 
@@ -522,24 +509,51 @@ class CancelSubscriptionView(APIView):
             shop_subscription = shop.subscription
         except Shop.DoesNotExist:
             return Response({"error": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+        except ShopSubscription.DoesNotExist:
+            # This can happen if the subscription row was deleted, but check plan just in case
+            return Response({"error": "Subscription not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # If there's no Stripe ID, they are already on the free plan
         if not shop_subscription.stripe_subscription_id:
+            # Just in case, ensure they are on Foundation
+            try:
+                foundation_plan = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                if shop_subscription.plan != foundation_plan:
+                    shop_subscription.plan = foundation_plan
+                    shop_subscription.save(update_fields=["plan"])
+            except SubscriptionPlan.DoesNotExist:
+                pass
             return Response({"message": "You are currently on the free Foundation plan."}, status=status.HTTP_200_OK)
 
         try:
-            # Cancel the subscription in Stripe immediately
+            # ONLY delete the subscription in Stripe.
+            # DO NOT change the local database here.
             stripe.Subscription.delete(shop_subscription.stripe_subscription_id)
             
-            # Revert to the Foundation plan in our database
-            foundation_plan = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
-            shop_subscription.plan = foundation_plan
-            shop_subscription.status = ShopSubscription.STATUS_ACTIVE
-            shop_subscription.stripe_subscription_id = None
-            shop_subscription.start_date = timezone.now()
-            shop_subscription.end_date = timezone.now() + relativedelta(years=100) # Long expiry for free plan
-            shop_subscription.save()
+            logger.info(f"User {request.user.email} initiated Stripe cancellation for sub: {shop_subscription.stripe_subscription_id}")
             
-            return Response({"message": "Subscription cancelled successfully. You are now on the Foundation plan."}, status=status.HTTP_200_OK)
+            # The webhook will handle all database changes and Zapier events.
+            return Response({"message": "Subscription cancellation initiated. Your plan will be updated shortly."}, status=status.HTTP_200_OK)
+        
+        except stripe.error.InvalidRequestError as e:
+            # Handle cases where the subscription is already canceled in Stripe
+            if "No such subscription" in str(e):
+                logger.warning(f"Sub {shop_subscription.stripe_subscription_id} not found in Stripe, but was in DB. Forcing downgrade locally.")
+                # Force the downgrade locally as Stripe already deleted it.
+                try:
+                    foundation = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                    shop_subscription.plan = foundation
+                    shop_subscription.status = ShopSubscription.STATUS_ACTIVE
+                    shop_subscription.stripe_subscription_id = None
+                    shop_subscription.end_date = timezone.now() + relativedelta(years=100)
+                    shop_subscription.save()
+                except Exception as db_e:
+                    logger.error(f"Failed to force downgrade for sub {shop_subscription.stripe_subscription_id}: {db_e}")
+                
+                return Response({"message": "Subscription is already inactive."}, status=status.HTTP_200_OK)
+            else:
+                logger.error(f"Stripe error cancelling subscription: {e}")
+                return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.error(f"Unexpected error cancelling subscription: {e}", exc_info=True)
+            return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

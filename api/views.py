@@ -13,6 +13,8 @@ from django.core.cache import cache
 from django.core.mail import send_mail
 from django.utils.timezone import make_aware
 from django.core.mail import EmailMultiAlternatives, get_connection
+
+from subscriptions.models import SubscriptionPlan
 from .models import (
     AutoFillLog,
     PerformanceAnalytics,
@@ -1486,15 +1488,27 @@ class AIReportView(APIView):
 
     def get(self, request):
         """
-        Return a weekly-style AI report using fields that actually exist:
-        - PerformanceAnalytics: total_bookings, total_revenue, top_service, updated_at
-        - AutoFillLog: count filled no-shows (last 7 days)
-        - Slot: forecast open slots (next 7 days)
+        Return a weekly-style AI report using fields that actually exist.
+        *** MUST have an active AI entitlement. ***
         """
         try:
             shop = request.user.shop
         except Shop.DoesNotExist:
             return Response({"error": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # --- START: AI ENTITLEMENT CHECK ---
+        subscription = getattr(shop, 'subscription', None)
+        ai_enabled = False
+        if subscription and subscription.plan:
+            if subscription.plan.ai_assistant == SubscriptionPlan.AI_INCLUDED or subscription.has_ai_addon:
+                ai_enabled = True
+        
+        if not ai_enabled:
+            return Response(
+                {"detail": "This feature requires an active AI Assistant subscription."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        # --- END: AI ENTITLEMENT CHECK ---
 
         # latest analytics row by timestamp you actually have
         latest = (
@@ -1503,13 +1517,15 @@ class AIReportView(APIView):
             .order_by('-updated_at')
             .first()
         )
+        # ... (rest of the view is fine)
+        
         if not latest:
-            return Response({"error": "No AI report available yet."}, status=status.HTTP_404_NOT_FOUND)
-
+             return Response({"error": "No AI report available yet."}, status=status.HTTP_404_NOT_FOUND)
+ 
         now = timezone.now()
         week_ago = now - timedelta(days=7)
         next_week = now + timedelta(days=7)
-
+ 
         # no-shows filled automatically (use AutoFillLog as proxy)
         # count any log with a successfully filled booking over the last week
         filled_noshows = AutoFillLog.objects.filter(
@@ -1517,7 +1533,7 @@ class AIReportView(APIView):
             created_at__gte=week_ago,
             filled_by_booking__isnull=False
         ).count()
-
+ 
         # simple forecast: count open slots in the next 7 days
         open_slots = Slot.objects.filter(
             shop=shop,
@@ -1525,7 +1541,7 @@ class AIReportView(APIView):
             start_time__lte=next_week,
             capacity_left__gt=0
         ).count()
-
+ 
         # map to your AI UI schema
         data = {
             "total_appointments": latest.total_bookings or 0,
@@ -1541,9 +1557,7 @@ class AIReportView(APIView):
         return Response(data, status=status.HTTP_200_OK)
 
     def post(self, request):
-        """
-        Save the chosen AI partner for the authenticated user's shop.
-        """
+        # ... (your existing post logic is fine)
         partner_name = request.data.get("partner_name")
         if partner_name not in {"Malik", "Amara", "Dre", "Zuri"}:
             return Response({"error": "Invalid partner name."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1563,22 +1577,34 @@ class LatestWeeklySummaryView(APIView):
     """
     GET /weekly-summary/latest/
     Returns the most recent WeeklySummary for the logged-in provider.
-    Used by the Flutter 'Weekly Recap' screen.
+    *** MUST have an active AI entitlement. ***
     """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-
-        # Assumption: 1 owner ↔ 1 shop. If you support multiple shops per owner,
-        # filter by ?shop_id=... instead.
-        shop = Shop.objects.filter(owner=user).first()
+        shop = Shop.objects.filter(owner=user).select_related("subscription__plan").first()
+        
         if not shop:
             return Response(
                 {"detail": "No shop found for this user."},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        # --- START: AI ENTITLEMENT CHECK ---
+        subscription = getattr(shop, 'subscription', None)
+        ai_enabled = False
+        if subscription and subscription.plan:
+            if subscription.plan.ai_assistant == SubscriptionPlan.AI_INCLUDED or subscription.has_ai_addon:
+                ai_enabled = True
+        
+        if not ai_enabled:
+            return Response(
+                {"detail": "This feature requires an active AI Assistant subscription."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        # --- END: AI ENTITLEMENT CHECK ---
 
         summary = (
             WeeklySummary.objects

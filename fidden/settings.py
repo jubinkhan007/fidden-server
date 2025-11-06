@@ -3,8 +3,10 @@
 import os
 from pathlib import Path
 from datetime import timedelta
+import ssl
 from dotenv import load_dotenv
 import json
+import urllib.parse as urlparse
 
 
 # Load .env file
@@ -106,16 +108,57 @@ TEMPLATES = [
 WSGI_APPLICATION = 'fidden.wsgi.application'
 
 # Channels / Redis with env-based config and safe fallback (best for free Render)
+# ==============================
+# Helper logic to clean Redis URL
+# ==============================
+
+# Get the raw URL from the environment
+RAW_REDIS_URL = os.getenv("REDIS_URL")
+CLEAN_REDIS_URL = RAW_REDIS_URL
+SSL_OPTIONS = {}
+
+if RAW_REDIS_URL and RAW_REDIS_URL.startswith("rediss://"):
+    # This is an SSL connection, set the correct SSL constant
+    SSL_OPTIONS = {"ssl_cert_reqs": ssl.CERT_NONE}
+    
+    try:
+        # Parse the URL
+        parsed_url = urlparse.urlparse(RAW_REDIS_URL)
+        
+        # Parse query parameters
+        query_params = urlparse.parse_qs(parsed_url.query)
+        
+        # Remove the problematic key if it exists
+        query_params.pop('ssl_cert_reqs', None)
+        
+        # Rebuild the query string
+        new_query = urlparse.urlencode(query_params, doseq=True)
+        
+        # Reconstruct the URL without the problematic param
+        CLEAN_REDIS_URL = parsed_url._replace(query=new_query).geturl()
+        
+    except Exception as e:
+        # Fallback in case of parsing error
+        print(f"Warning: Could not parse REDIS_URL, proceeding with raw URL. Error: {e}")
+        CLEAN_REDIS_URL = RAW_REDIS_URL
+
+# ==============================
+# Channels / Redis
+# ==============================
 ASGI_APPLICATION = "fidden.asgi.application"
 
-REDIS_URL = os.getenv("REDIS_URL")
 CHANNEL_LAYER_BACKEND = os.getenv("CHANNEL_LAYER_BACKEND", "memory").lower()
 
-if CHANNEL_LAYER_BACKEND == "redis" and REDIS_URL:
+if CHANNEL_LAYER_BACKEND == "redis" and RAW_REDIS_URL:
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
-            "CONFIG": {"hosts": [REDIS_URL]},
+            "CONFIG": {
+                # Use the CLEANED URL here
+                "hosts": [CLEAN_REDIS_URL],
+                # Pass the SSL options generated above
+                **SSL_OPTIONS, 
+            },
         },
     }
 else:
@@ -124,7 +167,6 @@ else:
             "BACKEND": "channels.layers.InMemoryChannelLayer",
         }
     }
-
 # ==============================
 # Database
 # ==============================
@@ -273,10 +315,18 @@ STRIPE_LEGACY_PROMO_CODE_ID = os.environ.get("STRIPE_LEGACY_PROMO_CODE_ID")
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.getenv("REDIS_URL", "redis://127.0.0.1:6379/1"),
-        "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"},
+        # Use the CLEANED URL here
+        "LOCATION": CLEAN_REDIS_URL or "redis://127.0.0.1:6379/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "CONNECTION_POOL_KWARGS": {
+                # Pass the SSL options generated above
+                **SSL_OPTIONS
+            }
+        },
     }
 }
+
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 

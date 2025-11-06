@@ -37,8 +37,10 @@ from api.models import Slot
 from api.serializers import SlotSerializer
 from django.db import DatabaseError, transaction
 from dateutil.relativedelta import relativedelta
+from datetime import timezone
 from django.utils import timezone
-import datetime
+import datetime as dt
+from django.core.cache import cache
 
 
 logger = logging.getLogger(__name__)
@@ -46,20 +48,57 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 STRIPE_ENDPOINT_SECRET = settings.STRIPE_ENDPOINT_SECRET
 
-# paymetns/views.py
+
+def _resolve_shop_for_subscription(sub) -> Shop | None:
+    """
+    Best-effort resolver for which Shop this Stripe subscription belongs to.
+    Priority:
+      1) subscription.metadata.shop_id
+      2) existing ShopSubscription with same stripe_subscription_id
+      3) subscription.customer → UserStripeCustomer → that user's shop (first)
+    """
+    try:
+        # 1) metadata.shop_id
+        sid = (sub.get("metadata") or {}).get("shop_id")
+        if sid:
+            try:
+                return Shop.objects.get(id=int(sid))
+            except Shop.DoesNotExist:
+                pass
+
+        # 2) existing ShopSubscription link
+        ss = (
+            ShopSubscription.objects
+            .filter(stripe_subscription_id=sub.get("id"))
+            .select_related("shop")
+            .first()
+        )
+        if ss:
+            return ss.shop
+
+        # 3) via customer
+        cust_id = sub.get("customer")
+        if cust_id:
+            usc = UserStripeCustomer.objects.filter(stripe_customer_id=cust_id).select_related("user").first()
+            if usc and usc.user:
+                # If owner has multiple shops, pick the one that already has a subscription row, else first one.
+                owner_shops = Shop.objects.filter(owner=usc.user).all()
+                if owner_shops:
+                    ss_for_owner = ShopSubscription.objects.filter(shop__in=owner_shops).select_related("shop").first()
+                    return ss_for_owner.shop if ss_for_owner else owner_shops.first()
+    except Exception:
+        logger.exception("Shop resolve failed for subscription %s", sub.get("id"))
+
+    return None
+
+
+
 def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
     """
     Persist the plan + period window from Stripe, then emit one Zapier event.
-    Assumes you call this from *one* webhook path (e.g., checkout.session.completed) or
-    you let cache idempotency suppress duplicates.
     """
-    # Ensure expanded subscription
-    if isinstance(sub_obj, dict):
-        sub_id = sub_obj.get("id")
-    else:
-        sub_id = sub_obj.id
-
-    # Fully expand to avoid the ListObject indexing error you saw
+    # Expand
+    sub_id = sub_obj.get("id") if isinstance(sub_obj, dict) else sub_obj.id
     sub = stripe.Subscription.retrieve(
         sub_id,
         expand=[
@@ -69,6 +108,16 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
             "latest_invoice.lines.data.period",
         ],
     )
+
+    cps = sub_obj.get("current_period_start")
+
+    # ✅ Safe cache-based dedupe (avoids .add() / CERT_NONE bug)
+    hold_key = f"zapier_hold_{sub_id}_{cps or ''}"
+    if cache.get(hold_key):
+        logger.info(f"[dedupe] Zapier update suppressed for {sub_id}")
+        return
+
+    cache.set(hold_key, True, timeout=30)  # 30 seconds hold window
 
     items = (sub.get("items") or {}).get("data") or []
     if not items:
@@ -82,34 +131,60 @@ def _update_shop_from_subscription_obj(sub_obj, shop_hint=None):
         logger.error("No SubscriptionPlan with stripe_price_id=%s", price_id)
         return
 
-    # Resolve shop (your existing logic) -> shop
-    shop = shop_hint  # implement/keep your resolver
+    # ✅ Resolve the shop properly
+    shop = shop_hint or _resolve_shop_for_subscription(sub)
     if not shop:
         logger.error("Cannot resolve shop for subscription %s", sub_id)
         return
 
-    # --- capture previous plan before overwriting ---
-    prev_sub = ShopSubscription.objects.filter(shop=shop).first()
+    # Ensure Stripe sub has metadata.shop_id for future webhooks
+    try:
+        meta = sub.get("metadata") or {}
+        if str(meta.get("shop_id")) != str(shop.id):
+            stripe.Subscription.modify(sub_id, metadata={**meta, "shop_id": str(shop.id)})
+    except Exception:
+        logger.exception("Failed to set subscription metadata.shop_id for %s", sub_id)
+
+    # Capture previous plan
+    prev_sub = ShopSubscription.objects.filter(shop=shop).select_related("plan").first()
     previous_plan_name = prev_sub.plan.name if (prev_sub and prev_sub.plan) else None
 
-    # --- persist the new plan/window (your existing write) ---
-    # example:
+    # Persist current window/plan
     ss, _ = ShopSubscription.objects.get_or_create(shop=shop)
     ss.plan = new_plan
-    ss.start_date = datetime.fromtimestamp(int(sub["current_period_start"]), tz=timezone.utc)
-    ss.end_date   = datetime.fromtimestamp(int(sub["current_period_end"]),   tz=timezone.utc)
+    period_start = (
+        sub.get("current_period_start")
+        or (sub.get("current_period") or {}).get("start")
+        or ((sub.get("items") or {}).get("data") or [{}])[0]
+            .get("price", {})
+            .get("recurring", {})
+            .get("interval")  # fallback only for debugging
+    )
+
+    period_end = (
+        sub.get("current_period_end")
+        or (sub.get("current_period") or {}).get("end")
+    )
+
+    if period_start and period_end:
+        ss.start_date = dt.datetime.fromtimestamp(int(period_start), tz=dt.timezone.utc)
+        ss.end_date   = dt.datetime.fromtimestamp(int(period_end),   tz=dt.timezone.utc)
+    else:
+        logger.warning("⚠️ Missing current_period_start/end for sub %s", sub_id)
+        # fallback: approximate 30-day cycle
+        ss.start_date = timezone.now()
+        ss.end_date   = timezone.now() + dt.timedelta(days=30)
     ss.status = "active" if sub.get("status") == "active" else sub.get("status")
     ss.stripe_subscription_id = sub_id
     ss.save()
 
-    # --- only now: emit ONE event with full context ---
     emit_subscription_updated_to_zapier(
         sub=sub,
         shop=shop,
         previous_plan_name=previous_plan_name,
         current_plan_name=new_plan.name,
-        extra_fields={"shop_name": getattr(shop, "name", None)},  # <- added
     )
+
 
 
 
@@ -530,7 +605,9 @@ def build_profile_payload_for_shop(
         "stripe_subscription_id": stripe_subscription_id,
         "price_id": price_id,
         "shop_id": getattr(shop, "id", None),
+        "shop_name": getattr(shop, "name", None),   # ✅ add this line
     }
+
 
 # payments/views.py
 @method_decorator(csrf_exempt, name="dispatch")
@@ -546,14 +623,12 @@ class StripeWebhookView(APIView):
         logger.info("Signature present: %s", bool(sig_header))
         logger.info("=" * 80)
 
-        # 1. Verify Stripe signature
+        # 1️⃣ Verify and parse event
         try:
             event = stripe.Webhook.construct_event(
-                payload,
-                sig_header,
-                settings.STRIPE_ENDPOINT_SECRET
+                payload, sig_header, settings.STRIPE_ENDPOINT_SECRET
             )
-            logger.info(" Webhook signature verified")
+            logger.info("Webhook signature verified")
         except ValueError as e:
             logger.error("❌ Invalid payload: %s", str(e))
             return Response({"error": "Invalid payload"}, status=400)
@@ -562,7 +637,16 @@ class StripeWebhookView(APIView):
             return Response({"error": "Invalid signature"}, status=400)
 
         event_type = event["type"]
+        event_id = event.get("id")
         data = event["data"]["object"]
+
+        # ✅ 2️⃣ Global dedupe: suppress duplicate event processing
+        burst_key = f"stripe_evt:{event_id}"
+        if cache.get(burst_key):
+            logger.info("⚠️ Duplicate Stripe event %s suppressed (already processed)", event_id)
+            return Response(status=200)
+
+        cache.set(burst_key, True, timeout=60)
 
         logger.info(
             "📨 Event: %s (livemode=%s, id=%s)",
@@ -866,12 +950,12 @@ class StripeWebhookView(APIView):
                             "cancel_at_period_end": bool(sub.get("cancel_at_period_end")),
                         }
 
-                        self.send_klaviyo_event(
-                            email=email,
-                            event_name="Subscription Updated",
-                            profile=profile_payload,
-                            event_props=event_props,
-                        )
+                        # self.send_klaviyo_event(
+                        #     email=email,
+                        #     event_name="Subscription Updated",
+                        #     profile=profile_payload,
+                        #     event_props=event_props,
+                        # )
 
             except Exception as e:
                 logger.error("[klaviyo] sub.updated Klaviyo sync failed: %s", e, exc_info=True)
@@ -946,6 +1030,12 @@ class StripeWebhookView(APIView):
         # customer.subscription.deleted
         # - Merchant cancelled or subscription ended
         # ------------------------------------------------------------------
+# payments/views.py (inside StripeWebhookView.post)
+
+        # ------------------------------------------------------------------
+        # customer.subscription.deleted
+        # - Merchant cancelled or subscription ended
+        # ------------------------------------------------------------------
         if event_type == "customer.subscription.deleted":
             stripe_sub = data  # Stripe subscription object that ended
 
@@ -960,115 +1050,133 @@ class StripeWebhookView(APIView):
             )
 
             # Try to locate the ShopSubscription row for this subscription
+            # This query will NOW WORK because the ID is no longer cleared first
             shop_sub = (
                 ShopSubscription.objects
                 .filter(stripe_subscription_id=stripe_sub.get("id"))
-                .select_related("shop", "plan")
+                .select_related("shop", "plan", "shop__owner") # Eager load owner
                 .first()
             )
 
             if is_ai_addon:
-                # AI add-on was cancelled
-                if shop_sub:
-                    ss = shop_sub
-                else:
-                    # fallback: try to infer shop via metadata.shop_id
-                    ss = None
+                # --- AI ADD-ON WAS CANCELLED ---
+                ss = shop_sub # Use the sub we just queried
+                if not ss:
+                    # Fallback: try to infer shop via metadata.shop_id
                     sid = (stripe_sub.get("metadata") or {}).get("shop_id")
                     if sid:
                         try:
-                            shop = Shop.objects.get(id=int(sid))
+                            # Need to select_related('subscription') here
+                            shop = Shop.objects.select_related("owner", "subscription", "subscription__plan").get(id=int(sid))
                             ss = getattr(shop, "subscription", None)
                         except Exception:
                             ss = None
 
                 if ss:
-                    # turn off AI flags
-                    ss.has_ai_addon = False
-                    ss.ai_subscription_id = None
-                    ss.ai_subscription_item_id = None
-                    ss.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
+                    try:
+                        # 1. Update the database flags
+                        ss.has_ai_addon = False
+                        ss.ai_subscription_id = None
+                        ss.ai_subscription_item_id = None
+                        ss.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
 
-                    # send Klaviyo "AI Addon Canceled"
-                    owner = ss.shop.owner
-                    email = getattr(owner, "email", None)
-                    if email:
-                        profile_payload = build_profile_payload_for_shop(
-                            shop=ss.shop,
-                            shop_sub=ss,
-                            stripe_subscription_id=getattr(ss, "stripe_subscription_id", None),
-                            price_id=getattr(getattr(ss, "plan", None), "stripe_price_id", None)
-                                if hasattr(ss, "plan") else None,
-                            cancel_at_period_end=False,
-                            is_canceled=False,   # base plan might still be active
-                            is_at_risk=False,
-                        )
+                        # 2. Send Klaviyo "AI Addon Canceled" event
+                        owner = ss.shop.owner
+                        email = getattr(owner, "email", None)
+                        if email:
+                            profile_payload = build_profile_payload_for_shop(
+                                shop=ss.shop,
+                                shop_sub=ss,
+                                stripe_subscription_id=stripe_sub.get("id"),
+                                price_id=None,
+                                cancel_at_period_end=False,
+                                is_canceled=True, # Mark as canceled
+                                is_at_risk=False,
+                            )
 
-                        event_props = {
-                            "shop_id": ss.shop.id,
-                            "reason": "ai_addon_cancelled",
-                        }
+                            event_props = {
+                                "shop_id": ss.shop.id,
+                                "shop_name": getattr(ss.shop, "name", None),
+                                "previous_plan": "AI Addon", # Specific to AI
+                                "current_plan": "Canceled",
+                                "status": "canceled",
+                                "reason": "user_cancelled",
+                            }
 
-                        self.send_klaviyo_event(
-                            email=email,
-                            event_name="AI Addon Canceled",
-                            profile=profile_payload,
-                            event_props=event_props,
-                        )
-
+                            self.send_klaviyo_event(
+                                email=email,
+                                event_name="AI Addon Canceled", # Use a specific event name
+                                profile=profile_payload,
+                                event_props=event_props,
+                            )
+                    except Exception as e:
+                        logger.error("[klaviyo] AI cancel sync failed: %s", e, exc_info=True)
+                
                 return Response(status=200)
 
-            # ELSE: base subscription canceled → fall back to your existing downgrade logic
-            try:
-                if shop_sub:
-                    # move them to Foundation "forever"
-                    try:
-                        foundation = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
-                    except SubscriptionPlan.DoesNotExist:
-                        foundation = None
+            else:
+                # --- BASE SUBSCRIPTION WAS CANCELLED ---
+                try:
+                    if shop_sub:
+                        # 1. Downgrade plan to Foundation
+                        try:
+                            foundation = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                        except SubscriptionPlan.DoesNotExist:
+                            foundation = None
 
-                    shop_sub.plan = foundation
-                    shop_sub.status = ShopSubscription.STATUS_ACTIVE  # stays usable in app
-                    shop_sub.stripe_subscription_id = None
-                    shop_sub.end_date = timezone.now() + relativedelta(years=100)
-                    shop_sub.save()
+                        previous_plan_name = shop_sub.plan.name if shop_sub.plan else "Unknown"
+                        
+                        shop_sub.plan = foundation
+                        shop_sub.status = ShopSubscription.STATUS_ACTIVE
+                        shop_sub.stripe_subscription_id = None # NOW we clear the ID
+                        shop_sub.end_date = timezone.now() + relativedelta(years=100)
+                        shop_sub.save()
 
-                    owner = shop_sub.shop.owner
-                    email = getattr(owner, "email", None)
+                        # 2. Get owner email
+                        owner = shop_sub.shop.owner
+                        email = getattr(owner, "email", None)
 
-                    if email:
-                        # build profile with plan_status="canceled"
-                        profile_payload = build_profile_payload_for_shop(
-                            shop=shop_sub.shop,
-                            shop_sub=shop_sub,
-                            stripe_subscription_id=stripe_sub.get("id"),
-                            price_id=None,
-                            cancel_at_period_end=False,
-                            is_canceled=True,
-                            is_at_risk=False,
+                        # 3. Send Klaviyo event (SAFELY INDENTED)
+                        if email: 
+                            profile_payload = build_profile_payload_for_shop(
+                                shop=shop_sub.shop,
+                                shop_sub=shop_sub, # Pass the updated shop_sub
+                                stripe_subscription_id=stripe_sub.get("id"),
+                                price_id=None,
+                                cancel_at_period_end=False,
+                                is_canceled=True,
+                                is_at_risk=False,
+                            )
+
+                            event_props = {
+                                "shop_id": shop_sub.shop.id,
+                                "shop_name": getattr(shop_sub.shop, "name", None),
+                                "previous_plan": previous_plan_name,
+                                "current_plan": "Canceled",
+                                "status": "canceled",
+                                "reason": "user_cancelled",
+                            }
+
+                            self.send_klaviyo_event(
+                                email=email,
+                                event_name="Subscription Canceled",
+                                profile=profile_payload,
+                                event_props=event_props,
+                            )
+                    
+                    else:
+                        # If shop_sub was not found (this should no longer happen)
+                        logger.warning(
+                            "customer.subscription.deleted webhook received for unknown sub ID: %s", 
+                            stripe_sub.get("id")
                         )
 
-                        event_props = {
-                            "shop_id": shop_sub.shop.id,
-                            "shop_name": getattr(shop_sub.shop, "name", None),
-                            "previous_plan": getattr(getattr(shop_sub, "plan", None), "name", None),
-                            "current_plan": "Canceled",
-                            "status": "canceled",
-                            "reason": "user_cancelled",
-                        }
+                except Exception as e:
+                    logger.error("[klaviyo] Base plan cancel sync failed: %s", e, exc_info=True)
 
-                        self.send_klaviyo_event(
-                            email=email,
-                            event_name="Subscription Canceled",
-                            profile=profile_payload,
-                            event_props=event_props,
-                        )
-            except Exception as e:
-                logger.error("[klaviyo] cancel sync failed: %s", e, exc_info=True)
-
-            return Response(status=200)
-
-
+                return Response(status=200)
+        
+        
         # ------------------------------------------------------------------
         # Fallback
         # ------------------------------------------------------------------
@@ -1125,7 +1233,8 @@ class StripeWebhookView(APIView):
                 self.send_klaviyo_event_for_ai_addon_started(shop, ss)
 
         else:
-            _update_shop_from_subscription_obj(sub)
+            shop_hint = _resolve_shop_for_subscription(sub)
+            _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
 
     @staticmethod
     def send_klaviyo_event(*, email, event_name, profile=None, event_props=None, value=None, event_id=None, occurred_at=None):
@@ -1155,17 +1264,28 @@ class StripeWebhookView(APIView):
                 expand=["items.data.price", "latest_invoice.payment_intent"]
             )
             sub_meta = sub.get("metadata") or {}
-            shop_hint = None
+            target_shop = None
 
             if shop_ref:
                 try:
-                    shop_hint = Shop.objects.get(id=int(shop_ref))
-                    logger.info("[checkout] resolved shop_hint=%s", shop_hint.id)
+                    target_shop = Shop.objects.get(id=int(shop_ref))
+                    logger.info("[checkout] resolved shop_hint=%s", target_shop.id)
                 except Exception:
                     logger.warning("[checkout] bad client_reference_id: %r", shop_ref)
 
-            if shop_hint:
-                self.send_klaviyo_event_for_subscription_purchased(shop_hint, sub, sub_meta)
+            # ✅ ensure metadata.shop_id for future events
+            try:
+                if target_shop and str(sub_meta.get("shop_id")) != str(target_shop.id):
+                    stripe.Subscription.modify(sub["id"], metadata={**sub_meta, "shop_id": str(target_shop.id)})
+            except Exception:
+                logger.exception("Failed to set subscription metadata.shop_id on checkout completion")
+
+            # ✅ PERSIST THE PLAN NOW (don’t wait for other webhooks)
+            _update_shop_from_subscription_obj(sub, shop_hint=target_shop)
+
+            # (optional) still send your Klaviyo event
+            # if target_shop:
+            #     self.send_klaviyo_event_for_subscription_purchased(target_shop, sub, sub_meta)
 
     def send_klaviyo_event_for_ai_addon_started(self, shop, ss):
         email = shop.owner.email
