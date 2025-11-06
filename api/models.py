@@ -10,6 +10,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django.db.models import Q
 import uuid
+from api.utils.fcm import notify_user
 from subscriptions.models import SubscriptionPlan,ShopSubscription
 from django.db import transaction
 # from payments.models import Booking
@@ -202,26 +203,68 @@ class Shop(models.Model):
         self.update_all_service_deposits()
 
     def save(self, *args, **kwargs):
-        print(f"Shop save() called for {self.name}")
-        old_percentage = None
-        if self.pk:  # Existing shop
-            old_shop = Shop.objects.get(pk=self.pk)
-            old_percentage = old_shop.default_deposit_percentage
-            print(f"Old percentage: {old_percentage}, New percentage: {self.default_deposit_percentage}")
+            print(f"Shop save() called for {self.name}")
+            
+            # --- Get Old State ---
+            old_percentage = None
+            orig_status = None
+            send_verification_notification = False
 
-        # Auto-update is_verified based on status
-        if self.status == "verified":
-            self.is_verified = True
-        else:
-            self.is_verified = False
-        super().save(*args, **kwargs)
+            if self.pk:  # Existing shop
+                try:
+                    # Get the original state from the database
+                    orig_shop = Shop.objects.get(pk=self.pk)
+                    old_percentage = orig_shop.default_deposit_percentage
+                    orig_status = orig_shop.status
+                    print(f"Old status: {orig_status}, New status: {self.status}")
+                    print(f"Old percentage: {old_percentage}, New percentage: {self.default_deposit_percentage}")
+                    
+                    # Check if the status is changing from 'pending' to 'verified'
+                    if orig_status == 'pending' and self.status == 'verified':
+                        send_verification_notification = True
+                        
+                except Shop.DoesNotExist:
+                    pass # This is a new shop
 
-        # Update services if deposit percentage changed
-        if old_percentage != self.default_deposit_percentage:
-            print(f"Percentage changed! Updating services...")
-            self.update_all_service_deposits()
-        else:
-            print("No percentage change detected")
+            # --- Logic to run *before* save ---
+            
+            # Auto-update is_verified based on status
+            if self.status == "verified":
+                self.is_verified = True
+            else:
+                self.is_verified = False
+
+            # --- Call the original save method ---
+            super().save(*args, **kwargs)
+
+            # --- Logic to run *after* save ---
+
+            # 1. Update services if deposit percentage changed
+            if old_percentage != self.default_deposit_percentage:
+                print(f"Percentage changed! Updating services...")
+                self.update_all_service_deposits()
+            else:
+                print("No percentage change detected")
+
+            # 2. Send notification if verification just happened
+            if send_verification_notification and self.owner:
+                try:
+                    logger.info(f"Shop {self.id} verified, sending notification to owner {self.owner.id}")
+                    
+                    notify_user(
+                        user=self.owner,
+                        message="Congratulations! Your shop has been verified.", # This is the short message
+                        notification_type="shop_verified", # For a deep link handler
+                        data={
+                            "title": "Your Shop is Live! ✨",
+                            "summary": f"Congratulations! Your shop '{self.name}' has been verified by our team and is now live.",
+                            "deep_link": f"fidden://shop/{self.id}", # Example deep link
+                            "shop_id": str(self.id)
+                        }
+                    )
+                except Exception as e:
+                    # Log the error but don't crash the save operation
+                    logger.error(f"Failed to send verification push notification to owner {self.owner.id}: {e}", exc_info=True)
     
     # helper (not required but handy)
     def get_intervals_for_date(self, date_obj):

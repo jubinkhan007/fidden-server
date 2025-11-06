@@ -205,6 +205,8 @@ class ShopListCreateView(APIView):
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+# In api/views.py
+
 class ShopRetrieveUpdateDestroyView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
@@ -219,6 +221,12 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def put(self, request, pk):
         shop = self.get_object(pk)
+        
+        # --- Add this line ---
+        # When an owner updates, force status back to 'pending'
+        request.data['status'] = 'pending'
+        # --- End ---
+
         serializer = ShopSerializer(shop, data=request.data, context={'request': request})
         if serializer.is_valid():
             shop = serializer.save()
@@ -227,6 +235,12 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def patch(self, request, pk):
         shop = self.get_object(pk)
+        
+        # --- Add this line ---
+        # When an owner updates, force status back to 'pending'
+        request.data['status'] = 'pending'
+        # --- End ---
+
         serializer = ShopSerializer(shop, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             shop = serializer.save()
