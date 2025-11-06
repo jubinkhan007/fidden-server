@@ -10,7 +10,6 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django.db.models import Q
 import uuid
-from api.utils.fcm import notify_user
 from subscriptions.models import SubscriptionPlan,ShopSubscription
 from django.db import transaction
 # from payments.models import Booking
@@ -249,6 +248,7 @@ class Shop(models.Model):
             # 2. Send notification if verification just happened
             if send_verification_notification and self.owner:
                 try:
+                    from .utils.fcm import notify_user
                     logger.info(f"Shop {self.id} verified, sending notification to owner {self.owner.id}")
                     
                     notify_user(
