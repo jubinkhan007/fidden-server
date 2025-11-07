@@ -2,6 +2,7 @@
 
 from rest_framework import serializers
 
+from fidden import settings
 from subscriptions.models import SubscriptionPlan
 from .models import (
     AIAutoFillSettings,
@@ -1112,11 +1113,57 @@ class AIReportSerializer(serializers.ModelSerializer):
 
 # api/serializers.py
 
+class AiSubscriptionStateSerializer(serializers.Serializer):
+    """
+    Serializes the 'ai' block by reading from a Shop instance.
+    This provides the AI state for the frontend.
+    """
+    state = serializers.SerializerMethodField()
+    legacy = serializers.SerializerMethodField()
+    price_id = serializers.SerializerMethodField()
+
+    def get_state(self, shop):
+        """
+        Determines the AI state based on the shop's subscription.
+        """
+        sub = getattr(shop, 'subscription', None)
+        if not sub or not sub.plan:
+            # This should be caught by the view's 403 check,
+            # but serves as a fallback.
+            return "none" 
+        
+        if sub.plan.ai_assistant == SubscriptionPlan.AI_INCLUDED:
+            return "included"
+        if sub.has_ai_addon:
+            return "addon_active"
+        
+        # User is on a plan where AI is 'addon' but hasn't bought it
+        return "available"
+
+    def get_legacy(self, shop):
+        """
+        Checks if the legacy promo has been used.
+        """
+        sub = getattr(shop, 'subscription', None)
+        return getattr(sub, 'legacy_ai_promo_used', False)
+    
+    def get_price_id(self, shop):
+        """
+        Returns the globally configured AI Price ID.
+        """
+        return getattr(settings, "STRIPE_AI_PRICE_ID", None)
+
 from rest_framework import serializers
 from .models import WeeklySummary
 
 class WeeklySummarySerializer(serializers.ModelSerializer):
     deep_link = serializers.SerializerMethodField()
+    
+    # --- ADD THIS LINE ---
+    # This tells the serializer to take the 'shop' object from the WeeklySummary
+    # and pass it to the AiSubscriptionStateSerializer.
+    ai = AiSubscriptionStateSerializer(source='shop', read_only=True)
+    # --- END ADD ---
 
     class Meta:
         model = WeeklySummary
@@ -1138,11 +1185,10 @@ class WeeklySummarySerializer(serializers.ModelSerializer):
             "delivered_channels",
             "deep_link",
             "created_at",
+            "ai",  # <-- ADD 'ai' TO THE LIST
         ]
 
     def get_deep_link(self, obj):
-        # match the scheme you already use in the mobile app
-        # (you showed `fidden://book/<id>` in logs earlier)
         return f"fidden://weekly-recap/{obj.id}"
 
 
