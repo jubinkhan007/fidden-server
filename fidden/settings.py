@@ -284,11 +284,18 @@ CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS', '')
 # ==============================
 
 
-# settings.py
-CELERY_TASK_ALWAYS_EAGER = True
-CELERY_TASK_EAGER_PROPAGATES = True
-CELERY_RESULT_BACKEND = None
+# Use the Redis URL you defined earlier in this file
+CELERY_BROKER_URL = CLEAN_REDIS_URL
+CELERY_RESULT_BACKEND = CLEAN_REDIS_URL
 CELERY_TASK_IGNORE_RESULT = True
+
+# Sync Celery's timezone with Django's
+CELERY_TIMEZONE = TIME_ZONE
+
+# By removing or commenting out CELERY_TASK_ALWAYS_EAGER, 
+# tasks will now be sent to the worker.
+# CELERY_TASK_ALWAYS_EAGER = True
+# CELERY_TASK_EAGER_PROPAGATES = True
 
 
 
