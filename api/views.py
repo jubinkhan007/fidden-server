@@ -214,6 +214,28 @@ class ShopRetrieveUpdateDestroyView(APIView):
     def get_object(self, pk):
         return get_object_or_404(Shop, pk=pk, owner=self.request.user)
 
+    def _has_verification_change(self, serializer, request):
+        """
+        Return True if this update actually includes verification-related fields.
+        Update the keys to match your model/serializer.
+        """
+        verification_keys = [
+            "uploaded_files",      # ManyToMany / nested files
+            "verification_files",
+            "verification_file",
+        ]
+
+        # 1) Only fields actually being updated (validated_data) matter
+        vd = getattr(serializer, "validated_data", {}) or {}
+        if any(key in vd for key in verification_keys):
+            return True
+
+        # 2) Handle file uploads
+        if any(key in request.FILES for key in verification_keys):
+            return True
+
+        return False
+
     def get(self, request, pk):
         shop = self.get_object(pk)
         serializer = ShopSerializer(shop, context={'request': request})
@@ -221,15 +243,30 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def put(self, request, pk):
         shop = self.get_object(pk)
+        original_status = shop.status  # e.g. "verified" / "pending" / etc.
+
+        # Make a mutable copy so we don't accidentally mutate QueryDict
+        data = request.data.copy()
+        # Prevent owners from forcing status directly
+        data.pop("status", None)
 
         serializer = ShopSerializer(
             shop,
-            data=request.data,
+            data=data,
             context={'request': request}
         )
+
         if serializer.is_valid():
-            # ✅ Force status to 'pending' without touching request.data
-            shop = serializer.save(status='pending')
+            verification_changed = self._has_verification_change(serializer, request)
+
+            # Decide final status
+            new_status = original_status
+            if original_status == "verified" and verification_changed:
+                new_status = "pending"
+
+            # Force status to what we decided (overrides anything serializer/model tries)
+            shop = serializer.save(status=new_status)
+
             return Response(
                 ShopSerializer(shop, context={'request': request}).data,
                 status=status.HTTP_200_OK
@@ -238,16 +275,27 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def patch(self, request, pk):
         shop = self.get_object(pk)
+        original_status = shop.status
+
+        data = request.data.copy()
+        data.pop("status", None)  # don't let owner send status
 
         serializer = ShopSerializer(
             shop,
-            data=request.data,
+            data=data,
             partial=True,
             context={'request': request}
         )
+
         if serializer.is_valid():
-            # ✅ Same here
-            shop = serializer.save(status='pending')
+            verification_changed = self._has_verification_change(serializer, request)
+
+            new_status = original_status
+            if original_status == "verified" and verification_changed:
+                new_status = "pending"
+
+            shop = serializer.save(status=new_status)
+
             return Response(
                 ShopSerializer(shop, context={'request': request}).data,
                 status=status.HTTP_200_OK
@@ -261,6 +309,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
             {"success": True, "message": "Shop deleted successfully."},
             status=status.HTTP_200_OK
         )
+
 
 
 class ServiceCategoryListView(APIView):

@@ -1156,6 +1156,9 @@ class AiSubscriptionStateSerializer(serializers.Serializer):
 from rest_framework import serializers
 from .models import WeeklySummary
 
+
+# api/serializers.py
+
 class WeeklySummarySerializer(serializers.ModelSerializer):
     deep_link = serializers.SerializerMethodField()
     
