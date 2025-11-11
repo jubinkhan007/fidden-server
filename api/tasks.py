@@ -8,6 +8,7 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.db.models import Count, Avg, Sum, F
 from api.utils.phones import get_user_phone
+from api.utils.slots import generate_slots_for_service
 from api.utils.sms import send_sms
 from api.utils.zapier import send_klaviyo_event
 from payments.models import Booking, TransactionLog
@@ -806,65 +807,20 @@ def calculate_analytics():
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def prefill_slots(self, days_ahead=14):
-    """
-    Prefill slots for the next `days_ahead` days per shop/service.
-    Uses Shop.business_hours overrides; falls back to start_at/close_at.
-    Supports multiple intervals per day (e.g., 09:00-14:00 and 15:00-18:00).
-    """
     created_count = 0
     try:
         past_slots = Slot.objects.filter(end_time__lt=timezone.now(), bookings__isnull=True)
         past_slots.delete()
 
         today = timezone.localdate()
-        target_end = today + timedelta(days=days_ahead - 1)
 
         for shop in Shop.objects.prefetch_related("services").all():
             services = shop.services.filter(is_active=True)
-
             for service in services:
-                for offset in range((target_end - today).days + 1):
-                    date = today + timedelta(days=offset)
-                    weekday = date.strftime("%A").lower()
-
-                    if (shop.close_days or []) and weekday in shop.close_days:
-                        continue
-
-                    # Get intervals for this date
-                    intervals = shop.get_intervals_for_date(date)  # returns list[(time,time)]
-                    if not intervals:
-                        continue
-
-                    duration = service.duration or 30
-
-                    # Existing start times for that day
-                    existing_times = set(
-                        Slot.objects.filter(shop=shop, service=service, start_time__date=date)
-                        .values_list("start_time", flat=True)
-                    )
-
-                    batch = []
-                    for (start_t, end_t) in intervals:
-                        start_dt = timezone.make_aware(datetime.combine(date, start_t))
-                        end_dt   = timezone.make_aware(datetime.combine(date, end_t))
-                        if end_dt <= start_dt:
-                            continue
-
-                        current = start_dt
-                        while current + timedelta(minutes=duration) <= end_dt:
-                            if current not in existing_times:
-                                batch.append(Slot(
-                                    shop=shop,
-                                    service=service,
-                                    start_time=current,
-                                    end_time=current + timedelta(minutes=duration),
-                                    capacity_left=service.capacity,
-                                ))
-                            current += timedelta(minutes=duration)
-
-                    if batch:
-                        Slot.objects.bulk_create(batch, ignore_conflicts=True)
-                        created_count += len(batch)
+                before = Slot.objects.filter(shop=shop, service=service).count()
+                generate_slots_for_service(service, days_ahead=days_ahead, start_date=today)
+                after = Slot.objects.filter(shop=shop, service=service).count()
+                created_count += max(0, after - before)
 
         logger.info(f"[Prefill Slots] Created {created_count} slots across all shops/services.")
         return f"Prefilled {days_ahead} days with {created_count} slots."

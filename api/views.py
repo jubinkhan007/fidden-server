@@ -14,6 +14,7 @@ from django.core.mail import send_mail
 from django.utils.timezone import make_aware
 from django.core.mail import EmailMultiAlternatives, get_connection
 
+from api.utils.slots import generate_slots_for_service
 from subscriptions.models import SubscriptionPlan
 from .models import (
     AutoFillLog,
@@ -330,23 +331,32 @@ class ServiceListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsOwnerRole]
 
     def get(self, request):
-        shop = Shop.objects.filter(owner=request.user).first()
-        if not shop:
-            return Response({"detail": "You must create a shop before accessing services."}, status=status.HTTP_400_BAD_REQUEST)
-
-        services = shop.services.all()
-        serializer = ServiceSerializer(services, many=True, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
+        ...
+    
     def post(self, request):
         shop = Shop.objects.filter(owner=request.user).first()
         if not shop:
-            return Response({"detail": "You must create a shop before adding services."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "You must create a shop before adding services."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         serializer = ServiceSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             service = serializer.save(shop=shop)
-            return Response(ServiceSerializer(service, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
+            # 🔹 Immediately generate upcoming slots for this new service
+            generate_slots_for_service(
+                service,
+                days_ahead=14,  # or 7, or read from settings
+                start_date=timezone.localdate(),
+            )
+
+            return Response(
+                ServiceSerializer(service, context={'request': request}).data,
+                status=status.HTTP_201_CREATED
+            )
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class ServiceRetrieveUpdateDestroyView(APIView):
