@@ -615,6 +615,52 @@ class StripeWebhookView(APIView):
     authentication_classes = []
     permission_classes = []
 
+
+    def _is_legacy_ai_promo(self, stripe_sub: dict) -> bool:
+        """
+        Returns True if this Stripe Subscription has the legacy AI promo applied.
+        Handles both:
+        - subscription.discount (single object)
+        - subscription.discounts (list of discount/ids)
+        """
+        legacy_coupon_id = getattr(settings, "STRIPE_LEGACY_COUPON_ID", None)
+        legacy_promo_code_id = getattr(settings, "STRIPE_LEGACY_PROMO_CODE_ID", None)
+
+        if not legacy_coupon_id and not legacy_promo_code_id:
+            return False
+
+        def matches_discount(discount_obj: dict) -> bool:
+            if not isinstance(discount_obj, dict):
+                return False
+
+            # coupon.id
+            coupon = discount_obj.get("coupon") or {}
+            if legacy_coupon_id and coupon.get("id") == legacy_coupon_id:
+                return True
+
+            # promotion_code
+            promo_code = discount_obj.get("promotion_code")
+            if legacy_promo_code_id and promo_code == legacy_promo_code_id:
+                return True
+
+            return False
+
+        # 1) subscription.discount: may be full object
+        discount = stripe_sub.get("discount")
+        if isinstance(discount, dict) and matches_discount(discount):
+            return True
+
+        # 2) subscription.discounts: may be list of {discount: {...}} or IDs
+        for d in stripe_sub.get("discounts") or []:
+            # d might be a dict or a string; guard it
+            if isinstance(d, dict):
+                # Stripe sometimes wraps under "discount", sometimes is already the object
+                inner = d.get("discount") if isinstance(d.get("discount"), dict) else d
+                if matches_discount(inner):
+                    return True
+
+        return False
+
     def post(self, request, *args, **kwargs):
         payload = request.body
         sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
@@ -1186,58 +1232,91 @@ class StripeWebhookView(APIView):
         return Response(status=200)
     
     
-    def handle_subscription_created_or_updated(self, data):
-        sub = data
+    def handle_subscription_created_or_updated(self, sub):
+        """
+        Handles customer.subscription.created / updated for:
+        - AI add-on subscriptions
+        - Normal plan subscriptions
+        """
         ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+        items = (sub.get("items") or {}).get("data") or []
+
         price_ids = [
-            it["price"]["id"]
-            for it in (sub.get("items", {}).get("data") or [])
+            (it.get("price") or {}).get("id")
+            for it in items
+            if it.get("price")
         ]
+
+        meta = sub.get("metadata") or {}
         is_ai_addon = (
-            sub.get("metadata", {}).get("addon") == "ai_assistant"
+            meta.get("addon") == "ai_assistant"
             or (ai_price_id and ai_price_id in price_ids)
         )
 
         if is_ai_addon:
+            # ---------- Resolve shop ----------
             shop = None
-            sid = (sub.get("metadata") or {}).get("shop_id")
+            sid = meta.get("shop_id")
             if sid:
                 try:
                     shop = Shop.objects.get(id=int(sid))
                 except Exception:
                     shop = None
 
-            if shop and hasattr(shop, "subscription"):
-                ss = shop.subscription
-                ss.has_ai_addon = True
-                ss.ai_subscription_id = sub["id"]
-
-                ai_item = next(
-                    (
-                        it
-                        for it in (sub.get("items", {}).get("data") or [])
-                        if (it.get("price") or {}).get("id") == ai_price_id
-                    ),
-                    None,
+            if not shop:
+                # fallback: match on existing subscription row
+                ss = (
+                    ShopSubscription.objects
+                    .filter(stripe_subscription_id=sub.get("id"))
+                    .select_related("shop")
+                    .first()
                 )
-                ss.ai_subscription_item_id = (
-                    ai_item.get("id") if ai_item else None
-                )
-                ss.save(
-                    update_fields=[
-                        "has_ai_addon",
-                        "ai_subscription_id",
-                        "ai_subscription_item_id",
-                    ]
-                )
+                if ss:
+                    shop = ss.shop
 
-                # Send Klaviyo event
-                self.send_klaviyo_event_for_ai_addon_started(shop, ss)
+            if not shop or not hasattr(shop, "subscription"):
+                logger.warning("AI addon sub %s: could not resolve Shop/ShopSubscription", sub.get("id"))
+                return
 
-        else:
-            shop_hint = _resolve_shop_for_subscription(sub)
-            _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
+            ss = shop.subscription
 
+            # ---------- Mark AI add-on active ----------
+            ss.has_ai_addon = True
+            ss.ai_subscription_id = sub.get("id")
+
+            ai_item = next(
+                (
+                    it
+                    for it in items
+                    if (it.get("price") or {}).get("id") == ai_price_id
+                ),
+                None,
+            )
+            if ai_item:
+                ss.ai_subscription_item_id = ai_item.get("id") or ss.ai_subscription_item_id
+
+            # ---------- NEW: legacy flag from coupon/promo ----------
+            if self._is_legacy_ai_promo(sub):
+                ss.legacy_ai_promo_used = True
+
+            ss.save(
+                update_fields=[
+                    "has_ai_addon",
+                    "ai_subscription_id",
+                    "ai_subscription_item_id",
+                    "legacy_ai_promo_used",
+                ]
+            )
+
+            # Fire Klaviyo event with correct legacy flag
+            self.send_klaviyo_event_for_ai_addon_started(shop, ss)
+            return
+
+        # ---------- Non-AI subscriptions: existing behavior ----------
+        shop_hint = _resolve_shop_for_subscription(sub)
+        _update_shop_from_subscription_obj(sub, shop_hint=shop_hint)
+
+        
     @staticmethod
     def send_klaviyo_event(*, email, event_name, profile=None, event_props=None, value=None, event_id=None, occurred_at=None):
         payload = {

@@ -221,36 +221,47 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def put(self, request, pk):
         shop = self.get_object(pk)
-        
-        # --- Add this line ---
-        # When an owner updates, force status back to 'pending'
-        request.data['status'] = 'pending'
-        # --- End ---
 
-        serializer = ShopSerializer(shop, data=request.data, context={'request': request})
+        serializer = ShopSerializer(
+            shop,
+            data=request.data,
+            context={'request': request}
+        )
         if serializer.is_valid():
-            shop = serializer.save()
-            return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_200_OK)
+            # ✅ Force status to 'pending' without touching request.data
+            shop = serializer.save(status='pending')
+            return Response(
+                ShopSerializer(shop, context={'request': request}).data,
+                status=status.HTTP_200_OK
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request, pk):
         shop = self.get_object(pk)
-        
-        # --- Add this line ---
-        # When an owner updates, force status back to 'pending'
-        request.data['status'] = 'pending'
-        # --- End ---
 
-        serializer = ShopSerializer(shop, data=request.data, partial=True, context={'request': request})
+        serializer = ShopSerializer(
+            shop,
+            data=request.data,
+            partial=True,
+            context={'request': request}
+        )
         if serializer.is_valid():
-            shop = serializer.save()
-            return Response(ShopSerializer(shop, context={'request': request}).data, status=status.HTTP_200_OK)
+            # ✅ Same here
+            shop = serializer.save(status='pending')
+            return Response(
+                ShopSerializer(shop, context={'request': request}).data,
+                status=status.HTTP_200_OK
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
         shop = self.get_object(pk)
         shop.delete()
-        return Response({"success": True, "message": "Shop deleted successfully."}, status=status.HTTP_200_OK)
+        return Response(
+            {"success": True, "message": "Shop deleted successfully."},
+            status=status.HTTP_200_OK
+        )
+
 
 class ServiceCategoryListView(APIView):
     authentication_classes = [JWTAuthentication]
