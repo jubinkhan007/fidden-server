@@ -319,20 +319,29 @@ STRIPE_CANCEL_URL = os.getenv('STRIPE_CANCEL_URL', 'http://localhost:3000/subscr
 STRIPE_LEGACY_COUPON_ID = os.environ.get("STRIPE_LEGACY_COUPON_ID")
 STRIPE_LEGACY_PROMO_CODE_ID = os.environ.get("STRIPE_LEGACY_PROMO_CODE_ID")
 # pip install django-redis
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        # Use the CLEANED URL here
-        "LOCATION": CLEAN_REDIS_URL or "redis://127.0.0.1:6379/1",
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "CONNECTION_POOL_KWARGS": {
-                # Pass the SSL options generated above
-                **SSL_OPTIONS
-            }
-        },
+# CACHES (Redis if REDIS_URL provided, else LocMem)
+if CLEAN_REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": CLEAN_REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                # Avoid 500s if Redis hiccups; cache calls just return None.
+                "IGNORE_EXCEPTIONS": True,
+                # Pass SSL options if using rediss://
+                "CONNECTION_POOL_KWARGS": {**SSL_OPTIONS},
+            },
+            "TIMEOUT": 60,
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "fidden-default",
+        }
+    }
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
