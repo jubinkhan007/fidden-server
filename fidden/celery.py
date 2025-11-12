@@ -17,7 +17,7 @@ app.conf.beat_schedule = {
     # Prefill slots daily at midnight
     "prefill-slots-daily": {
         "task": "api.tasks.prefill_slots",
-        "schedule": crontab(hour=0, minute=0),
+        "schedule": crontab(hour=20, minute=0),
         "args": (7,),
     },
     # Send reminders every 15 minutes
