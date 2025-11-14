@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'drf_yasg',
     'api.apps.ApiConfig',
     # 'django_crontab',
+    'storages',
 ]
 
 # CRONJOBS = [
@@ -240,8 +241,39 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # ==============================
 # Media Files
 # ==============================
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+USE_S3 = os.getenv("USE_S3", "true").lower() == "true"
+
+if USE_S3:
+    INSTALLED_APPS += ["storages"]
+
+    AWS_ACCESS_KEY_ID        = os.getenv("S3_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY    = os.getenv("S3_SECRET_ACCESS_KEY")
+    AWS_STORAGE_BUCKET_NAME  = os.getenv("S3_BUCKET_NAME")
+    AWS_S3_REGION_NAME       = os.getenv("AWS_S3_REGION_NAME") or os.getenv("S3_REGION", "")
+    AWS_S3_ENDPOINT_URL      = (os.getenv("S3_ENDPOINT_URL") or "").strip()  # blank for AWS
+
+    AWS_S3_SIGNATURE_VERSION = "s3v4"
+    AWS_S3_ADDRESSING_STYLE  = "virtual"
+    AWS_DEFAULT_ACL          = None
+    AWS_QUERYSTRING_AUTH     = False
+    AWS_S3_FILE_OVERWRITE    = False
+
+    # <-- IMPORTANT: match where your class actually lives
+    DEFAULT_FILE_STORAGE = "fidden.storage_backends.MediaStorage"
+
+    # Public domain logic (AWS or custom endpoint/CDN)
+    S3_PUBLIC_DOMAIN = (os.getenv("S3_PUBLIC_DOMAIN") or "").strip()
+    if S3_PUBLIC_DOMAIN:
+        MEDIA_URL = f"https://{S3_PUBLIC_DOMAIN}/"
+    elif AWS_S3_ENDPOINT_URL:
+        # S3-compatible providers (Spaces/R2/MinIO)
+        MEDIA_URL = f"{AWS_S3_ENDPOINT_URL.rstrip('/')}/{AWS_STORAGE_BUCKET_NAME}/"
+    else:
+        # Native AWS S3 public domain
+        MEDIA_URL = f"https://{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/"
+else:
+    MEDIA_URL  = "/media/"
+    MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
 # ==============================
 # Email Configuration in settings.py
