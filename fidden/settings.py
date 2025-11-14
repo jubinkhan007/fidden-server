@@ -51,7 +51,6 @@ INSTALLED_APPS = [
     'drf_yasg',
     'api.apps.ApiConfig',
     # 'django_crontab',
-    'storages',
 ]
 
 # CRONJOBS = [
