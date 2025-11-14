@@ -478,8 +478,9 @@ class ShopListSerializer(serializers.Serializer):
     boost_score = serializers.IntegerField(read_only=True, default=0)
     def get_shop_img(self, obj):
         request = self.context.get("request")
-        if obj.shop_img and obj.shop_img.name and obj.shop_img.storage.exists(obj.shop_img.name):
-            return request.build_absolute_uri(obj.shop_img.url)
+        img = obj.shop_img
+        if img and getattr(img, 'name', None):
+            return request.build_absolute_uri(img.url) if request else img.url
         return None
 
     def get_distance(self, obj):

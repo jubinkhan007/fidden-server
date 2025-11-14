@@ -86,6 +86,7 @@ import logging
 from .serializers import PerformanceAnalyticsSerializer, AIAutoFillSettingsSerializer
 from .models import AIAutoFillSettings
 from django.db.models import IntegerField, Case, When, Value, F
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,7 @@ class HoldSlotAndBookView(APIView):
 class ShopListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         user = request.user
@@ -211,6 +213,7 @@ class ShopListCreateView(APIView):
 class ShopRetrieveUpdateDestroyView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_object(self, pk):
         return get_object_or_404(Shop, pk=pk, owner=self.request.user)
@@ -329,6 +332,7 @@ class ServiceCategoryListView(APIView):
 class ServiceListCreateView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerRole]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         shop = Shop.objects.filter(owner=request.user).first()
@@ -376,6 +380,7 @@ class ServiceListCreateView(APIView):
 class ServiceRetrieveUpdateDestroyView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsOwnerRole]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_object(self, request, pk):
         shop = Shop.objects.filter(owner=request.user).first()
@@ -424,6 +429,7 @@ class ServiceRetrieveUpdateDestroyView(APIView):
 class UserRatingReviewView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         user = request.user
