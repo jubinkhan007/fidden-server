@@ -257,7 +257,10 @@ if USE_S3:
     AWS_QUERYSTRING_AUTH     = False
     AWS_S3_FILE_OVERWRITE    = False
 
-    DEFAULT_FILE_STORAGE = "fidden.storage_backends.MediaStorage"
+    STORAGES = {
+    "default": {"BACKEND": "fidden.storage_backends.MediaStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 
     # If you have CloudFront/custom domain, set S3_PUBLIC_DOMAIN in env.
     S3_PUBLIC_DOMAIN = os.getenv("S3_PUBLIC_DOMAIN")
