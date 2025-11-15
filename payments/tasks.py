@@ -2,7 +2,7 @@
 
 from celery import shared_task
 from django.utils import timezone
-from datetime import timedelta
+from datetime import datetime, timedelta
 from accounts.models import User
 from api.utils.fcm import notify_user
 from payments.models import Booking
@@ -19,56 +19,61 @@ logger = logging.getLogger(__name__)
 @shared_task(bind=True, name="payments.tasks.complete_past_bookings", max_retries=3, default_retry_delay=60)
 def complete_past_bookings(self):
     """
-    Mark bookings as 'completed' if their appointment time has finished.
+    Mark bookings as 'completed' once the appointment's effective end-time has passed.
 
-    Rules:
-    - We only touch future/active bookings (status 'active' or 'confirmed').
-    - We SKIP cancelled / no-show / already completed.
-    - We consider the booking "finished" if:
-        - the SlotBooking start_time is in the past AND
-        - (if we have the actual Slot end_time) that end_time is also in the past.
+    Priority for end-time:
+      1) SlotBooking.end_time (instance-specific)
+      2) SlotBooking.start_time + duration (SlotBooking.duration_minutes or service.duration or 30)
+      3) LAST RESORT: treat start_time as end (legacy fallback)
     """
+    from payments.models import Booking  # adjust import if your Booking model lives elsewhere
 
     now = timezone.now()
 
-    # Pull candidate bookings:
-    #   - "active" or "confirmed" are what we consider upcoming/ongoing
-    #   - and the SlotBooking start_time is already in the past
-    #   - exclude anything that's already terminal
     candidates = (
         Booking.objects
-        .select_related("slot", "slot__slot")  # slot=SlotBooking, slot__slot=api.Slot
+        .select_related("slot", "slot__service")  # prefer service over slot__slot
         .filter(
             status__in=["active", "confirmed"],
-            slot__start_time__lte=now,
+            slot__start_time__lte=now,  # already started
         )
         .exclude(status__in=["cancelled", "no-show", "completed"])
     )
 
+    def _effective_end(b) -> "datetime":
+        sb = b.slot  # SlotBooking
+        # 1) explicit instance end
+        if getattr(sb, "end_time", None):
+            return sb.end_time
+
+        # try to derive a duration (minutes)
+        duration = (
+            getattr(sb, "duration_minutes", None)
+            or getattr(sb, "duration", None)  # sometimes stored as 'duration'
+            or getattr(getattr(sb, "service", None), "duration_minutes", None)
+            or getattr(getattr(sb, "service", None), "duration", None)
+            or 30  # sensible default
+        )
+        try:
+            duration = int(duration)
+        except Exception:
+            duration = 30
+
+        # 2) compute from start + duration
+        if getattr(sb, "start_time", None):
+            return sb.start_time + timedelta(minutes=duration)
+
+        # 3) legacy fallback (should rarely hit)
+        # if we somehow do not have start_time, return 'now' so it won’t flip early
+        return now
+
     updated = 0
-
     for b in candidates:
-        slot_booking = b.slot                 # SlotBooking
-        real_slot    = getattr(slot_booking, "slot", None)  # api.Slot or None
+        end_dt = _effective_end(b)
+        if end_dt > now:
+            continue  # appointment not finished yet
 
-        # Decide if it's actually over.
-        # Prefer real end_time if we have it. If not, fall back to "start_time has passed".
-        ended = False
-        if real_slot and getattr(real_slot, "end_time", None):
-            if real_slot.end_time <= now:
-                ended = True
-        else:
-            # no explicit end_time available, so assume that if the start_time is past,
-            # the service is now done (this is a fallback).
-            if slot_booking.start_time <= now:
-                ended = True
-
-        if not ended:
-            continue  # still in the future or in-progress
-
-        # Mark completed atomically so we don't double-write in concurrent runs
         with transaction.atomic():
-            # Re-check row in DB (avoid race if status changed in between)
             fresh = (
                 Booking.objects
                 .select_for_update()
@@ -80,20 +85,17 @@ def complete_past_bookings(self):
                 continue
 
             fresh.status = "completed"
-            # Only save the fields that changed; if you DO have updated_at, include it
+            # Save minimally; include updated_at if present
             try:
                 fresh.save(update_fields=["status", "updated_at"])
             except Exception:
-                # If Booking doesn't actually have updated_at, fall back safely
                 fresh.save(update_fields=["status"])
-
             updated += 1
-            logger.info("Booking %s marked as completed", fresh.id)
+            logger.info("Booking %s marked as completed (end=%s)", fresh.id, end_dt.isoformat())
 
-    return f"{updated} bookings completed"
-
-
-
+    msg = f"{updated} bookings completed"
+    logger.info(msg)
+    return msg
 
 
 @shared_task

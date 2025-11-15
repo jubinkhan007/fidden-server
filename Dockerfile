@@ -1,3 +1,5 @@
+# Dockerfile
+
 # Use official Python 3.13 slim image
 FROM python:3.13-slim
 
@@ -31,6 +33,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project code
 COPY . .
 
+# --- ADD THIS LINE ---
+# Make the run.sh script executable inside the container
+RUN chmod +x /app/run.sh
+# --- END ADD ---
+
 # Collect static files
 RUN python manage.py collectstatic --noinput
 
@@ -40,6 +47,8 @@ EXPOSE 8090
 # Run Uvicorn (ASGI server for Django + Channels)
 # CMD ["uvicorn", "fidden.asgi:application", "--host", "0.0.0.0", "--port", "8090", "--ws", "websockets"]
 
-CMD ["sh", "-c", "sleep 2 && uvicorn fidden.asgi:application --host 0.0.0.0 --port ${PORT:-8090} --ws websockets"]
+#CMD ["sh", "-c", "sleep 2 && uvicorn fidden.asgi:application --host 0.0.0.0 --port ${PORT:-8090} --ws websockets"]
 
 # CMD ["sh", "-c", "uvicorn fidden.asgi:application --host 0.0.0.0 --port ${PORT:-8080} --ws websockets"]
+# Set the default command to run the new script
+CMD ["/app/run.sh"]
