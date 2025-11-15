@@ -247,28 +247,18 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def put(self, request, pk):
         shop = self.get_object(pk)
-        original_status = shop.status  # e.g. "verified" / "pending" / etc.
-
-        # Make a mutable copy so we don't accidentally mutate QueryDict
-        data = request.data.copy()
-        # Prevent owners from forcing status directly
-        data.pop("status", None)
+        original_status = shop.status
 
         serializer = ShopSerializer(
             shop,
-            data=data,
+            data=request.data,              # ❗ no .copy()
             context={'request': request}
         )
-
         if serializer.is_valid():
             verification_changed = self._has_verification_change(serializer, request)
+            new_status = 'pending' if (original_status == 'verified' and verification_changed) else original_status
 
-            # Decide final status
-            new_status = original_status
-            if original_status == "verified" and verification_changed:
-                new_status = "pending"
-
-            # Force status to what we decided (overrides anything serializer/model tries)
+            # overrides any 'status' the client may have sent
             shop = serializer.save(status=new_status)
 
             return Response(
@@ -281,22 +271,15 @@ class ShopRetrieveUpdateDestroyView(APIView):
         shop = self.get_object(pk)
         original_status = shop.status
 
-        data = request.data.copy()
-        data.pop("status", None)  # don't let owner send status
-
         serializer = ShopSerializer(
             shop,
-            data=data,
+            data=request.data,              # ❗ no .copy()
             partial=True,
             context={'request': request}
         )
-
         if serializer.is_valid():
             verification_changed = self._has_verification_change(serializer, request)
-
-            new_status = original_status
-            if original_status == "verified" and verification_changed:
-                new_status = "pending"
+            new_status = 'pending' if (original_status == 'verified' and verification_changed) else original_status
 
             shop = serializer.save(status=new_status)
 
@@ -305,14 +288,6 @@ class ShopRetrieveUpdateDestroyView(APIView):
                 status=status.HTTP_200_OK
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def delete(self, request, pk):
-        shop = self.get_object(pk)
-        shop.delete()
-        return Response(
-            {"success": True, "message": "Shop deleted successfully."},
-            status=status.HTTP_200_OK
-        )
 
 
 
@@ -397,47 +372,25 @@ class ServiceRetrieveUpdateDestroyView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, pk):
-        shop = self.get_object(pk)
-        original_status = shop.status
+        service = self.get_object(request, pk)
+        if not service:
+            return Response({"detail": "You must create a shop before updating services."}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = ShopSerializer(
-            shop,
-            data=request.data,              # ❗ no .copy()
-            context={'request': request}
-        )
+        serializer = ServiceSerializer(service, data=request.data, context={'request': request})
         if serializer.is_valid():
-            verification_changed = self._has_verification_change(serializer, request)
-            new_status = 'pending' if (original_status == 'verified' and verification_changed) else original_status
-
-            # overrides any 'status' the client may have sent
-            shop = serializer.save(status=new_status)
-
-            return Response(
-                ShopSerializer(shop, context={'request': request}).data,
-                status=status.HTTP_200_OK
-            )
+            service = serializer.save()
+            return Response(ServiceSerializer(service, context={'request': request}).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request, pk):
-        shop = self.get_object(pk)
-        original_status = shop.status
+        service = self.get_object(request, pk)
+        if not service:
+            return Response({"detail": "You must create a shop before updating services."}, status=status.HTTP_400_BAD_REQUEST)
 
-        serializer = ShopSerializer(
-            shop,
-            data=request.data,              # ❗ no .copy()
-            partial=True,
-            context={'request': request}
-        )
+        serializer = ServiceSerializer(service, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
-            verification_changed = self._has_verification_change(serializer, request)
-            new_status = 'pending' if (original_status == 'verified' and verification_changed) else original_status
-
-            shop = serializer.save(status=new_status)
-
-            return Response(
-                ShopSerializer(shop, context={'request': request}).data,
-                status=status.HTTP_200_OK
-            )
+            service = serializer.save()
+            return Response(ServiceSerializer(service, context={'request': request}).data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
