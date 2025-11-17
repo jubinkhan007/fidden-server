@@ -38,6 +38,11 @@ COPY . .
 RUN chmod +x /app/run.sh
 # --- END ADD ---
 
+
+# Make the worker_beat.sh script executable (for the worker service)
+RUN chmod +x /app/worker_beat.sh
+
+
 # Collect static files
 RUN python manage.py collectstatic --noinput
 
