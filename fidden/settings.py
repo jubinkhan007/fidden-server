@@ -349,6 +349,13 @@ STRIPE_SUCCESS_URL = os.getenv('STRIPE_SUCCESS_URL', 'http://localhost:3000/subs
 STRIPE_CANCEL_URL = os.getenv('STRIPE_CANCEL_URL', 'http://localhost:3000/subscription/cancel')
 STRIPE_LEGACY_COUPON_ID = os.environ.get("STRIPE_LEGACY_COUPON_ID")
 STRIPE_LEGACY_PROMO_CODE_ID = os.environ.get("STRIPE_LEGACY_PROMO_CODE_ID")
+
+
+# PayPal Configuration
+PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID')
+PAYPAL_SECRET = os.getenv('PAYPAL_SECRET')
+PAYPAL_BASE_URL = os.getenv('PAYPAL_BASE_URL', 'https://api-m.sandbox.paypal.com')
+
 # pip install django-redis
 # CACHES (Redis if REDIS_URL provided, else LocMem)
 if CLEAN_REDIS_URL:

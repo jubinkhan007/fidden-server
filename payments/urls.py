@@ -1,5 +1,7 @@
 from django.urls import path
 from .views import (
+    CapturePayPalOrderView,
+    CreatePayPalOrderView,
     CreatePaymentIntentView,
     MarkBookingNoShowView,
     ShopOnboardingLinkView,
@@ -25,4 +27,6 @@ urlpatterns = [
     path("stripe/return/",  StripeReturnView.as_view(),  name="stripe-return"),
     path("stripe/refresh/", StripeRefreshView.as_view(), name="stripe-refresh"),
     path('bookings/<int:booking_id>/mark-no-show/', MarkBookingNoShowView.as_view(), name='mark-booking-no-show'),
+    path('paypal/create-order/<int:slot_id>/', CreatePayPalOrderView.as_view(), name='paypal-create'),
+    path('paypal/capture-order/', CapturePayPalOrderView.as_view(), name='paypal-capture'),
 ]

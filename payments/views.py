@@ -459,7 +459,7 @@ class ShopOnboardingLinkView(APIView):
         if not hasattr(shop, "stripe_account") or not shop.stripe_account.stripe_account_id:
             return Response({"detail": "Shop Stripe account not found"}, status=status.HTTP_400_BAD_REQUEST)
 
-        base_url = getattr(settings, "BASE_URL", "https://yourdomain.com").rstrip("/")
+        base_url = getattr(settings, "BASE_URL", "https://fidden-server.onrender.com").rstrip("/")
         # build HTTPS callbacks that Stripe accepts
         default_return  = urljoin(base_url + "/", "payments/stripe/return/")
         default_refresh = urljoin(base_url + "/", "payments/stripe/refresh/")
@@ -1853,3 +1853,190 @@ class MarkBookingNoShowView(APIView):
             {"success": True, "message": f"Booking {booking_id} has been marked as a no-show and the AI auto-fill process has been initiated."},
             status=status.HTTP_200_OK
         )
+    
+
+def get_paypal_access_token():
+    client_id = settings.PAYPAL_CLIENT_ID
+    secret = settings.PAYPAL_SECRET
+    base_url = settings.PAYPAL_BASE_URL
+
+    url = f"{base_url}/v1/oauth2/token"
+    headers = {
+        "Accept": "application/json",
+        "Accept-Language": "en_US",
+    }
+    data = {"grant_type": "client_credentials"}
+    
+    try:
+        response = requests.post(url, auth=(client_id, secret), data=data, headers=headers)
+        response.raise_for_status()
+        return response.json()["access_token"]
+    except Exception as e:
+        logger.error(f"PayPal Auth Failed: {e}")
+        return None
+
+class CreatePayPalOrderView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, slot_id):
+        user = request.user
+        coupon_id = request.data.get("coupon_id")
+        coupon = None
+        discount = 0.0
+
+        # 1. Validate Coupon (Reuse existing logic)
+        coupon_serializer = None
+        if coupon_id:
+            coupon_serializer = ApplyCouponSerializer(
+                data={"coupon_id": coupon_id},
+                context={"request": request},
+            )
+            try:
+                coupon_serializer.is_valid(raise_exception=True)
+                coupon = coupon_serializer.coupon
+            except ValidationError as e:
+                return Response({"detail": extract_validation_error_message(e)}, status=400)
+
+        # 2. Create Booking (Atomic Lock)
+        try:
+            with transaction.atomic():
+                slot = Slot.objects.select_for_update().select_related("service", "service__shop").filter(id=slot_id).first()
+                if not slot:
+                    return Response({"detail": "Slot not found."}, status=404)
+                assert_slot_bookable(slot)
+
+                serializer = SlotBookingSerializer(data={"slot_id": slot_id}, context={"request": request})
+                serializer.is_valid(raise_exception=True)
+                booking = serializer.save()
+        except Exception as e:
+            return Response({"detail": str(e)}, status=409)
+
+        # 3. Calculate Price (Reuse logic)
+        shop = booking.shop
+        total_amount = booking.service.discount_price if booking.service.discount_price > 0 else booking.service.price
+        full_service_amount = total_amount
+
+        if shop.is_deposit_required:
+            service = booking.service
+            deposit_amount = service.deposit_amount if service.deposit_amount else full_service_amount
+            total_amount = min(deposit_amount, full_service_amount)
+        else:
+            deposit_amount = full_service_amount
+
+        remaining_balance = full_service_amount - total_amount if shop.is_deposit_required else Decimal("0.00")
+        total_amount = float(total_amount)
+
+        # Apply Coupon
+        if coupon:
+            if coupon.in_percentage:
+                discount = (total_amount * float(coupon.amount)) / 100.0
+            else:
+                discount = float(coupon.amount)
+            total_amount = max(total_amount - discount, 0.0)
+            coupon_serializer.create_usage()
+
+        # 4. Create PayPal Order
+        token = get_paypal_access_token()
+        if not token:
+            return Response({"detail": "PayPal unavailable"}, status=503)
+
+        base_url = settings.PAYPAL_BASE_URL
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+        
+        # We assume USD for simplicity, or fetch from your shop settings
+        payload = {
+            "intent": "CAPTURE",
+            "purchase_units": [{
+                "reference_id": str(booking.id),
+                "amount": {
+                    "currency_code": "USD", 
+                    "value": f"{total_amount:.2f}"
+                }
+            }],
+            "application_context": {
+                # The app intercepts these URLs; they don't need to be real webpages
+                "return_url": "https://example.com/paypal-return",
+                "cancel_url": "https://example.com/paypal-cancel"
+            }
+        }
+
+        resp = requests.post(f"{base_url}/v2/checkout/orders", json=payload, headers=headers)
+        
+        if resp.status_code == 201:
+            order_data = resp.json()
+            paypal_order_id = order_data["id"]
+            
+            # 5. Save Payment Record
+            # We use 'stripe_payment_intent_id' to store the PayPal Order ID to keep the schema simple
+            Payment.objects.create(
+                booking=booking,
+                user=user,
+                amount=total_amount,
+                total_amount=total_amount,
+                coupon=coupon,
+                coupon_amount=discount if coupon else None,
+                stripe_payment_intent_id=paypal_order_id, # Storing PayPal ID here
+                status="pending",
+                is_deposit=shop.is_deposit_required,
+                deposit_amount=deposit_amount if shop.is_deposit_required else 0,
+                remaining_amount=remaining_balance,
+                payment_type="full",  # You might want to add a 'provider' field later
+            )
+
+            approve_link = next(link['href'] for link in order_data['links'] if link['rel'] == 'approve')
+            
+            return Response({
+                "order_id": paypal_order_id,
+                "approve_url": approve_link,
+                "booking_id": booking.id
+            })
+        
+        return Response({"detail": "Failed to create PayPal order"}, status=400)
+
+
+class CapturePayPalOrderView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        order_id = request.data.get("order_id")
+        
+        try:
+            payment = Payment.objects.get(stripe_payment_intent_id=order_id)
+        except Payment.DoesNotExist:
+            return Response({"detail": "Payment record not found"}, status=404)
+
+        token = get_paypal_access_token()
+        base_url = settings.PAYPAL_BASE_URL
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+
+        resp = requests.post(f"{base_url}/v2/checkout/orders/{order_id}/capture", headers=headers)
+        
+        if resp.status_code in [200, 201]:
+            data = resp.json()
+            if data["status"] == "COMPLETED":
+                # Success! Update local state
+                payment.status = "succeeded"
+                payment.save()
+                
+                # Create Transaction Log
+                TransactionLog.objects.create(
+                    transaction_type="payment",
+                    payment=payment,
+                    user=payment.user,
+                    shop=payment.booking.shop,
+                    slot=payment.booking.slot,
+                    service=payment.booking.service,
+                    amount=payment.amount,
+                    currency="usd", # or data['purchase_units'][0]['amount']['currency_code']
+                    status="succeeded"
+                )
+
+                return Response({"status": "success", "booking_id": payment.booking.id})
+        
+        return Response({"detail": "Payment could not be captured"}, status=400)
