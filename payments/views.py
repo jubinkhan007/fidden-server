@@ -2030,7 +2030,7 @@ class CapturePayPalOrderView(APIView):
                     payment=payment,
                     user=payment.user,
                     shop=payment.booking.shop,
-                    slot=payment.booking.slot,
+                    slot=payment.booking,
                     service=payment.booking.service,
                     amount=payment.amount,
                     currency="usd", # or data['purchase_units'][0]['amount']['currency_code']
