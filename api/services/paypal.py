@@ -10,7 +10,7 @@ from paypalcheckoutsdk.core import (
     SandboxEnvironment,
     LiveEnvironment,
 )
-from paypalhttp import HttpRequest  # from `paypalhttp` package
+from paypalhttp.http_request import HttpRequest  # from `paypalhttp` package
 
 logger = logging.getLogger(__name__)
 
