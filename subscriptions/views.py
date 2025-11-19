@@ -437,6 +437,8 @@ class CreateSubscriptionCheckoutSessionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        provider = (request.data.get("provider") or "stripe").lower().strip()
+
         # 1) Validate input
         plan_id = request.data.get("plan_id")
         if not plan_id:
@@ -454,12 +456,6 @@ class CreateSubscriptionCheckoutSessionView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not plan.stripe_price_id:
-            return Response(
-                {"error": "Stripe Price ID not configured for this plan.", "code": "MISSING_STRIPE_PRICE"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
         # 3) Load shop for current owner
         try:
             shop = request.user.shop
@@ -469,11 +465,68 @@ class CreateSubscriptionCheckoutSessionView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # 4) Build success/cancel HTTPS pages that bounce back to the app
+        # ---------- PAYPAL FLOW ----------
+        if provider == "paypal":
+            if not plan.paypal_plan_id:
+                return Response(
+                    {
+                        "error": "Plan is not configured for PayPal.",
+                        "code": "MISSING_PAYPAL_PLAN",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            return_url = request.build_absolute_uri(reverse("paypal_return"))
+            cancel_url = request.build_absolute_uri(reverse("paypal_cancel"))
+
+            try:
+                paypal_sub_id, approval_url = create_subscription(
+                    plan=plan,
+                    shop=shop,
+                    return_url=return_url,
+                    cancel_url=cancel_url,
+                )
+            except Exception as e:
+                logger.exception("PayPal error creating subscription: %s", e)
+                return Response(
+                    {
+                        "error": "Could not create PayPal subscription.",
+                        "code": "PAYPAL_ERROR",
+                        "detail": str(e),
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
+            # Persist "pending" PayPal subscription locally
+            sub, _ = ShopSubscription.objects.get_or_create(shop=shop)
+            sub.provider = ShopSubscription.PROVIDER_PAYPAL
+            sub.plan = plan
+            sub.paypal_subscription_id = paypal_sub_id
+            sub.status = "pending"  # Webhook will move to 'active'
+            sub.save()
+
+            return Response(
+                {
+                    "url": approval_url,
+                    "provider": "paypal",
+                    "subscription_id": paypal_sub_id,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # ---------- STRIPE FLOW (existing behavior) ----------
+        if not plan.stripe_price_id:
+            return Response(
+                {
+                    "error": "Stripe Price ID not configured for this plan.",
+                    "code": "MISSING_STRIPE_PRICE",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         success_url = request.build_absolute_uri(reverse("checkout_return")) + "?session_id={CHECKOUT_SESSION_ID}"
         cancel_url  = request.build_absolute_uri(reverse("checkout_cancel"))
 
-        # 5) Create Stripe Checkout Session
         try:
             customer_id = _ensure_shop_customer_id(shop)
 
@@ -488,10 +541,20 @@ class CreateSubscriptionCheckoutSessionView(APIView):
                     "metadata": {"shop_id": str(shop.id), "plan_id": str(plan.id)}
                 },
             )
-            return Response({"url": checkout_session.url}, status=status.HTTP_200_OK)
+            return Response(
+                {
+                    "url": checkout_session.url,
+                    "provider": "stripe",
+                    "session_id": checkout_session.id,
+                },
+                status=status.HTTP_200_OK,
+            )
         except Exception as e:
             logger.exception("Stripe error creating checkout session: %s", e)
-            return Response({"error": str(e), "code": "STRIPE_ERROR"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": str(e), "code": "STRIPE_ERROR"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 
