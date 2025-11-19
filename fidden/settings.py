@@ -355,6 +355,12 @@ STRIPE_LEGACY_PROMO_CODE_ID = os.environ.get("STRIPE_LEGACY_PROMO_CODE_ID")
 PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID')
 PAYPAL_SECRET = os.getenv('PAYPAL_SECRET')
 PAYPAL_BASE_URL = os.getenv('PAYPAL_BASE_URL', 'https://api-m.sandbox.paypal.com')
+PAYPAL_AI_ADDON_AMOUNT = "39.99"  # Or whatever price you want
+PAYPAL_CURRENCY_CODE = "USD"
+PAYPAL_PLAN_MOMENTUM_ID = os.getenv("PAYPAL_PLAN_MOMENTUM_ID", default="")
+PAYPAL_PLAN_ICON_ID = os.getenv("PAYPAL_PLAN_ICON_ID", default="")
+PAYPAL_PLAN_AI_ADDON_ID = os.getenv("PAYPAL_PLAN_AI_ADDON_ID", default="")
+
 
 # pip install django-redis
 # CACHES (Redis if REDIS_URL provided, else LocMem)

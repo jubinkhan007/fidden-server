@@ -19,7 +19,8 @@ from datetime import timezone as dt_timezone
 from django.views.generic import View
 from django.http import HttpResponse
 from django.urls import reverse
-
+from django.urls import reverse
+from api.services.paypal import create_subscription, cancel_subscription, revise_subscription
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -557,3 +558,207 @@ class CancelSubscriptionView(APIView):
         except Exception as e:
             logger.error(f"Unexpected error cancelling subscription: {e}", exc_info=True)
             return Response({"error": "An unexpected error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class CreatePayPalSubscriptionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Body: { "plan_id": <SubscriptionPlan.id> }
+        Creates a PayPal subscription and returns approval URL.
+        """
+        try:
+            shop = request.user.shop
+        except Shop.DoesNotExist:
+             return Response({"detail": "Shop not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        plan_id = request.data.get("plan_id")
+
+        try:
+            plan = SubscriptionPlan.objects.get(id=plan_id)
+        except SubscriptionPlan.DoesNotExist:
+            return Response({"detail": "Invalid plan_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not plan.paypal_plan_id:
+            return Response(
+                {"detail": "Plan is not configured for PayPal."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return_url = request.build_absolute_uri(reverse("checkout_return")) + "?session_id={CHECKOUT_SESSION_ID}" # PayPal doesn't use session_id like Stripe, but we can adapt or use a different return URL
+        # Actually, for PayPal we might want a specific return URL that handles the token. 
+        # But to keep it simple and consistent with the app's deep linking:
+        return_url = request.build_absolute_uri(reverse("paypal_return")) 
+        cancel_url = request.build_absolute_uri(reverse("paypal_cancel"))
+
+        try:
+            paypal_sub_id, approval_url = create_subscription(plan, shop, return_url, cancel_url)
+        except Exception as e:
+             return Response({"detail": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        # Create or update ShopSubscription in "pending" state
+        sub, _ = ShopSubscription.objects.get_or_create(shop=shop)
+        sub.provider = ShopSubscription.PROVIDER_PAYPAL
+        sub.plan = plan
+        sub.paypal_subscription_id = paypal_sub_id
+        sub.status = "pending"  # until webhook confirms "ACTIVE"
+        sub.save()
+
+        return Response(
+            {
+                "approval_url": approval_url,
+                "subscription_id": paypal_sub_id,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+class UpdatePayPalSubscriptionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Body: { "plan_id": <SubscriptionPlan.id> }
+        Upgrades/Downgrades an existing PayPal subscription.
+        """
+        try:
+            shop = request.user.shop
+            sub = shop.subscription
+        except (Shop.DoesNotExist, ShopSubscription.DoesNotExist):
+             return Response({"detail": "Subscription not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if sub.provider != ShopSubscription.PROVIDER_PAYPAL or not sub.paypal_subscription_id:
+            return Response({"detail": "Not a PayPal subscription"}, status=status.HTTP_400_BAD_REQUEST)
+
+        plan_id = request.data.get("plan_id")
+        try:
+            new_plan = SubscriptionPlan.objects.get(id=plan_id)
+        except SubscriptionPlan.DoesNotExist:
+            return Response({"detail": "Invalid plan_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not new_plan.paypal_plan_id:
+             return Response({"detail": "New plan not configured for PayPal"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            revise_subscription(sub.paypal_subscription_id, new_plan.paypal_plan_id)
+            
+            # Update local DB immediately (optimistic) or wait for webhook
+            sub.plan = new_plan
+            sub.save()
+            
+            return Response({"detail": "Subscription updated successfully"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+class CancelPayPalSubscriptionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            shop = request.user.shop
+            sub = shop.subscription
+        except (Shop.DoesNotExist, ShopSubscription.DoesNotExist):
+             return Response({"detail": "Subscription not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if sub.provider != ShopSubscription.PROVIDER_PAYPAL or not sub.paypal_subscription_id:
+            return Response({"detail": "Not a PayPal subscription"}, status=status.HTTP_400_BAD_REQUEST)
+
+        reason = request.data.get("reason", "User requested cancellation")
+        
+        if cancel_subscription(sub.paypal_subscription_id, reason=reason):
+            sub.status = "canceled"
+            sub.paypal_subscription_id = None
+            sub.provider = None
+            # Downgrade to Foundation
+            try:
+                foundation = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                sub.plan = foundation
+            except SubscriptionPlan.DoesNotExist:
+                sub.plan = None
+            sub.save()
+            return Response({"detail": "Subscription canceled successfully"}, status=status.HTTP_200_OK)
+        
+        return Response({"detail": "Failed to cancel subscription"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+class CreatePayPalAiAddonView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Body: { "plan_id": <SubscriptionPlan.id> } // AI add-on plan
+        """
+        try:
+            shop = request.user.shop
+        except Shop.DoesNotExist:
+            return Response({"detail": "Shop not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        plan_id = request.data.get("plan_id")
+
+        try:
+            plan = SubscriptionPlan.objects.get(id=plan_id)
+        except SubscriptionPlan.DoesNotExist:
+            return Response({"detail": "Invalid plan_id"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not plan.paypal_plan_id:
+            return Response(
+                {"detail": "AI add-on plan is not configured for PayPal"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return_url = request.build_absolute_uri(reverse("paypal_return"))
+        cancel_url = request.build_absolute_uri(reverse("paypal_cancel"))
+
+        try:
+            paypal_sub_id, approval_url = create_subscription(plan, shop, return_url, cancel_url)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        sub, _ = ShopSubscription.objects.get_or_create(shop=shop)
+        sub.ai_provider = ShopSubscription.PROVIDER_PAYPAL
+        sub.ai_paypal_subscription_id = paypal_sub_id
+        sub.ai_addon_active = False  # wait until webhook
+        sub.save()
+
+        return Response(
+            {
+                "approval_url": approval_url,
+                "subscription_id": paypal_sub_id,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+class CancelPayPalAiAddonView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            shop = request.user.shop
+            sub = shop.subscription
+        except (Shop.DoesNotExist, ShopSubscription.DoesNotExist):
+             return Response({"detail": "Subscription not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if sub.ai_provider != ShopSubscription.PROVIDER_PAYPAL or not sub.ai_paypal_subscription_id:
+            return Response({"detail": "Not a PayPal AI add-on"}, status=status.HTTP_400_BAD_REQUEST)
+
+        reason = request.data.get("reason", "User requested cancellation of AI add-on")
+        
+        if cancel_subscription(sub.ai_paypal_subscription_id, reason=reason):
+            sub.ai_addon_active = False
+            sub.ai_paypal_subscription_id = None
+            sub.ai_provider = None
+            sub.save()
+            return Response({"detail": "AI add-on canceled successfully"}, status=status.HTTP_200_OK)
+        
+        return Response({"detail": "Failed to cancel AI add-on"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+class PayPalReturnView(View):
+    def get(self, request):
+        # PayPal redirects here with token=...
+        # We can just deep link back to the app, similar to Stripe
+        deeplink = f"{APP_SCHEME}://subscription/success" 
+        return HttpResponse(_HTML % {"deeplink": deeplink})
+
+class PayPalCancelView(View):
+    def get(self, request):
+        deeplink = f"{APP_SCHEME}://subscription/cancel"
+        return HttpResponse(_HTML % {"deeplink": deeplink})
+

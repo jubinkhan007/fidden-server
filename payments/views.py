@@ -41,7 +41,7 @@ from datetime import timezone
 from django.utils import timezone
 import datetime as dt
 from django.core.cache import cache
-
+from api.services.paypal import cancel_subscription as paypal_cancel_sub
 
 logger = logging.getLogger(__name__)
 
@@ -1920,500 +1920,136 @@ class CapturePayPalOrderView(APIView):
         
         return Response({"detail": "Payment could not be captured"}, status=400)
     
-class CreatePayPalSubscriptionOrderView(APIView):
+
+
+def get_paypal_plan_id_for_subscription(plan: SubscriptionPlan) -> str | None:
     """
-    Owner buys a subscription plan (Momentum/Icon) using PayPal.
-    Returns order_id + approve_url for the client to open in a browser / PayPal SDK.
+    Map your internal plan (Momentum/Icon) to PayPal Plan ID from settings.
     """
-    permission_classes = [IsAuthenticated]
+    if plan.name == SubscriptionPlan.MOMENTUM:
+        return getattr(settings, "PAYPAL_PLAN_MOMENTUM_ID", "") or None
+    if plan.name == SubscriptionPlan.ICON:
+        return getattr(settings, "PAYPAL_PLAN_ICON_ID", "") or None
+    return None  # Foundation is free → no PayPal plan
 
-    def post(self, request):
-        user = request.user
-        plan_id = request.data.get("plan_id")
+@method_decorator(csrf_exempt, name="dispatch")
+class PayPalWebhookView(APIView):
+    authentication_classes = []  # PayPal posts without auth
+    permission_classes = []      # you can enforce IP verification or webhook signature later
 
-        if not plan_id:
-            return Response(
-                {"detail": "plan_id is required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+    def post(self, request, *args, **kwargs):
+        event = request.data
+        event_type = event.get("event_type")
+        resource = event.get("resource") or {}
 
-        # 1) Load plan (exclude Foundation for safety)
+        logger.info("PayPal Webhook: %s", event_type)
+
+        # subscription id can be under resource.id or resource['billing_agreement_id'] depending on event
+        subscription_id = resource.get("id") or resource.get("billing_agreement_id")
+
+        if not subscription_id:
+            return Response(status=status.HTTP_200_OK)  # Nothing to do
+
+        if event_type == "BILLING.SUBSCRIPTION.ACTIVATED":
+            self._handle_subscription_activated(subscription_id, resource)
+        elif event_type == "BILLING.SUBSCRIPTION.CANCELLED":
+            self._handle_subscription_cancelled(subscription_id, resource)
+        elif event_type == "PAYMENT.SALE.COMPLETED":
+            self._handle_payment_completed(subscription_id, resource)
+
+        return Response(status=status.HTTP_200_OK)
+
+    def _handle_subscription_activated(self, subscription_id, resource):
         try:
-            plan = SubscriptionPlan.objects.get(id=plan_id)
-        except SubscriptionPlan.DoesNotExist:
-            return Response(
-                {"detail": "Subscription plan not found"},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        if plan.name == SubscriptionPlan.FOUNDATION:
-            return Response(
-                {"detail": "Foundation is the free plan and cannot be purchased."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # 2) Get shop for this owner
-        try:
-            shop = user.shop
-        except Shop.DoesNotExist:
-            return Response(
-                {"detail": "Create a shop before purchasing a subscription."},
-                status=status.HTTP_409_CONFLICT
-            )
-
-        # 3) Get PayPal token
-        access_token = get_paypal_access_token()
-        if not access_token:
-            return Response(
-                {"detail": "PayPal service unavailable"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-
-        base_url = settings.PAYPAL_BASE_URL
-        currency = getattr(settings, "PAYPAL_CURRENCY_CODE", "USD")
-
-        # PayPal expects a string with 2 decimal places
-        amount_value = f"{plan.monthly_price:.2f}"
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}",
-        }
-
-        # Reference encodes plan + shop, so we don't trust the client on capture
-        payload = {
-            "intent": "CAPTURE",
-            "purchase_units": [{
-                "reference_id": f"sub-plan:{plan.id}:shop:{shop.id}",
-                "amount": {
-                    "currency_code": currency,
-                    "value": amount_value,
-                },
-            }],
-            "application_context": {
-                # Your mobile app handles these (they can be dummy HTTPS URLs)
-                "return_url": "https://example.com/paypal-subscription-return",
-                "cancel_url": "https://example.com/paypal-subscription-cancel",
-            },
-        }
-
-        resp = requests.post(
-            f"{base_url}/v2/checkout/orders",
-            json=payload,
-            headers=headers,
-            timeout=15,
-        )
-
-        if resp.status_code != 201:
-            logger.error(
-                "Failed to create PayPal subscription order: %s",
-                resp.text
-            )
-            return Response(
-                {"detail": "Failed to create PayPal order"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        order_data = resp.json()
-        order_id = order_data["id"]
-
-        # Find the approval link
-        try:
-            approve_link = next(
-                link["href"]
-                for link in order_data.get("links", [])
-                if link.get("rel") == "approve"
-            )
-        except StopIteration:
-            logger.error("No approve link returned from PayPal for order %s", order_id)
-            return Response(
-                {"detail": "PayPal approve URL not found"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        return Response(
-            {
-                "order_id": order_id,
-                "approve_url": approve_link,
-                "plan": {
-                    "id": plan.id,
-                    "name": plan.name,
-                    "amount": amount_value,
-                    "currency": currency,
-                },
-            },
-            status=status.HTTP_200_OK,
-        )
-    
-
-class CapturePayPalSubscriptionOrderView(APIView):
-    """
-    After owner approves the PayPal payment in the client,
-    call this endpoint with the order_id to finalize and
-    activate the subscription plan locally.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        user = request.user
-        order_id = request.data.get("order_id")
-
-        if not order_id:
-            return Response(
-                {"detail": "order_id is required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Resolve shop for this owner (we do NOT trust order_id for auth)
-        try:
-            shop = user.shop
-        except Shop.DoesNotExist:
-            return Response(
-                {"detail": "Create a shop before capturing a subscription payment."},
-                status=status.HTTP_409_CONFLICT
-            )
-
-        access_token = get_paypal_access_token()
-        if not access_token:
-            return Response(
-                {"detail": "PayPal service unavailable"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-
-        base_url = settings.PAYPAL_BASE_URL
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}",
-        }
-
-        # Capture the PayPal order
-        resp = requests.post(
-            f"{base_url}/v2/checkout/orders/{order_id}/capture",
-            headers=headers,
-            timeout=15,
-        )
-
-        if resp.status_code not in (200, 201):
-            logger.error(
-                "PayPal capture failed for order %s: %s",
-                order_id,
-                resp.text,
-            )
-            return Response(
-                {"detail": "PayPal order could not be captured"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        data = resp.json()
-        status_str = data.get("status")
-
-        if status_str != "COMPLETED":
-            logger.warning(
-                "PayPal order %s capture status is %s (expected COMPLETED)",
-                order_id,
-                status_str,
-            )
-            return Response(
-                {"detail": "Payment not completed"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Pull back the plan_id from purchase_units.reference_id
-        purchase_units = data.get("purchase_units", []) or []
-        ref = (purchase_units[0] or {}).get("reference_id") if purchase_units else None
-
-        plan_id = None
-        if ref and ref.startswith("sub-plan:"):
-            # "sub-plan:<plan_id>:shop:<shop_id>"
+            sub = ShopSubscription.objects.get(paypal_subscription_id=subscription_id)
+        except ShopSubscription.DoesNotExist:
+            # Check AI add-on
             try:
-                parts = ref.split(":")
-                plan_id = int(parts[1])
-            except Exception:
-                logger.exception("Failed to parse plan_id from reference_id: %s", ref)
+                sub = ShopSubscription.objects.get(ai_paypal_subscription_id=subscription_id)
+                sub.ai_addon_active = True
+                sub.save()
+                logger.info(f"PayPal AI Addon Activated: {subscription_id}")
+                return
+            except ShopSubscription.DoesNotExist:
+                logger.error("No ShopSubscription found for PayPal sub %s", subscription_id)
+                return
 
-        if not plan_id:
-            return Response(
-                {"detail": "Could not determine subscription plan from PayPal order"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        sub.status = "active"
+        sub.provider = ShopSubscription.PROVIDER_PAYPAL
+        sub.save()
+        logger.info(f"PayPal Subscription Activated: {subscription_id}")
 
-        # Load the plan
+    def _handle_subscription_cancelled(self, subscription_id, resource):
         try:
-            plan = SubscriptionPlan.objects.get(id=plan_id)
-        except SubscriptionPlan.DoesNotExist:
-            return Response(
-                {"detail": "Subscription plan not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # Upsert ShopSubscription for this shop (manual 1-month cycle)
-        now_dt = timezone.now()
-        end_dt = now_dt + relativedelta(months=1)
-
-        ss, created = ShopSubscription.objects.get_or_create(
-            shop=shop,
-            defaults={
-                "plan": plan,
-                "status": ShopSubscription.STATUS_ACTIVE,
-                "start_date": now_dt,
-                "end_date": end_dt,
-                "stripe_subscription_id": None,  # PayPal-based, no Stripe sub
-            },
-        )
-
-        if not created:
-            previous_plan = ss.plan.name if ss.plan else None
-            ss.plan = plan
-            ss.status = ShopSubscription.STATUS_ACTIVE
-            ss.start_date = now_dt
-            ss.end_date = end_dt
-            # Keep stripe_subscription_id as-is if they previously had Stripe?
-            # For pure PayPal flow, you can explicitly null it:
-            ss.stripe_subscription_id = None
-            ss.save(
-                update_fields=[
-                    "plan",
-                    "status",
-                    "start_date",
-                    "end_date",
-                    "stripe_subscription_id",
-                ]
-            )
-            logger.info(
-                "PayPal subscription updated for shop %s: %s -> %s",
-                shop.id,
-                previous_plan,
-                plan.name,
-            )
-        else:
-            logger.info(
-                "PayPal subscription created for shop %s with plan %s",
-                shop.id,
-                plan.name,
-            )
-
-        # NOTE: If you want Klaviyo/Zapier events here, we can hook in later
-        # using build_profile_payload_for_shop + send_klaviyo_event.
-
-        return Response(
-            {
-                "status": "success",
-                "plan": plan.name,
-                "expires_on": end_dt.isoformat(),
-            },
-            status=status.HTTP_200_OK,
-        )
-    
-class CreatePayPalAIAddonOrderView(APIView):
-    """
-    Owner buys the AI Assistant add-on using PayPal.
-    Behaves similarly to CreateAIAddonCheckoutSessionView (Stripe),
-    but returns a PayPal order instead.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        user = request.user
-
-        # 1) Resolve shop + subscription
-        try:
-            shop = user.shop
-            shop_sub = getattr(shop, "subscription", None)
-        except Shop.DoesNotExist:
-            return Response(
-                {"detail": "Create a shop before purchasing AI add-on."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if not shop_sub:
-            return Response(
-                {"detail": "Shop subscription details not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # 2) Eligibility checks (same as Stripe version)
-        if shop_sub.has_ai_addon:
-            return Response(
-                {"detail": "AI Assistant add-on already active."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if getattr(shop_sub.plan, "ai_assistant", SubscriptionPlan.AI_ADDON) == SubscriptionPlan.AI_INCLUDED:
-            return Response(
-                {"detail": "AI Assistant is already included in your current plan."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # 3) Determine price from settings
-        ai_amount_str = getattr(settings, "PAYPAL_AI_ADDON_AMOUNT", None)
-        if not ai_amount_str:
-            return Response(
-                {"detail": "AI add-on PayPal amount is not configured."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        currency = getattr(settings, "PAYPAL_CURRENCY_CODE", "USD")
-
-        access_token = get_paypal_access_token()
-        if not access_token:
-            return Response(
-                {"detail": "PayPal service unavailable"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        base_url = settings.PAYPAL_BASE_URL
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}",
-        }
-
-        # We encode shop_id so on capture we know which subscription to mark
-        payload = {
-            "intent": "CAPTURE",
-            "purchase_units": [{
-                "reference_id": f"ai-addon:shop:{shop.id}",
-                "amount": {
-                    "currency_code": currency,
-                    "value": ai_amount_str,
-                },
-            }],
-            "application_context": {
-                "return_url": "https://example.com/paypal-ai-addon-return",
-                "cancel_url": "https://example.com/paypal-ai-addon-cancel",
-            },
-        }
-
-        resp = requests.post(
-            f"{base_url}/v2/checkout/orders",
-            json=payload,
-            headers=headers,
-            timeout=15,
-        )
-
-        if resp.status_code != 201:
-            logger.error(
-                "Failed to create PayPal AI add-on order: %s",
-                resp.text,
-            )
-            return Response(
-                {"detail": "Failed to create PayPal order"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        order_data = resp.json()
-        order_id = order_data["id"]
+            sub = ShopSubscription.objects.get(paypal_subscription_id=subscription_id)
+            # Main subscription cancelled
+            sub.status = "canceled"
+            sub.plan = None
+            sub.paypal_subscription_id = None
+            sub.provider = None
+            
+            # Downgrade to Foundation
+            try:
+                foundation = SubscriptionPlan.objects.get(name=SubscriptionPlan.FOUNDATION)
+                sub.plan = foundation
+            except SubscriptionPlan.DoesNotExist:
+                pass
+            
+            sub.save()
+            logger.info(f"PayPal Subscription Cancelled: {subscription_id}")
+            return
+        except ShopSubscription.DoesNotExist:
+            pass
 
         try:
-            approve_link = next(
-                link["href"]
-                for link in order_data.get("links", [])
-                if link.get("rel") == "approve"
-            )
-        except StopIteration:
-            logger.error("No approve link returned from PayPal for AI addon order %s", order_id)
-            return Response(
-                {"detail": "PayPal approve URL not found"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            sub = ShopSubscription.objects.get(ai_paypal_subscription_id=subscription_id)
+            # AI add-on cancelled
+            sub.ai_addon_active = False
+            sub.ai_paypal_subscription_id = None
+            sub.ai_provider = None
+            sub.save()
+            logger.info(f"PayPal AI Addon Cancelled: {subscription_id}")
+        except ShopSubscription.DoesNotExist:
+            logger.error("No ShopSubscription for cancelled PayPal sub %s", subscription_id)
 
-        return Response(
-            {
-                "order_id": order_id,
-                "approve_url": approve_link,
-                "amount": ai_amount_str,
-                "currency": currency,
-            },
-            status=status.HTTP_200_OK,
+    def _handle_payment_completed(self, subscription_id, resource):
+        """
+        Track successful monthly payments.
+        """
+        logger.info("Payment completed for PayPal subscription %s", subscription_id)
+        
+        # Find the shop/user associated with this subscription
+        sub = ShopSubscription.objects.filter(paypal_subscription_id=subscription_id).first()
+        if not sub:
+            sub = ShopSubscription.objects.filter(ai_paypal_subscription_id=subscription_id).first()
+        
+        if not sub:
+            logger.warning(f"Could not find subscription for payment {subscription_id}")
+            return
+
+        amount = resource.get("amount", {}).get("total", "0.00")
+        currency = resource.get("amount", {}).get("currency", "USD")
+        transaction_id = resource.get("id")
+
+        # Create Payment Record
+        Payment.objects.create(
+            user=sub.shop.owner,
+            amount=Decimal(amount),
+            total_amount=Decimal(amount),
+            stripe_payment_intent_id=transaction_id, # Storing PayPal Transaction ID here
+            status="succeeded",
+            payment_type="subscription_renewal", # or similar
+            is_deposit=False,
+            remaining_amount=0
         )
-
-
-class CapturePayPalAIAddonOrderView(APIView):
-    """
-    After owner approves the AI add-on PayPal payment,
-    call this with order_id to mark has_ai_addon=True locally.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        user = request.user
-        order_id = request.data.get("order_id")
-
-        if not order_id:
-            return Response(
-                {"detail": "order_id is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            shop = user.shop
-            shop_sub = getattr(shop, "subscription", None)
-        except Shop.DoesNotExist:
-            return Response(
-                {"detail": "Create a shop before capturing AI add-on payment."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if not shop_sub:
-            return Response(
-                {"detail": "Shop subscription details not found."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        access_token = get_paypal_access_token()
-        if not access_token:
-            return Response(
-                {"detail": "PayPal service unavailable"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        base_url = settings.PAYPAL_BASE_URL
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {access_token}",
-        }
-
-        resp = requests.post(
-            f"{base_url}/v2/checkout/orders/{order_id}/capture",
-            headers=headers,
-            timeout=15,
-        )
-
-        if resp.status_code not in (200, 201):
-            logger.error(
-                "PayPal AI addon capture failed for order %s: %s",
-                order_id,
-                resp.text,
-            )
-            return Response(
-                {"detail": "PayPal order could not be captured"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        data = resp.json()
-        if data.get("status") != "COMPLETED":
-            logger.warning(
-                "PayPal AI addon order %s capture status is %s",
-                order_id,
-                data.get("status"),
-            )
-            return Response(
-                {"detail": "Payment not completed"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # ✅ Mark AI add-on active (no Stripe subscription – purely PayPal/manual)
-        shop_sub.has_ai_addon = True
-        # We deliberately do NOT set ai_subscription_id here because this is not a Stripe subscription.
-        shop_sub.save(update_fields=["has_ai_addon"])
-
-        logger.info(
-            "AI add-on enabled via PayPal for shop %s (order %s)",
-            shop.id,
-            order_id,
-        )
-
-        # You can later add a Klaviyo event here similar to Stripe's AI Addon Started
-        return Response(
-            {"status": "success", "ai_addon": True},
-            status=status.HTTP_200_OK,
+        
+        # Log Transaction
+        TransactionLog.objects.create(
+            transaction_type="payment",
+            user=sub.shop.owner,
+            shop=sub.shop,
+            amount=Decimal(amount),
+            currency=currency,
+            status="succeeded",
+            description=f"PayPal Subscription Payment: {subscription_id}"
         )

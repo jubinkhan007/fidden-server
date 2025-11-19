@@ -79,6 +79,13 @@ class SubscriptionPlan(models.Model):
     }
     TIER_MULTIPLIER = 5          # multiplier for the tier weight
 
+    paypal_plan_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="PayPal Billing Plan ID for this subscription tier"
+    )
+
     def __str__(self):
         return self.name
 
@@ -111,16 +118,38 @@ class ShopSubscription(models.Model):
         (STATUS_CANCELLED, "Cancelled"),
     ]
 
+    PROVIDER_STRIPE = "stripe"
+    PROVIDER_PAYPAL = "paypal"
+    PROVIDER_CHOICES = [
+        (PROVIDER_STRIPE, "Stripe"),
+        (PROVIDER_PAYPAL, "PayPal"),
+    ]
+
     shop = models.OneToOneField("api.Shop", on_delete=models.CASCADE, related_name="subscription")
     plan = models.ForeignKey(SubscriptionPlan, on_delete=models.SET_NULL, null=True, related_name="shops")
+    provider = models.CharField(
+        max_length=20,
+        choices=PROVIDER_CHOICES,
+        default=PROVIDER_STRIPE,
+    )
     start_date = models.DateTimeField()
     end_date = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     stripe_subscription_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
+    paypal_subscription_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="PayPal subscription ID returned on approval"
+    )
+
+    paypal_ai_subscription_id = models.CharField(max_length=255, null=True, blank=True)
     has_ai_addon = models.BooleanField(default=False)  # user explicitly bought add-on
     legacy_ai_promo_used = models.BooleanField(default=False)
     # NEW ↓↓↓
-    ai_subscription_id = models.CharField(max_length=100, blank=True, null=True)
+    ai_stripe_subscription_id = models.CharField(max_length=255, blank=True, null=True)
+    # NEW
+    ai_paypal_subscription_id = models.CharField(max_length=255, blank=True, null=True)
     ai_subscription_item_id = models.CharField(max_length=100, blank=True, null=True)
 
     @property
