@@ -74,45 +74,117 @@ def _get_access_token() -> str:
 # STUBS – create_subscription & revise_subscription
 # ---------------------------------------------------------------------------
 
-def create_subscription(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+def create_subscription(
+    plan: Any,
+    shop: Any,
+    return_url: str,
+    cancel_url: str
+) -> tuple[str, str]:
     """
-    TEMPORARY STUB.
+    Creates a subscription in PayPal.
 
-    We define this so imports in subscriptions/views.py work and the app boots.
+    Args:
+        plan: The SubscriptionPlan model instance.
+        shop: The Shop model instance.
+        return_url: URL to redirect after approval.
+        cancel_url: URL to redirect after cancellation.
 
-    When you’re ready to integrate real PayPal subscriptions, replace this
-    implementation with a proper call to:
-      POST /v1/billing/subscriptions
-
-    For now we just log and return a fake payload.
+    Returns:
+        (subscription_id, approval_url)
     """
-    logger.warning(
-        "PayPal create_subscription() called, but this is currently a stub. "
-        "No real PayPal API call is performed."
-    )
-    return {
-        "status": "stub",
-        "id": None,
-        "message": "PayPal create_subscription is not implemented yet.",
+    if not plan.paypal_plan_id:
+        raise ValueError(f"Plan {plan.name} has no paypal_plan_id configured.")
+
+    access_token = _get_access_token()
+    base_url = _get_paypal_base_url()
+
+    # Construct the subscription payload
+    # See: https://developer.paypal.com/docs/api/subscriptions/v1/#subscriptions_create
+    payload = {
+        "plan_id": plan.paypal_plan_id,
+        "custom_id": str(shop.id),  # Store shop ID for reconciliation
+        "application_context": {
+            "brand_name": "Fidden",
+            "locale": "en-US",
+            "shipping_preference": "NO_SHIPPING",
+            "user_action": "SUBSCRIBE_NOW",
+            "return_url": return_url,
+            "cancel_url": cancel_url,
+        },
     }
 
+    logger.info("Creating PayPal subscription for shop %s, plan %s", shop.id, plan.paypal_plan_id)
 
-def revise_subscription(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-    """
-    TEMPORARY STUB.
-
-    Same story as create_subscription: we just satisfy imports so the app
-    doesn’t crash. Replace with real logic later if/when PayPal is needed.
-    """
-    logger.warning(
-        "PayPal revise_subscription() called, but this is currently a stub. "
-        "No real PayPal API call is performed."
+    resp = requests.post(
+        f"{base_url}/v1/billing/subscriptions",
+        json=payload,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        timeout=15,
     )
-    return {
-        "status": "stub",
-        "id": None,
-        "message": "PayPal revise_subscription is not implemented yet.",
+
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        logger.error("PayPal create subscription failed: %s | body=%s", e, resp.text)
+        raise
+
+    data = resp.json()
+    sub_id = data.get("id")
+    links = data.get("links", [])
+    approval_url = next((link["href"] for link in links if link["rel"] == "approve"), None)
+
+    if not sub_id or not approval_url:
+        logger.error("PayPal response missing id or approval_url: %s", data)
+        raise RuntimeError("Invalid PayPal subscription response")
+
+    return sub_id, approval_url
+
+
+def revise_subscription(subscription_id: str, new_plan_id: str) -> Dict[str, Any]:
+    """
+    Upgrades or downgrades an existing subscription to a new plan.
+    
+    Args:
+        subscription_id: The PayPal subscription ID (I-...)
+        new_plan_id: The PayPal Plan ID (P-...) to switch to.
+        
+    Returns:
+        The JSON response from PayPal.
+    """
+    if not subscription_id or not new_plan_id:
+        raise ValueError("subscription_id and new_plan_id are required")
+
+    access_token = _get_access_token()
+    base_url = _get_paypal_base_url()
+    
+    url = f"{base_url}/v1/billing/subscriptions/{subscription_id}/revise"
+    
+    payload = {
+        "plan_id": new_plan_id
     }
+    
+    logger.info("Revising PayPal subscription %s to plan %s", subscription_id, new_plan_id)
+    
+    resp = requests.post(
+        url,
+        json=payload,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        timeout=15,
+    )
+    
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        logger.error("PayPal revise subscription failed: %s | body=%s", e, resp.text)
+        raise
+
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
