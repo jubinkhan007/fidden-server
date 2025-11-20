@@ -47,11 +47,18 @@ class LoginView(APIView):
             data = serializer.validated_data
             user = data.get("user")
 
+            # Fetch shop details if they exist
+            shop = getattr(user, 'shop', None)
+            shop_id = shop.id if shop else None
+            shop_niche = shop.niche if shop else None
+
             return Response({
                 "success": True,
                 "message": data.get("message"),
                 "email": user.email,
-                "role": user.role,  # assuming your User model has a 'role' field
+                "role": user.role,
+                "shop_id": shop_id,       # <--- Added
+                "shop_niche": shop_niche, # <--- Added
                 "accessToken": data.get("accessToken"),
                 "refreshToken": data.get("refreshToken"),
             }, status=status.HTTP_200_OK)
@@ -96,11 +103,18 @@ class GoogleLoginView(APIView):
         refresh = RefreshToken.for_user(user)
         message = "Registration successful" if created else "Login successful"
 
+        # Fetch shop details if they exist
+        shop = getattr(user, 'shop', None)
+        shop_id = shop.id if shop else None
+        shop_niche = shop.niche if shop else None
+
         return Response({
             "success": True,
             "message": message,
             "email": user.email,
             "role": role,
+            "shop_id": shop_id,       # <--- Added
+            "shop_niche": shop_niche, # <--- Added
             "accessToken": str(refresh.access_token),
             "refreshToken": str(refresh),
         }, status=status.HTTP_200_OK)

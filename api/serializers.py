@@ -232,7 +232,7 @@ class ShopSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shop
         fields = [
-            'id', 'name', 'address', 'location', 'capacity', 'start_at',
+            'id', 'name', 'niche', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
             'shop_img', 'close_days', "business_hours", 'owner_id', 'is_verified', 'status', 
             'verification_files', 'uploaded_files', 'is_deposit_required',

@@ -121,6 +121,19 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    shop_id = serializers.SerializerMethodField()
+    shop_niche = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ["id", "name", "email", 'mobile_number', 'profile_image']  
+        fields = ["id", "name", "email", 'mobile_number', 'profile_image', 'shop_id', 'shop_niche']
+
+    def get_shop_id(self, obj):
+        if hasattr(obj, 'shop'):
+            return obj.shop.id
+        return None
+
+    def get_shop_niche(self, obj):
+        if hasattr(obj, 'shop'):
+            return obj.shop.niche
+        return None  

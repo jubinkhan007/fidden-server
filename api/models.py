@@ -23,12 +23,30 @@ class Shop(models.Model):
         ("verified", "Verified"),
     ]
 
+    NICHE_CHOICES = [
+        ('fitness_trainer', 'Fitness Trainer'),
+        ('tattoo_artist', 'Tattoo Artist'),
+        ('barber', 'Barber'),
+        ('hairstylist', 'Hairstylist'),
+        ('nail_tech', 'Nail Tech'),
+        ('makeup_artist', 'Makeup Artist'),
+        ('esthetician', 'Esthetician'),
+        ('massage_therapist', 'Massage Therapist'),
+        ('other', 'Other'),
+    ]
+
     owner = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='shop'
     )
     name = models.CharField(max_length=255)
+    niche = models.CharField(
+        max_length=50, 
+        choices=NICHE_CHOICES, 
+        default='other',
+        help_text="The primary category of the service provider"
+    )
     address = models.TextField()
     location = models.CharField(max_length=255, blank=True, null=True)
     capacity = models.PositiveIntegerField()
