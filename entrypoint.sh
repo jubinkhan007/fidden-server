@@ -12,6 +12,10 @@ rm -rf /app/staticfiles/*
 echo "Applying database migrations..."
 python manage.py migrate --noinput
 
+# Sync PayPal Plans from Env to DB
+echo "Syncing PayPal Plans..."
+python manage.py sync_paypal_plans
+
 # Collect static files
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
