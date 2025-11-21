@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from .views import (
     AIReportView,
     GenerateMarketingCaptionView,
@@ -84,3 +84,25 @@ urlpatterns = [
     path("weekly-summary/generate_marketing_caption/", GenerateMarketingCaptionView.as_view()),
     path("weekly-summary/send_loyalty_email/", SendLoyaltyEmailView.as_view()),
 ]
+
+# ==========================================
+# PHASE 2: TATTOO ARTIST ROUTES 🖋️
+# ==========================================
+from rest_framework.routers import DefaultRouter
+from .views import (
+    PortfolioViewSet, DesignRequestViewSet, 
+    ConsentFormViewSet, SignedConsentFormViewSet, 
+    IDVerificationViewSet
+)
+
+router = DefaultRouter()
+router.register(r'portfolio', PortfolioViewSet, basename='portfolio')
+router.register(r'design-requests', DesignRequestViewSet, basename='design-requests')
+router.register(r'consent-forms/templates', ConsentFormViewSet, basename='consent-templates')
+router.register(r'consent-forms/signed', SignedConsentFormViewSet, basename='signed-consent-forms')
+router.register(r'id-verification', IDVerificationViewSet, basename='id-verification')
+
+urlpatterns += [
+    path('', include(router.urls)),
+]
+

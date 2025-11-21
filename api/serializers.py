@@ -25,6 +25,13 @@ from .models import (
     Revenue,
     Coupon,
     ServiceDisabledTime,
+    WeeklySummary,
+    PortfolioItem,
+    DesignRequest,
+    DesignRequestImage,
+    ConsentFormTemplate,
+    SignedConsentForm,
+    IDVerificationRequest,
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -1097,6 +1104,105 @@ class AIReportSerializer(serializers.ModelSerializer):
     Serializer for the AI Weekly Report.
     """
     top_selling_service = serializers.CharField(source='get_top_selling_service_display')
+    
+    class Meta:
+        model = WeeklySummary
+        fields = [
+            'id', 'shop', 'week_start_date', 'week_end_date',
+            'total_revenue', 'total_bookings', 'no_show_rate',
+            'top_selling_service', 'customer_retention_rate',
+            'actionable_insights', 'created_at'
+        ]
+
+# ==========================================
+# PHASE 2: TATTOO ARTIST SERIALIZERS 🖋️
+# ==========================================
+
+class PortfolioItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PortfolioItem
+        fields = ['id', 'shop', 'image', 'tags', 'description', 'created_at']
+        read_only_fields = ['shop', 'created_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        validated_data['shop'] = request.user.shop
+        return super().create(validated_data)
+
+class DesignRequestImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DesignRequestImage
+        fields = ['id', 'image', 'created_at']
+
+class DesignRequestSerializer(serializers.ModelSerializer):
+    images = DesignRequestImageSerializer(many=True, read_only=True)
+    # Allow uploading images via a separate endpoint or multipart here?
+    # For MVP, let's assume images are uploaded separately or we handle them in the view.
+    
+    user_name = serializers.CharField(source='user.name', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+
+    class Meta:
+        model = DesignRequest
+        fields = [
+            'id', 'shop', 'user', 'user_name', 'user_email', 'booking', 
+            'description', 'placement', 'size_approx', 'status', 
+            'images', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['shop', 'user', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        validated_data['user'] = request.user
+        # If shop_id is passed in URL or context, use it. 
+        # For user-facing creation, they must specify the shop.
+        # But the viewset will likely handle `perform_create`.
+        return super().create(validated_data)
+
+class ConsentFormTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConsentFormTemplate
+        fields = ['id', 'shop', 'title', 'content', 'is_default', 'created_at']
+        read_only_fields = ['shop', 'created_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        validated_data['shop'] = request.user.shop
+        return super().create(validated_data)
+
+class SignedConsentFormSerializer(serializers.ModelSerializer):
+    template_title = serializers.CharField(source='template.title', read_only=True)
+    user_name = serializers.CharField(source='user.name', read_only=True)
+
+    class Meta:
+        model = SignedConsentForm
+        fields = ['id', 'template', 'template_title', 'booking', 'user', 'user_name', 'signature_image', 'signed_at']
+        read_only_fields = ['user', 'signed_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        validated_data['user'] = request.user
+        return super().create(validated_data)
+
+class IDVerificationRequestSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source='user.name', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+
+    class Meta:
+        model = IDVerificationRequest
+        fields = [
+            'id', 'shop', 'user', 'user_name', 'user_email', 'booking',
+            'front_image', 'back_image', 'status', 'rejection_reason',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['shop', 'user', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        validated_data['user'] = request.user
+        # Shop must be provided in context or determined from booking
+        return super().create(validated_data)
+
     forecast_summary = serializers.CharField(source='get_forecast_summary_display')
     motivational_nudge = serializers.CharField(source='get_motivational_nudge_display')
 

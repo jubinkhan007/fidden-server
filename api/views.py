@@ -2128,7 +2128,6 @@ class SendLoyaltyEmailView(APIView):
                 }
             )
 
-        # PREVIEW response (no delivery)
         return Response(
             {
                 "ok": True,
@@ -2141,3 +2140,99 @@ class SendLoyaltyEmailView(APIView):
                 "preview_only": True,
             }
         )
+
+# ==========================================
+# PHASE 2: TATTOO ARTIST VIEWS 🖋️
+# ==========================================
+from rest_framework import viewsets
+from .models import (
+    PortfolioItem, DesignRequest, DesignRequestImage, 
+    ConsentFormTemplate, SignedConsentForm, IDVerificationRequest
+)
+from .serializers import (
+    PortfolioItemSerializer, DesignRequestSerializer, 
+    ConsentFormTemplateSerializer, SignedConsentFormSerializer, 
+    IDVerificationRequestSerializer
+)
+
+class PortfolioViewSet(viewsets.ModelViewSet):
+    """
+    Manage portfolio items.
+    """
+    serializer_class = PortfolioItemSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Owners see their own shop's portfolio
+        # Public/Users might see specific shop's portfolio via filter
+        user = self.request.user
+        if hasattr(user, 'shop'):
+            return PortfolioItem.objects.filter(shop=user.shop).order_by('-created_at')
+        
+        # If just a user, allow filtering by shop_id
+        shop_id = self.request.query_params.get('shop_id')
+        if shop_id:
+            return PortfolioItem.objects.filter(shop_id=shop_id).order_by('-created_at')
+            
+        return PortfolioItem.objects.none()
+
+class DesignRequestViewSet(viewsets.ModelViewSet):
+    """
+    Manage design requests.
+    """
+    serializer_class = DesignRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        # If owner, see all requests for their shop
+        if hasattr(user, 'shop'):
+            return DesignRequest.objects.filter(shop=user.shop).order_by('-created_at')
+        # If user, see their own requests
+        return DesignRequest.objects.filter(user=user).order_by('-created_at')
+
+class ConsentFormViewSet(viewsets.ModelViewSet):
+    """
+    Manage templates (for owners) and signed forms (for everyone).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # This is tricky because it handles both templates and signed forms?
+        # No, this ViewSet should probably handle Templates, and SignedForms via a separate or nested route.
+        # Let's split or handle logically.
+        # For now, let's make this ViewSet for TEMPLATES.
+        user = self.request.user
+        if hasattr(user, 'shop'):
+            return ConsentFormTemplate.objects.filter(shop=user.shop)
+        return ConsentFormTemplate.objects.none()
+    
+    def get_serializer_class(self):
+        return ConsentFormTemplateSerializer
+
+class SignedConsentFormViewSet(viewsets.ModelViewSet):
+    """
+    Manage signed forms.
+    """
+    serializer_class = SignedConsentFormSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, 'shop'):
+            return SignedConsentForm.objects.filter(booking__shop=user.shop).order_by('-signed_at')
+        return SignedConsentForm.objects.filter(user=user).order_by('-signed_at')
+
+class IDVerificationViewSet(viewsets.ModelViewSet):
+    """
+    Manage ID verification requests.
+    """
+    serializer_class = IDVerificationRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, 'shop'):
+            return IDVerificationRequest.objects.filter(shop=user.shop).order_by('-created_at')
+        return IDVerificationRequest.objects.filter(user=user).order_by('-created_at')
+

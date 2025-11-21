@@ -974,3 +974,115 @@ def on_booking_status_change(sender, instance, **kwargs):
         # 2) kick off outreach after the transaction commits
         from api.tasks import trigger_no_show_auto_fill
         transaction.on_commit(lambda: trigger_no_show_auto_fill.delay(instance.id))
+
+
+# ==========================================
+# PHASE 2: TATTOO ARTIST FEATURES 🖋️
+# ==========================================
+
+class PortfolioItem(models.Model):
+    """
+    Dedicated model for the 'Portfolio Manager'.
+    Allows tagging (e.g., 'Realism', 'Blackwork') and descriptions.
+    """
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="portfolio_items")
+    image = models.ImageField(upload_to="portfolio/")
+    tags = models.JSONField(default=list, blank=True, help_text="List of tags e.g. ['Realism', 'Color']")
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Portfolio Item {self.id} - {self.shop.name}"
+
+class DesignRequest(models.Model):
+    """
+    Allows clients to send ideas/sketches to the artist before or after booking.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('discussing', 'Discussing'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="design_requests")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="design_requests")
+    booking = models.ForeignKey("payments.Booking", on_delete=models.SET_NULL, null=True, blank=True, related_name="design_requests")
+    
+    description = models.TextField(help_text="User's idea or description")
+    placement = models.CharField(max_length=100, help_text="e.g., Left Arm")
+    size_approx = models.CharField(max_length=100, help_text="e.g., 3x3 inches")
+    
+    # For multiple reference images, we might need a separate model, 
+    # but for simplicity/MVP we can use a JSONField of URLs or a single file field.
+    # Let's use a separate model for images to allow multiple uploads.
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Design Request by {self.user} for {self.shop.name}"
+
+class DesignRequestImage(models.Model):
+    """
+    Reference images for a DesignRequest.
+    """
+    request = models.ForeignKey(DesignRequest, on_delete=models.CASCADE, related_name="images")
+    image = models.ImageField(upload_to="design_requests/")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class ConsentFormTemplate(models.Model):
+    """
+    Shops can create their own legal waivers.
+    """
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="consent_templates")
+    title = models.CharField(max_length=255, default="General Waiver")
+    content = models.TextField(help_text="The legal text of the waiver")
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.title} - {self.shop.name}"
+
+class SignedConsentForm(models.Model):
+    """
+    Record of a user signing a form.
+    """
+    template = models.ForeignKey(ConsentFormTemplate, on_delete=models.SET_NULL, null=True)
+    booking = models.ForeignKey("payments.Booking", on_delete=models.CASCADE, related_name="signed_forms")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="signed_forms")
+    
+    signature_image = models.ImageField(upload_to="signatures/")
+    signed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Signed Form by {self.user} for Booking {self.booking_id}"
+
+class IDVerificationRequest(models.Model):
+    """
+    Explicit tracker for ID verification status.
+    """
+    STATUS_CHOICES = [
+        ('pending_upload', 'Pending Upload'),
+        ('under_review', 'Under Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="id_verifications")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="id_verifications")
+    booking = models.ForeignKey("payments.Booking", on_delete=models.SET_NULL, null=True, blank=True, related_name="id_verifications")
+    
+    front_image = models.ImageField(upload_to="id_verification/", blank=True, null=True)
+    back_image = models.ImageField(upload_to="id_verification/", blank=True, null=True)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending_upload')
+    rejection_reason = models.TextField(blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"ID Verification ({self.status}) - {self.user}"
+
