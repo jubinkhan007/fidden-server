@@ -2053,3 +2053,62 @@ class PayPalWebhookView(APIView):
             status="succeeded",
             description=f"PayPal Subscription Payment: {subscription_id}"
         )
+
+
+# ==========================================
+# COMPATIBILITY: AI Add-on via PayPal
+# ==========================================
+class CreatePayPalAIAddonOrderView(APIView):
+    """
+    Compatibility endpoint for Flutter app.
+    Redirects to subscription flow since AI Add-on is recurring.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from api.services.paypal import create_subscription
+        from django.urls import reverse
+
+        try:
+            shop = request.user.shop
+            shop_sub = getattr(shop, "subscription", None)
+            if not shop_sub:
+                return Response({"error": "Shop subscription not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Shop.DoesNotExist:
+            return Response({"error": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Basic eligibility checks
+        if shop_sub.has_ai_addon:
+            return Response({"error": "AI Assistant add-on already active."}, status=status.HTTP_400_BAD_REQUEST)
+        if getattr(shop_sub.plan, 'ai_assistant', 'addon') == 'included':
+            return Response({"error": "AI Assistant already included in your plan."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Find AI add-on plan
+            ai_addon_plan = SubscriptionPlan.objects.filter(ai_assistant=SubscriptionPlan.AI_ADDON).first()
+            if not ai_addon_plan or not ai_addon_plan.paypal_plan_id:
+                return Response(
+                    {"error": "AI add-on is not configured for PayPal."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            return_url = request.build_absolute_uri(reverse("paypal_return"))
+            cancel_url = request.build_absolute_uri(reverse("paypal_cancel"))
+
+            paypal_sub_id, approval_url = create_subscription(ai_addon_plan, shop, return_url, cancel_url)
+
+            # Store the PayPal subscription ID for the AI add-on
+            shop_sub.ai_paypal_subscription_id = paypal_sub_id
+            shop_sub.has_ai_addon = False  # Wait for webhook confirmation
+            shop_sub.save()
+
+            return Response(
+                {
+                    "approval_url": approval_url,
+                    "subscription_id": paypal_sub_id,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.error(f"PayPal error creating AI add-on subscription: {e}", exc_info=True)
+            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
