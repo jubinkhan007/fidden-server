@@ -1966,7 +1966,7 @@ class PayPalWebhookView(APIView):
             # Check AI add-on
             try:
                 sub = ShopSubscription.objects.get(ai_paypal_subscription_id=subscription_id)
-                sub.ai_addon_active = True
+                sub.has_ai_addon = True  # FIXED: was ai_addon_active
                 sub.save()
                 logger.info(f"PayPal AI Addon Activated: {subscription_id}")
                 return
@@ -2004,9 +2004,8 @@ class PayPalWebhookView(APIView):
         try:
             sub = ShopSubscription.objects.get(ai_paypal_subscription_id=subscription_id)
             # AI add-on cancelled
-            sub.ai_addon_active = False
+            sub.has_ai_addon = False  # FIXED: was ai_addon_active
             sub.ai_paypal_subscription_id = None
-            sub.ai_provider = None
             sub.save()
             logger.info(f"PayPal AI Addon Cancelled: {subscription_id}")
         except ShopSubscription.DoesNotExist:
