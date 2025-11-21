@@ -244,6 +244,42 @@ class CreateAIAddonCheckoutSessionView(APIView):
         if getattr(shop_sub.plan, 'ai_assistant', 'addon') == 'included':
              return Response({"error": "AI Assistant already included in your plan."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # NEW: Check provider from request body
+        provider = request.data.get("provider", "stripe").lower()
+        
+        # ========== PAYPAL FLOW ==========
+        if provider == "paypal":
+            try:
+                # Find AI add-on plan
+                ai_addon_plan = SubscriptionPlan.objects.filter(ai_assistant=SubscriptionPlan.AI_ADDON).first()
+                if not ai_addon_plan or not ai_addon_plan.paypal_plan_id:
+                    return Response(
+                        {"error": "AI add-on is not configured for PayPal."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                return_url = request.build_absolute_uri(reverse("paypal_return"))
+                cancel_url = request.build_absolute_uri(reverse("paypal_cancel"))
+
+                paypal_sub_id, approval_url = create_subscription(ai_addon_plan, shop, return_url, cancel_url)
+
+                # Store the PayPal subscription ID for the AI add-on
+                shop_sub.ai_paypal_subscription_id = paypal_sub_id
+                shop_sub.has_ai_addon = False  # Wait for webhook confirmation
+                shop_sub.save()
+
+                return Response(
+                    {
+                        "url": approval_url,
+                        "subscription_id": paypal_sub_id,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            except Exception as e:
+                logger.error(f"PayPal error creating AI add-on subscription: {e}", exc_info=True)
+                return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        # ========== STRIPE FLOW (ORIGINAL) ==========
         ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
         if not ai_price_id:
             return Response({"error": "AI add-on price not configured."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -316,6 +352,7 @@ class CreateAIAddonCheckoutSessionView(APIView):
         except Exception as e:
             logger.exception("Unexpected error creating checkout session for AI add-on: %s", e)
             return Response({"error": "Could not create checkout session.", "code": "UNEXPECTED_ERROR"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 
