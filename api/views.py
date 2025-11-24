@@ -1672,7 +1672,9 @@ class LatestWeeklySummaryView(APIView):
             )
 
         # --- START: AI ENTITLEMENT CHECK ---
-        subscription = getattr(shop, 'subscription', None)
+        # Force fresh read from database to avoid connection pool staleness
+        subscription = ShopSubscription.objects.filter(shop=shop).select_related('plan').first()
+        
         ai_enabled = False
         if subscription and subscription.plan:
             if subscription.plan.ai_assistant == SubscriptionPlan.AI_INCLUDED or subscription.has_ai_addon:
