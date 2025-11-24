@@ -1909,7 +1909,7 @@ class CapturePayPalOrderView(APIView):
                     payment=payment,
                     user=payment.user,
                     shop=payment.booking.shop,
-                    slot=payment.booking.slot,          # ✅ fix
+                    slot=payment.booking,  # ✅ Fixed: SlotBooking instance, not Slot
                     service=payment.booking.service,
                     amount=payment.amount,
                     currency="usd",  # or data['purchase_units'][0]['amount']['currency_code']
