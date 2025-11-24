@@ -475,10 +475,12 @@ class CancelAIAddonView(APIView):
                 logger.error("Stripe error cancelling AI add-on for shop %s: %s", shop.id, e, exc_info=True)
                 return Response({"error": f"Could not cancel add-on with billing provider: {e.user_message or str(e)}"},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
-            logger.error("Unexpected error cancelling AI add-on for shop %s: %s", shop.id, e, exc_info=True)
-            return Response({"error": "An unexpected error occurred during cancellation."},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            # Neither PayPal nor Stripe subscription found
+            logger.warning("Shop %s has_ai_addon=True but no subscription IDs found; cleaning up.", shop.id)
+            shop_sub.has_ai_addon = False
+            shop_sub.save(update_fields=["has_ai_addon"])
+            return Response({"error": "AI add-on not found in your active subscription details."}, status=status.HTTP_404_NOT_FOUND)
 
 
 
