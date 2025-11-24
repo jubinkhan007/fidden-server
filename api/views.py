@@ -15,7 +15,7 @@ from django.utils.timezone import make_aware
 from django.core.mail import EmailMultiAlternatives, get_connection
 
 from api.utils.slots import generate_slots_for_service
-from subscriptions.models import SubscriptionPlan
+from subscriptions.models import SubscriptionPlan, ShopSubscription
 from .models import (
     AutoFillLog,
     PerformanceAnalytics,
