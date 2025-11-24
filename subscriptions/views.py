@@ -388,66 +388,92 @@ class CancelAIAddonView(APIView):
             logger.error("STRIPE_AI_PRICE_ID is not configured in settings.")
             return Response({"error": "AI add-on configuration error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # ---- 2) Use the AI subscription IDs (NOT the base plan subscription) ---
-        ai_sub_id = getattr(shop_sub, "ai_subscription_id", None)
-        ai_item_id = getattr(shop_sub, "ai_subscription_item_id", None)
+        # ---- 2) Check provider: Stripe or PayPal ---------------------------------
+        ai_stripe_sub_id = getattr(shop_sub, "ai_subscription_id", None) or getattr(shop_sub, "ai_stripe_subscription_id", None)
+        ai_paypal_sub_id = getattr(shop_sub, "ai_paypal_subscription_id", None)
+        
+        # Determine which provider
+        if ai_paypal_sub_id:
+            # ========== PAYPAL CANCELLATION ==========
+            try:
+                from api.services.paypal import cancel_subscription as paypal_cancel_subscription
+                
+                paypal_cancel_subscription(ai_paypal_sub_id, reason="User requested cancellation via app")
+                
+                # Update database
+                shop_sub.has_ai_addon = False
+                shop_sub.ai_paypal_subscription_id = None
+                shop_sub.save(update_fields=["has_ai_addon", "ai_paypal_subscription_id"])
+                
+                logger.info("Cancelled PayPal AI add-on %s for shop %s", ai_paypal_sub_id, shop.id)
+                return Response(
+                    {"success": True, "message": "AI Assistant add-on successfully cancelled."},
+                    status=status.HTTP_200_OK
+                )
+            except Exception as e:
+                logger.error("PayPal error cancelling AI add-on for shop %s: %s", shop.id, e, exc_info=True)
+                return Response(
+                    {"error": f"Could not cancel add-on with PayPal: {str(e)}"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+        
+        elif ai_stripe_sub_id:
+            # ========== STRIPE CANCELLATION (ORIGINAL LOGIC) ==========
+            ai_price_id = getattr(settings, "STRIPE_AI_PRICE_ID", None)
+            if not ai_price_id:
+                logger.error("STRIPE_AI_PRICE_ID is not configured in settings.")
+                return Response({"error": "AI add-on configuration error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if not ai_sub_id:
-            # Nothing to cancel in Stripe → clean up local flags
-            logger.warning("Shop %s has_ai_addon=True but no ai_subscription_id; cleaning up.", shop.id)
-            shop_sub.has_ai_addon = False
-            shop_sub.ai_subscription_item_id = None
-            shop_sub.save(update_fields=["has_ai_addon", "ai_subscription_item_id"])
-            return Response({"error": "AI add-on not found in your active subscription details."}, status=status.HTTP_404_NOT_FOUND)
+            ai_item_id = getattr(shop_sub, "ai_subscription_item_id", None)
 
-        try:
-            # Expand items w/ price so we can re-derive the item if needed
-            sub = stripe.Subscription.retrieve(ai_sub_id, expand=["items.data.price"])
-        except stripe.error.InvalidRequestError as e:
-            # e.g. "No such subscription"
-            logger.warning("Stripe: could not retrieve AI subscription %s for shop %s: %s", ai_sub_id, shop.id, e)
-            shop_sub.has_ai_addon = False
-            shop_sub.ai_subscription_id = None
-            shop_sub.ai_subscription_item_id = None
-            shop_sub.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
-            return Response({"error": "AI add-on not found in your active subscription details."}, status=status.HTTP_404_NOT_FOUND)
+            try:
+                # Expand items w/ price so we can re-derive the item if needed
+                sub = stripe.Subscription.retrieve(ai_stripe_sub_id, expand=["items.data.price"])
+            except stripe.error.InvalidRequestError as e:
+                # e.g. "No such subscription"
+                logger.warning("Stripe: could not retrieve AI subscription %s for shop %s: %s", ai_stripe_sub_id, shop.id, e)
+                shop_sub.has_ai_addon = False
+                shop_sub.ai_subscription_id = None
+                shop_sub.ai_subscription_item_id = None
+                shop_sub.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
+                return Response({"error": "AI add-on not found in your active subscription details."}, status=status.HTTP_404_NOT_FOUND)
 
-        # ---- 3) Ensure we know the correct AI SubscriptionItem ID --------------
-        if not ai_item_id:
-            it = next((it for it in sub["items"]["data"] if (it.get("price") or {}).get("id") == ai_price_id), None)
-            ai_item_id = it["id"] if it else None
+            # ---- 3) Ensure we know the correct AI SubscriptionItem ID --------------
+            if not ai_item_id:
+                it = next((it for it in sub["items"]["data"] if (it.get("price") or {}).get("id") == ai_price_id), None)
+                ai_item_id = it["id"] if it else None
 
-        if not ai_item_id:
-            logger.warning("AI item not present on AI subscription %s for shop %s; cleaning up.", ai_sub_id, shop.id)
-            shop_sub.has_ai_addon = False
-            shop_sub.ai_subscription_id = None
-            shop_sub.ai_subscription_item_id = None
-            shop_sub.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
-            return Response({"error": "AI add-on not found in your active subscription details."}, status=status.HTTP_404_NOT_FOUND)
+            if not ai_item_id:
+                logger.warning("AI item not present on AI subscription %s for shop %s; cleaning up.", ai_stripe_sub_id, shop.id)
+                shop_sub.has_ai_addon = False
+                shop_sub.ai_subscription_id = None
+                shop_sub.ai_subscription_item_id = None
+                shop_sub.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
+                return Response({"error": "AI add-on not found in your active subscription details."}, status=status.HTTP_404_NOT_FOUND)
 
-        # ---- 4) Cancel: whole sub if single-item, else just remove the item ----
-        try:
-            if len(sub["items"]["data"]) <= 1:
-                # The AI add-on subscription only contains this item → delete the whole subscription
-                stripe.Subscription.delete(ai_sub_id)
-                logger.info("Deleted AI subscription %s for shop %s", ai_sub_id, shop.id)
-            else:
-                # Multi-item sub (rare for add-on) → remove just the AI item
-                stripe.SubscriptionItem.delete(ai_item_id, proration_behavior="create_prorations")
-                logger.info("Removed AI item %s from AI subscription %s for shop %s", ai_item_id, ai_sub_id, shop.id)
+            # ---- 4) Cancel: whole sub if single-item, else just remove the item ----
+            try:
+                if len(sub["items"]["data"]) <= 1:
+                    # The AI add-on subscription only contains this item → delete the whole subscription
+                    stripe.Subscription.delete(ai_stripe_sub_id)
+                    logger.info("Deleted AI subscription %s for shop %s", ai_stripe_sub_id, shop.id)
+                else:
+                    # Multi-item sub (rare for add-on) → remove just the AI item
+                    stripe.SubscriptionItem.delete(ai_item_id, proration_behavior="create_prorations")
+                    logger.info("Removed AI item %s from AI subscription %s for shop %s", ai_item_id, ai_stripe_sub_id, shop.id)
 
-            # ---- 5) DB cleanup --------------------------------------------------
-            shop_sub.has_ai_addon = False
-            shop_sub.ai_subscription_id = None
-            shop_sub.ai_subscription_item_id = None
-            # legacy_ai_promo_used stays as-is (true if they redeemed lifetime)
-            shop_sub.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
+                # ---- 5) DB cleanup --------------------------------------------------
+                shop_sub.has_ai_addon = False
+                shop_sub.ai_subscription_id = None
+                shop_sub.ai_subscription_item_id = None
+                # legacy_ai_promo_used stays as-is (true if they redeemed lifetime)
+                shop_sub.save(update_fields=["has_ai_addon", "ai_subscription_id", "ai_subscription_item_id"])
 
-            return Response({"success": True, "message": "AI Assistant add-on successfully cancelled."}, status=status.HTTP_200_OK)
+                return Response({"success": True, "message": "AI Assistant add-on successfully cancelled."}, status=status.HTTP_200_OK)
 
-        except stripe.error.StripeError as e:
-            logger.error("Stripe error cancelling AI add-on for shop %s: %s", shop.id, e, exc_info=True)
-            return Response({"error": f"Could not cancel add-on with billing provider: {e.user_message or str(e)}"},
+            except stripe.error.StripeError as e:
+                logger.error("Stripe error cancelling AI add-on for shop %s: %s", shop.id, e, exc_info=True)
+                return Response({"error": f"Could not cancel add-on with billing provider: {e.user_message or str(e)}"},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Exception as e:
             logger.error("Unexpected error cancelling AI add-on for shop %s: %s", shop.id, e, exc_info=True)
