@@ -84,7 +84,7 @@ class ShopAdmin(admin.ModelAdmin):
         }),
     )
     
-    inlines = [ServiceInline, VerificationFileInline]
+    # inlines = [ServiceInline, VerificationFileInline]  # Disabled due to S3 image field errors
     
     def get_subscription_plan(self, obj):
         """Display current subscription plan"""
