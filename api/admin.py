@@ -60,7 +60,7 @@ class ShopAdmin(admin.ModelAdmin):
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('owner', 'name', 'address', 'location', 'niche', 'about_us', 'shop_img')
+            'fields': ('owner', 'name', 'address', 'location', 'niche', 'about_us')
         }),
         ('Operational Settings', {
             'fields': (
