@@ -20,7 +20,14 @@ from .models import (
     Coupon,
     GlobalSettings,
     WaitlistEntry, 
-    AutoFillLog
+    AutoFillLog,
+    # Tattoo Artist Models
+    PortfolioItem,
+    DesignRequest,
+    DesignRequestImage,
+    ConsentFormTemplate,
+    SignedConsentForm,
+    IDVerificationRequest,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -42,18 +49,18 @@ class VerificationFileInline(admin.TabularInline):
 @admin.register(Shop)
 class ShopAdmin(admin.ModelAdmin):
     list_display = (
-        'name', 'owner', 'address', 'location', 'capacity', 
+        'name', 'owner', 'niche', 'address', 'location', 'capacity', 
         'status', 'is_deposit_required', 'get_subscription_plan'
     )
     list_filter = (
-        'status', 'is_deposit_required', 'is_verified', 
+        'niche', 'status', 'is_deposit_required', 'is_verified', 
         'subscription__plan__name'
     )
     search_fields = ('name', 'owner__email', 'owner__name', 'address')
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('owner', 'name', 'address', 'location', 'about_us', 'shop_img')
+            'fields': ('owner', 'name', 'address', 'location', 'niche', 'about_us', 'shop_img')
         }),
         ('Operational Settings', {
             'fields': (
@@ -360,3 +367,135 @@ class AutoFillLogAdmin(admin.ModelAdmin):
     list_display = ('shop', 'status', 'revenue_recovered', 'created_at')
     list_filter = ('status', 'shop')
     readonly_fields = ('original_booking', 'filled_by_booking')
+
+
+# ==========================================
+# TATTOO ARTIST MODELS 🖋️
+# ==========================================
+
+class DesignRequestImageInline(admin.TabularInline):
+    model = DesignRequestImage
+    extra = 1
+    fields = ('image',)
+
+
+@admin.register(PortfolioItem)
+class PortfolioItemAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'description_preview', 'tag_list', 'created_at')
+    list_filter = ('shop', 'created_at')
+    search_fields = ('shop__name', 'description', 'tags')
+    ordering = ('-created_at',)
+    readonly_fields = ('created_at',)
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('shop', 'image', 'description')
+        }),
+        ('Tags & Metadata', {
+            'fields': ('tags', 'created_at')
+        }),
+    )
+    
+    def description_preview(self, obj):
+        return obj.description[:50] + '...' if len(obj.description) > 50 else obj.description
+    description_preview.short_description = 'Description'
+    
+    def tag_list(self, obj):
+        return ', '.join(obj.tags) if obj.tags else 'No tags'
+    tag_list.short_description = 'Tags'
+
+
+@admin.register(DesignRequest)
+class DesignRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'user', 'placement', 'size_approx', 'status', 'created_at')
+    list_filter = ('status', 'shop', 'created_at')
+    search_fields = ('shop__name', 'user__name', 'user__email', 'description', 'placement')
+    ordering = ('-created_at',)
+    readonly_fields = ('created_at',)
+    inlines = [DesignRequestImageInline]
+    
+    fieldsets = (
+        ('Client Information', {
+            'fields': ('shop', 'user', 'booking')
+        }),
+        ('Design Details', {
+            'fields': ('description', 'placement', 'size_approx')
+        }),
+        ('Status', {
+            'fields': ('status', 'created_at')
+        }),
+    )
+
+
+@admin.register(DesignRequestImage)
+class DesignRequestImageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'request', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('request__description',)
+    ordering = ('-created_at',)
+
+
+@admin.register(ConsentFormTemplate)
+class ConsentFormTemplateAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'title', 'is_default', 'created_at')
+    list_filter = ('shop', 'is_default', 'created_at')
+    search_fields = ('shop__name', 'title', 'content')
+    ordering = ('-created_at',)
+    readonly_fields = ('created_at',)
+    
+    fieldsets = (
+        ('Template Information', {
+            'fields': ('shop', 'title', 'is_default')
+        }),
+        ('Content', {
+            'fields': ('content',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at',)
+        }),
+    )
+
+
+@admin.register(SignedConsentForm)
+class SignedConsentFormAdmin(admin.ModelAdmin):
+    list_display = ('id', 'template', 'user', 'booking', 'signed_at')
+    list_filter = ('template__shop', 'signed_at')
+    search_fields = ('user__name', 'user__email', 'template__title')
+    ordering = ('-signed_at',)
+    readonly_fields = ('signed_at',)
+    
+    fieldsets = (
+        ('Signing Information', {
+            'fields': ('template', 'user', 'booking')
+        }),
+        ('Signature', {
+            'fields': ('signature_image', 'signed_at')
+        }),
+    )
+
+
+@admin.register(IDVerificationRequest)
+class IDVerificationRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'user', 'status', 'created_at')
+    list_filter = ('status', 'shop', 'created_at')
+    search_fields = ('shop__name', 'user__name', 'user__email')
+    ordering = ('-created_at',)
+    readonly_fields = ('created_at',)
+    
+    fieldsets = (
+        ('Verification Request', {
+            'fields': ('shop', 'user', 'booking', 'status')
+        }),
+        ('ID Images', {
+            'fields': ('front_image', 'back_image')
+        }),
+        ('Review', {
+            'fields': ('rejection_reason', 'created_at')
+        }),
+    )
+    
+    def get_readonly_fields(self, request, obj=None):
+        """Make status editable but creation time readonly"""
+        if obj:  # editing an existing object
+            return self.readonly_fields
+        return self.readonly_fields
