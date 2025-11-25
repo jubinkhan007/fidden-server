@@ -45,7 +45,12 @@ class Shop(models.Model):
         max_length=50, 
         choices=NICHE_CHOICES, 
         default='other',
-        help_text="The primary category of the service provider"
+        help_text="DEPRECATED: Use 'niches' field instead. Kept for backward compatibility."
+    )
+    niches = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of service niches offered by this shop (e.g., ['tattoo_artist', 'barber'])"
     )
     address = models.TextField()
     location = models.CharField(max_length=255, blank=True, null=True)
@@ -141,6 +146,16 @@ class Shop(models.Model):
             'performance_analytics': 'none',
             'ghost_client_reengagement': False,
         }
+
+    @property
+    def primary_niche(self):
+        """
+        Returns the primary niche for backward compatibility.
+        Returns the first niche from niches list, or falls back to niche field, or 'other'.
+        """
+        if self.niches and len(self.niches) > 0:
+            return self.niches[0]
+        return self.niche if self.niche else 'other'
 
     ##update all service new method
     def update_all_service_deposits(self):

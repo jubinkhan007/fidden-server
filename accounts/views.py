@@ -50,15 +50,17 @@ class LoginView(APIView):
             # Fetch shop details if they exist
             shop = getattr(user, 'shop', None)
             shop_id = shop.id if shop else None
-            shop_niche = shop.niche if shop else None
+            shop_niche = shop.primary_niche if shop else None  # Deprecated - use shop_niches
+            shop_niches = shop.niches if shop and shop.niches else ([shop.niche] if shop and shop.niche else [])
 
             return Response({
                 "success": True,
                 "message": data.get("message"),
                 "email": user.email,
                 "role": user.role,
-                "shop_id": shop_id,       # <--- Added
-                "shop_niche": shop_niche, # <--- Added
+                "shop_id": shop_id,
+                "shop_niche": shop_niche,    # Deprecated - use shop_niches
+                "shop_niches": shop_niches,  # New multi-niche support
                 "accessToken": data.get("accessToken"),
                 "refreshToken": data.get("refreshToken"),
             }, status=status.HTTP_200_OK)
@@ -106,15 +108,17 @@ class GoogleLoginView(APIView):
         # Fetch shop details if they exist
         shop = getattr(user, 'shop', None)
         shop_id = shop.id if shop else None
-        shop_niche = shop.niche if shop else None
+        shop_niche = shop.primary_niche if shop else None  # Deprecated - use shop_niches
+        shop_niches = shop.niches if shop and shop.niches else ([shop.niche] if shop and shop.niche else [])
 
         return Response({
             "success": True,
             "message": message,
             "email": user.email,
             "role": role,
-            "shop_id": shop_id,       # <--- Added
-            "shop_niche": shop_niche, # <--- Added
+            "shop_id": shop_id,
+            "shop_niche": shop_niche,    # Deprecated - use shop_niches
+            "shop_niches": shop_niches,  # New multi-niche support
             "accessToken": str(refresh.access_token),
             "refreshToken": str(refresh),
         }, status=status.HTTP_200_OK)

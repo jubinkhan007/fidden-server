@@ -122,11 +122,12 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class UserSerializer(serializers.ModelSerializer):
     shop_id = serializers.SerializerMethodField()
-    shop_niche = serializers.SerializerMethodField()
+    shop_niche = serializers.SerializerMethodField()  # Deprecated - use shop_niches
+    shop_niches = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "name", "email", 'mobile_number', 'profile_image', 'shop_id', 'shop_niche']
+        fields = ["id", "name", "email", 'mobile_number', 'profile_image', 'shop_id', 'shop_niche', 'shop_niches']
 
     def get_shop_id(self, obj):
         if hasattr(obj, 'shop'):
@@ -134,6 +135,13 @@ class UserSerializer(serializers.ModelSerializer):
         return None
 
     def get_shop_niche(self, obj):
+        """Deprecated: Returns primary niche for backward compatibility"""
         if hasattr(obj, 'shop'):
-            return obj.shop.niche
-        return None  
+            return obj.shop.primary_niche
+        return None
+    
+    def get_shop_niches(self, obj):
+        """Returns list of all niches for this shop"""
+        if hasattr(obj, 'shop'):
+            return obj.shop.niches if obj.shop.niches else [obj.shop.niche] if obj.shop.niche else []
+        return []  

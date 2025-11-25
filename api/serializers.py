@@ -239,7 +239,7 @@ class ShopSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shop
         fields = [
-            'id', 'name', 'niche', 'address', 'location', 'capacity', 'start_at',
+            'id', 'name', 'niche', 'niches', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
             'shop_img', 'close_days', "business_hours", 'owner_id', 'is_verified', 'status', 
             'verification_files', 'uploaded_files', 'is_deposit_required',
@@ -251,11 +251,34 @@ class ShopSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         rep = super().to_representation(instance)
         request = self.context.get('request')
-        rep['shop_img'] = (
-            request.build_absolute_uri(instance.shop_img.url)
-            if instance.shop_img and request else instance.shop_img.url if instance.shop_img else None
-        )
+        
+        # Handle shop_img with S3 error handling
+        try:
+            if instance.shop_img:
+                url = instance.shop_img.url
+                rep['shop_img'] = request.build_absolute_uri(url) if request else url
+            else:
+                rep['shop_img'] = None
+        except (ValueError, AttributeError) as e:
+            # S3 bucket not configured or other storage errors
+            rep['shop_img'] = None
+        
+        # Backward compatibility: Keep niche as primary_niche
+        rep['niche'] = instance.primary_niche
+        
         return rep
+    
+    def validate_niches(self, value):
+        """Ensure all niches are valid"""
+        valid_niches = [
+            'tattoo_artist', 'barber', 'hairstylist', 
+            'fitness_trainer', 'nail_tech', 'makeup_artist',
+            'esthetician', 'massage_therapist', 'other'
+        ]
+        for niche in value:
+            if niche not in valid_niches:
+                raise serializers.ValidationError(f"Invalid niche: {niche}")
+        return value
 
     def create(self, validated_data):
         files = validated_data.pop("verification_files", None)

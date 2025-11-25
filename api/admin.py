@@ -49,7 +49,7 @@ class VerificationFileInline(admin.TabularInline):
 @admin.register(Shop)
 class ShopAdmin(admin.ModelAdmin):
     list_display = (
-        'name', 'owner', 'niche', 'address', 'location', 'capacity', 
+        'name', 'owner', 'display_niches', 'address', 'location', 'capacity', 
         'status', 'is_deposit_required', 'get_subscription_plan'
     )
     list_filter = (
@@ -60,7 +60,7 @@ class ShopAdmin(admin.ModelAdmin):
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('owner', 'name', 'address', 'location', 'niche', 'about_us')
+            'fields': ('owner', 'name', 'address', 'location', 'niches', 'niche', 'about_us')
         }),
         ('Operational Settings', {
             'fields': (
@@ -85,6 +85,13 @@ class ShopAdmin(admin.ModelAdmin):
     )
     
     # inlines = [ServiceInline, VerificationFileInline]  # Disabled due to S3 image field errors
+    
+    def display_niches(self, obj):
+        """Display niches as comma-separated list"""
+        if obj.niches and len(obj.niches) > 0:
+            return ', '.join(obj.niches)
+        return obj.niche if obj.niche else 'other'
+    display_niches.short_description = 'Niches'
     
     def get_subscription_plan(self, obj):
         """Display current subscription plan"""
