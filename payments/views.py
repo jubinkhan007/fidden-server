@@ -316,14 +316,17 @@ class CreatePaymentIntentView(APIView):
                 service = booking.service
                 
                 # Dynamic deposit calculation to include add-ons
-                # Check for percentage type OR if type is missing but percentage value is present
+                # Fall back to shop's default if service doesn't have its own configuration
+                deposit_type = service.deposit_type or shop.default_deposit_type
+                deposit_percentage = service.deposit_percentage or shop.default_deposit_percentage
+                
                 is_percentage = (
-                    service.deposit_type == 'percentage' 
-                    or (not service.deposit_type and service.deposit_percentage)
+                    deposit_type == 'percentage' 
+                    or (not deposit_type and deposit_percentage)
                 )
 
-                if is_percentage and service.deposit_percentage:
-                    deposit_amount = (full_service_amount * service.deposit_percentage) / 100
+                if is_percentage and deposit_percentage:
+                    deposit_amount = (full_service_amount * deposit_percentage) / 100
                 elif service.deposit_amount:
                     deposit_amount = service.deposit_amount
                 else:
