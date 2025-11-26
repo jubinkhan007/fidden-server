@@ -242,8 +242,12 @@ class CreatePaymentIntentView(APIView):
                     )
 
                 # create the booking while the slot is locked
+                data = {"slot_id": slot_id}
+                if "add_on_ids" in request.data:
+                    data["add_on_ids"] = request.data["add_on_ids"]
+
                 serializer = SlotBookingSerializer(
-                    data={"slot_id": slot_id},
+                    data=data,
                     context={"request": request},
                 )
                 serializer.is_valid(raise_exception=True)
@@ -310,7 +314,15 @@ class CreatePaymentIntentView(APIView):
 
             if shop.is_deposit_required:
                 service = booking.service
-                deposit_amount = service.deposit_amount if service.deposit_amount else full_service_amount
+                
+                # Dynamic deposit calculation to include add-ons
+                if service.deposit_type == 'percentage' and service.deposit_percentage:
+                    deposit_amount = (full_service_amount * service.deposit_percentage) / 100
+                elif service.deposit_amount:
+                    deposit_amount = service.deposit_amount
+                else:
+                    deposit_amount = full_service_amount
+
                 total_amount = min(deposit_amount, full_service_amount)
             else:
                 deposit_amount = full_service_amount
