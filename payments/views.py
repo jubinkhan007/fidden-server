@@ -301,6 +301,11 @@ class CreatePaymentIntentView(APIView):
                 if booking.service.discount_price > 0
                 else booking.service.price
             )
+            
+            # Add-on prices
+            for addon in booking.add_ons.all():
+                total_amount += addon.price
+
             full_service_amount = total_amount
 
             if shop.is_deposit_required:

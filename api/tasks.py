@@ -403,6 +403,26 @@ def generate_weekly_ai_reports(self):
     return "ok"
 
 
+@shared_task(name="api.tasks.regenerate_shop_slots_task")
+def regenerate_shop_slots_task(shop_id):
+    """
+    Async task to regenerate slots for a shop when hours/settings change.
+    """
+    from api.utils.slots import regenerate_slots_for_shop
+    try:
+        shop = Shop.objects.get(id=shop_id)
+        logger.info(f"Starting slot regeneration for shop {shop_id}")
+        regenerate_slots_for_shop(shop)
+        logger.info(f"Finished slot regeneration for shop {shop_id}")
+        return f"Regenerated slots for shop {shop_id}"
+    except Shop.DoesNotExist:
+        logger.error(f"Shop {shop_id} not found during slot regeneration task.")
+        return "Shop not found"
+    except Exception as e:
+        logger.exception(f"Error regenerating slots for shop {shop_id}: {e}")
+        return f"Error: {e}"
+
+
 
 # api/tasks.py
 @shared_task(bind=True, name="api.tasks.trigger_no_show_auto_fill")

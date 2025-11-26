@@ -562,6 +562,36 @@ class SlotBooking(models.Model):
         return f"Booking #{self.pk} @ {dt:%Y-%m-%d %H:%M}"
 
 
+class BookingAddOn(models.Model):
+    """
+    Represents an additional service added to a main booking.
+    """
+    booking = models.ForeignKey(
+        SlotBooking, 
+        on_delete=models.CASCADE, 
+        related_name='add_ons'
+    )
+    service = models.ForeignKey(
+        Service, 
+        on_delete=models.CASCADE,
+        related_name='addon_bookings'
+    )
+    price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2,
+        help_text="Snapshot of the add-on price at the time of booking"
+    )
+    
+    def save(self, *args, **kwargs):
+        if not self.price:
+            # Snapshot the price if not provided
+            self.price = self.service.discount_price if (self.service.discount_price and self.service.discount_price > 0) else self.service.price
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Add-on: {self.service.title} for Booking #{self.booking.id}"
+
+
 # NEW: only time-of-day per service to disable across ALL dates
 class ServiceDisabledTime(models.Model):
     service = models.ForeignKey(
