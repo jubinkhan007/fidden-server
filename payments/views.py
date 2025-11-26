@@ -332,6 +332,7 @@ class CreatePaymentIntentView(APIView):
                 total_amount = min(deposit_amount, full_service_amount)
             else:
                 deposit_amount = full_service_amount
+                total_amount = full_service_amount
 
             remaining_balance = (
                 full_service_amount - total_amount if shop.is_deposit_required else Decimal("0.00")
