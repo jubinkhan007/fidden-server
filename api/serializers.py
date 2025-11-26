@@ -578,7 +578,8 @@ class ShopDetailSerializer(serializers.ModelSerializer):
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id',
             'avg_rating', 'review_count', 'distance', 'services', 'reviews',
-            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
+            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
+            'is_deposit_required', 'default_deposit_percentage'
         ]
 
 
@@ -601,6 +602,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
                 'description': s.description,
                 'price': s.price,
                 'discount_price': s.discount_price,
+                'duration': s.duration,
                 'category_id': s.category.id if s.category else None,
                 'category_name': s.category.name if s.category else None,
                 'category_img': (
@@ -707,6 +709,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "service_img",
             "badge",
             "distance",  # <-- added distance
+            "duration",
             "is_active",
             "requires_age_18_plus" 
         ]
