@@ -200,9 +200,21 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         disabled_raw = validated_data.pop('disabled_start_times', None)
+        
+        # Check if duration is changing
+        old_duration = instance.duration
+        new_duration = validated_data.get('duration', old_duration)
+        
         service = super().update(instance, validated_data)
+        
         if disabled_raw is not None:
             self._sync_disabled_times(service, disabled_raw)
+            
+        # Trigger slot regeneration if duration changed
+        if old_duration != new_duration:
+            from api.tasks import regenerate_service_slots_task
+            regenerate_service_slots_task.delay(service.id)
+            
         return service
 
     def to_representation(self, instance):

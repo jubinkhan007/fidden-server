@@ -82,6 +82,34 @@ def generate_slots_for_service(service, *, days_ahead=14, start_date=None):
             # ignore_conflicts in case unique constraints exist
             Slot.objects.bulk_create(batch, ignore_conflicts=True)
 
+def regenerate_service_slots(service, *, days_ahead=14):
+    """
+    Regenerate slots for a specific service, preserving existing bookings.
+    1. Find future slots for this service.
+    2. Delete those that are NOT booked.
+    3. Call generate_slots_for_service to recreate them with new settings (duration/price).
+    """
+    from api.models import Slot
+    
+    # 1. Identify future slots
+    now = timezone.now()
+    future_slots = Slot.objects.filter(
+        service=service,
+        start_time__gte=now
+    )
+
+    # 2. Delete unbooked slots
+    # We keep slots that have any related bookings
+    # related_name='bookings' on Slot model
+    slots_to_delete = future_slots.filter(bookings__isnull=True)
+    count, _ = slots_to_delete.delete()
+    
+    # 3. Regenerate
+    # We use the service's current duration/settings
+    generate_slots_for_service(service, days_ahead=days_ahead)
+    
+    return count
+
 def regenerate_slots_for_shop(shop, *, days_ahead=14, start_date=None):
     """
     Regenerates slots for all active services in a shop.
