@@ -24,6 +24,7 @@ from .models import (
     Device,
     Revenue,
     Coupon,
+    Coupon,
     ServiceDisabledTime,
     WeeklySummary,
     PortfolioItem,
@@ -32,6 +33,7 @@ from .models import (
     ConsentFormTemplate,
     SignedConsentForm,
     IDVerificationRequest,
+    BookingAddOn,
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -39,6 +41,7 @@ from django.db.models import Avg, Count, Q, Value, FloatField
 from api.utils.helper_function import get_distance
 from django.db import transaction
 from django.utils import timezone
+from datetime import timedelta
 from accounts.serializers import UserSerializer
 
 
@@ -204,9 +207,21 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         disabled_raw = validated_data.pop('disabled_start_times', None)
+        
+        # Check if duration is changing
+        old_duration = instance.duration
+        new_duration = validated_data.get('duration', old_duration)
+        
         service = super().update(instance, validated_data)
+        
         if disabled_raw is not None:
             self._sync_disabled_times(service, disabled_raw)
+            
+        # Trigger slot regeneration if duration changed
+        if old_duration != new_duration:
+            from api.tasks import regenerate_service_slots_task
+            regenerate_service_slots_task.delay(service.id)
+            
         return service
 
     def to_representation(self, instance):
@@ -329,6 +344,20 @@ class ShopSerializer(serializers.ModelSerializer):
             for f in files:
                 VerificationFile.objects.create(shop=instance, file=f)
 
+        # 3. Trigger slot regeneration if hours/close_days changed
+        # We check if any of the schedule-related fields were in the validated_data
+        schedule_fields = {'start_at', 'close_at', 'close_days', 'business_hours', 'break_start_time', 'break_end_time'}
+        if any(field in validated_data for field in schedule_fields):
+            try:
+                from api.tasks import regenerate_shop_slots_task
+                # Use delay() for async execution
+                regenerate_shop_slots_task.delay(instance.id)
+                # logger.info(f"Triggered slot regeneration for shop {instance.id}")
+            except Exception as e:
+                # Fallback to sync if celery fails or not setup, or just log error
+                # For robustness, we might want to log.
+                print(f"Failed to trigger slot regeneration task: {e}")
+
         return instance
     
 
@@ -425,37 +454,62 @@ class SlotBookingSerializer(serializers.ModelSerializer):
         write_only=True,
         source='slot'  # maps slot_id to slot internally
     )
+    add_on_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
 
     class Meta:
         model = SlotBooking
-        fields = ['id', 'slot_id', 'user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at']
+        fields = ['id', 'slot_id', 'user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at', 'add_on_ids']
         read_only_fields = ['user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at']
 
     def validate(self, attrs):
         """Additional validation before creation"""
         slot = attrs.get('slot')
         user = self.context['request'].user
+        add_on_ids = attrs.get('add_on_ids', [])
         
         # Check slot capacity in validation phase
         if slot.capacity_left <= 0:
             raise serializers.ValidationError("This slot is fully booked.")
+
+        # Calculate total duration including add-ons
+        total_duration = slot.service.duration or 30
         
-        # Check for overlapping bookings
+        if add_on_ids:
+            # Validate add-ons exist and belong to the same shop
+            add_ons = Service.objects.filter(id__in=add_on_ids, shop=slot.shop, is_active=True)
+            if len(add_ons) != len(set(add_on_ids)):
+                raise serializers.ValidationError("One or more add-on services are invalid or do not belong to this shop.")
+            
+            for addon in add_ons:
+                total_duration += (addon.duration or 30)
+
+        # Calculate new end time
+        new_end_time = slot.start_time + timedelta(minutes=total_duration)
+        
+        # Check for overlapping bookings with the EXTENDED duration
         overlapping = SlotBooking.objects.filter(
             user=user,
             status="confirmed"
         ).filter(
-            Q(start_time__lt=slot.end_time) & Q(end_time__gt=slot.start_time)
+            Q(start_time__lt=new_end_time) & Q(end_time__gt=slot.start_time)
         )
         
         if overlapping.exists():
-            raise serializers.ValidationError("You already have a booking that overlaps this slot.")
+            raise serializers.ValidationError("You already have a booking that overlaps this slot (including add-ons).")
         
+        # Store calculated end_time in attrs for create method
+        attrs['calculated_end_time'] = new_end_time
         return attrs
 
     def create(self, validated_data):
         user = self.context['request'].user
         slot = validated_data.pop('slot')
+        add_on_ids = validated_data.pop('add_on_ids', [])
+        calculated_end_time = validated_data.pop('calculated_end_time', None)
 
         # Use atomic transaction with locking to prevent race conditions
         with transaction.atomic():
@@ -466,12 +520,21 @@ class SlotBookingSerializer(serializers.ModelSerializer):
             if slot.capacity_left <= 0:
                 raise serializers.ValidationError("This slot is fully booked.")
             
+            # Recalculate end time if not passed (though validate should have handled it)
+            if not calculated_end_time:
+                 total_duration = slot.service.duration or 30
+                 if add_on_ids:
+                    add_ons = Service.objects.filter(id__in=add_on_ids)
+                    for addon in add_ons:
+                        total_duration += (addon.duration or 30)
+                 calculated_end_time = slot.start_time + timedelta(minutes=total_duration)
+
             # Double-check overlapping bookings after locking
             overlapping = SlotBooking.objects.filter(
                 user=user,
                 status="confirmed"
             ).filter(
-                Q(start_time__lt=slot.end_time) & Q(end_time__gt=slot.start_time)
+                Q(start_time__lt=calculated_end_time) & Q(end_time__gt=slot.start_time)
             )
             
             if overlapping.exists():
@@ -482,11 +545,20 @@ class SlotBookingSerializer(serializers.ModelSerializer):
                 user=user,
                 slot=slot,
                 start_time=slot.start_time,
-                end_time=slot.end_time,
+                end_time=calculated_end_time, # Use extended end time
                 shop=slot.shop,
                 service=slot.service,
                 status='confirmed'
             )
+
+            # Create Add-on records
+            if add_on_ids:
+                add_ons = Service.objects.filter(id__in=add_on_ids)
+                for addon in add_ons:
+                    BookingAddOn.objects.create(
+                        booking=booking,
+                        service=addon
+                    )
 
             # Reduce slot capacity
             slot.capacity_left -= 1
@@ -548,7 +620,8 @@ class ShopDetailSerializer(serializers.ModelSerializer):
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id',
             'avg_rating', 'review_count', 'distance', 'services', 'reviews',
-            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
+            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
+            'is_deposit_required', 'default_deposit_percentage'
         ]
 
 
@@ -571,6 +644,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
                 'description': s.description,
                 'price': s.price,
                 'discount_price': s.discount_price,
+                'duration': s.duration,
                 'category_id': s.category.id if s.category else None,
                 'category_name': s.category.name if s.category else None,
                 'category_img': (
@@ -677,6 +751,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "service_img",
             "badge",
             "distance",  # <-- added distance
+            "duration",
             "is_active",
             "requires_age_18_plus" 
         ]

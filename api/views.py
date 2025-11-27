@@ -15,7 +15,7 @@ from django.utils.timezone import make_aware
 from django.core.mail import EmailMultiAlternatives, get_connection
 
 from api.utils.slots import generate_slots_for_service
-from subscriptions.models import SubscriptionPlan
+from subscriptions.models import SubscriptionPlan, ShopSubscription
 from .models import (
     AutoFillLog,
     PerformanceAnalytics,
@@ -1672,7 +1672,9 @@ class LatestWeeklySummaryView(APIView):
             )
 
         # --- START: AI ENTITLEMENT CHECK ---
-        subscription = getattr(shop, 'subscription', None)
+        # Force fresh read from database to avoid connection pool staleness
+        subscription = ShopSubscription.objects.filter(shop=shop).select_related('plan').first()
+        
         ai_enabled = False
         if subscription and subscription.plan:
             if subscription.plan.ai_assistant == SubscriptionPlan.AI_INCLUDED or subscription.has_ai_addon:

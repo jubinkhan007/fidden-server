@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     CapturePayPalOrderView,
     CreatePayPalOrderView,
+    CreatePayPalAIAddonOrderView,
     CreatePaymentIntentView,
     PayPalWebhookView,
     MarkBookingNoShowView,
@@ -30,5 +31,7 @@ urlpatterns = [
     path('bookings/<int:booking_id>/mark-no-show/', MarkBookingNoShowView.as_view(), name='mark-booking-no-show'),
     path('paypal/create-order/<int:slot_id>/', CreatePayPalOrderView.as_view(), name='paypal-create'),
     path('paypal/capture-order/', CapturePayPalOrderView.as_view(), name='paypal-capture'),
+    path('paypal/ai-addon/create-order/', CreatePayPalAIAddonOrderView.as_view(), name='paypal-ai-addon-create'),
     path("paypal-webhook/", PayPalWebhookView.as_view(), name="paypal-webhook"),
 ]
+

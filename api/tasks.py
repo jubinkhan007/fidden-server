@@ -403,6 +403,26 @@ def generate_weekly_ai_reports(self):
     return "ok"
 
 
+@shared_task(name="api.tasks.regenerate_shop_slots_task")
+def regenerate_shop_slots_task(shop_id):
+    """
+    Async task to regenerate slots for a shop when hours/settings change.
+    """
+    from api.utils.slots import regenerate_slots_for_shop
+    try:
+        shop = Shop.objects.get(id=shop_id)
+        logger.info(f"Starting slot regeneration for shop {shop_id}")
+        regenerate_slots_for_shop(shop)
+        logger.info(f"Finished slot regeneration for shop {shop_id}")
+        return f"Regenerated slots for shop {shop_id}"
+    except Shop.DoesNotExist:
+        logger.error(f"Shop {shop_id} not found during slot regeneration task.")
+        return "Shop not found"
+    except Exception as e:
+        logger.exception(f"Error regenerating slots for shop {shop_id}: {e}")
+        return f"Error: {e}"
+
+
 
 # api/tasks.py
 @shared_task(bind=True, name="api.tasks.trigger_no_show_auto_fill")
@@ -995,3 +1015,38 @@ def auto_cancel_booking(booking_id):
 
     logger.info(f"Booking {booking_id} not cancelled (already paid or cancelled).")
     return f"Booking {booking_id} not cancelled."
+
+@shared_task
+def regenerate_shop_slots_task(shop_id):
+    """
+    Async task to regenerate slots for a shop.
+    """
+    try:
+        from api.models import Shop
+        from api.utils.slots import regenerate_slots_for_shop
+        
+        shop = Shop.objects.get(id=shop_id)
+        regenerate_slots_for_shop(shop)
+        return f"Slots regenerated for shop {shop.name}"
+    except Shop.DoesNotExist:
+        return f"Shop {shop_id} not found"
+    except Exception as e:
+        return f"Error regenerating slots for shop {shop_id}: {str(e)}"
+
+@shared_task
+def regenerate_service_slots_task(service_id):
+    """
+    Async task to regenerate slots for a specific service.
+    Useful when service duration or other slot-affecting fields change.
+    """
+    try:
+        from api.models import Service
+        from api.utils.slots import regenerate_service_slots
+        
+        service = Service.objects.get(id=service_id)
+        count = regenerate_service_slots(service)
+        return f"Regenerated slots for service {service.title} (ID: {service_id}). Deleted/Recreated {count} unbooked slots."
+    except Service.DoesNotExist:
+        return f"Service {service_id} not found"
+    except Exception as e:
+        return f"Error regenerating slots for service {service_id}: {str(e)}"

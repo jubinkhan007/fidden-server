@@ -242,8 +242,12 @@ class CreatePaymentIntentView(APIView):
                     )
 
                 # create the booking while the slot is locked
+                data = {"slot_id": slot_id}
+                if "add_on_ids" in request.data:
+                    data["add_on_ids"] = request.data["add_on_ids"]
+
                 serializer = SlotBookingSerializer(
-                    data={"slot_id": slot_id},
+                    data=data,
                     context={"request": request},
                 )
                 serializer.is_valid(raise_exception=True)
@@ -301,14 +305,37 @@ class CreatePaymentIntentView(APIView):
                 if booking.service.discount_price > 0
                 else booking.service.price
             )
+            
+            # Add-on prices
+            for addon in booking.add_ons.all():
+                total_amount += addon.price
+
             full_service_amount = total_amount
 
             if shop.is_deposit_required:
                 service = booking.service
-                deposit_amount = service.deposit_amount if service.deposit_amount else full_service_amount
+                
+                # Dynamic deposit calculation to include add-ons
+                # Fall back to shop's default if service doesn't have its own configuration
+                deposit_type = service.deposit_type or shop.default_deposit_type
+                deposit_percentage = service.deposit_percentage or shop.default_deposit_percentage
+                
+                is_percentage = (
+                    deposit_type == 'percentage' 
+                    or (not deposit_type and deposit_percentage)
+                )
+
+                if is_percentage and deposit_percentage:
+                    deposit_amount = (full_service_amount * deposit_percentage) / 100
+                elif service.deposit_amount:
+                    deposit_amount = service.deposit_amount
+                else:
+                    deposit_amount = full_service_amount
+
                 total_amount = min(deposit_amount, full_service_amount)
             else:
                 deposit_amount = full_service_amount
+                total_amount = full_service_amount
 
             remaining_balance = (
                 full_service_amount - total_amount if shop.is_deposit_required else Decimal("0.00")
@@ -1909,7 +1936,7 @@ class CapturePayPalOrderView(APIView):
                     payment=payment,
                     user=payment.user,
                     shop=payment.booking.shop,
-                    slot=payment.booking.slot,          # ✅ fix
+                    slot=payment.booking,  # ✅ Fixed: SlotBooking instance, not Slot
                     service=payment.booking.service,
                     amount=payment.amount,
                     currency="usd",  # or data['purchase_units'][0]['amount']['currency_code']
@@ -1966,7 +1993,7 @@ class PayPalWebhookView(APIView):
             # Check AI add-on
             try:
                 sub = ShopSubscription.objects.get(ai_paypal_subscription_id=subscription_id)
-                sub.ai_addon_active = True
+                sub.has_ai_addon = True  # FIXED: was ai_addon_active
                 sub.save()
                 logger.info(f"PayPal AI Addon Activated: {subscription_id}")
                 return
@@ -2004,9 +2031,8 @@ class PayPalWebhookView(APIView):
         try:
             sub = ShopSubscription.objects.get(ai_paypal_subscription_id=subscription_id)
             # AI add-on cancelled
-            sub.ai_addon_active = False
+            sub.has_ai_addon = False  # FIXED: was ai_addon_active
             sub.ai_paypal_subscription_id = None
-            sub.ai_provider = None
             sub.save()
             logger.info(f"PayPal AI Addon Cancelled: {subscription_id}")
         except ShopSubscription.DoesNotExist:
@@ -2053,3 +2079,62 @@ class PayPalWebhookView(APIView):
             status="succeeded",
             description=f"PayPal Subscription Payment: {subscription_id}"
         )
+
+
+# ==========================================
+# COMPATIBILITY: AI Add-on via PayPal
+# ==========================================
+class CreatePayPalAIAddonOrderView(APIView):
+    """
+    Compatibility endpoint for Flutter app.
+    Redirects to subscription flow since AI Add-on is recurring.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from api.services.paypal import create_subscription
+        from django.urls import reverse
+
+        try:
+            shop = request.user.shop
+            shop_sub = getattr(shop, "subscription", None)
+            if not shop_sub:
+                return Response({"error": "Shop subscription not found."}, status=status.HTTP_404_NOT_FOUND)
+        except Shop.DoesNotExist:
+            return Response({"error": "Shop not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Basic eligibility checks
+        if shop_sub.has_ai_addon:
+            return Response({"error": "AI Assistant add-on already active."}, status=status.HTTP_400_BAD_REQUEST)
+        if getattr(shop_sub.plan, 'ai_assistant', 'addon') == 'included':
+            return Response({"error": "AI Assistant already included in your plan."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Find AI add-on plan
+            ai_addon_plan = SubscriptionPlan.objects.filter(ai_assistant=SubscriptionPlan.AI_ADDON).first()
+            if not ai_addon_plan or not ai_addon_plan.paypal_plan_id:
+                return Response(
+                    {"error": "AI add-on is not configured for PayPal."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            return_url = request.build_absolute_uri(reverse("paypal_return"))
+            cancel_url = request.build_absolute_uri(reverse("paypal_cancel"))
+
+            paypal_sub_id, approval_url = create_subscription(ai_addon_plan, shop, return_url, cancel_url)
+
+            # Store the PayPal subscription ID for the AI add-on
+            shop_sub.ai_paypal_subscription_id = paypal_sub_id
+            shop_sub.has_ai_addon = False  # Wait for webhook confirmation
+            shop_sub.save()
+
+            return Response(
+                {
+                    "approval_url": approval_url,
+                    "subscription_id": paypal_sub_id,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.error(f"PayPal error creating AI add-on subscription: {e}", exc_info=True)
+            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)

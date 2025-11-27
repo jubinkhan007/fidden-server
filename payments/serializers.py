@@ -29,6 +29,7 @@ class userBookingSerializer(serializers.ModelSerializer):
     avg_rating = serializers.SerializerMethodField()
     total_reviews = serializers.SerializerMethodField()
     refund = RefundSerializer(source="payment.refund", read_only=True)  # 👈 Added
+    add_on_services = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -51,6 +52,7 @@ class userBookingSerializer(serializers.ModelSerializer):
             'avg_rating',
             'total_reviews',
             "refund",
+            'add_on_services',
         ]
         read_only_fields = fields
 
@@ -66,6 +68,19 @@ class userBookingSerializer(serializers.ModelSerializer):
 
     def get_total_reviews(self, obj):
         return obj.shop.ratings.count()
+    
+    def get_add_on_services(self, obj):
+        """
+        Return list of add-on services for this booking
+        """
+        add_ons = obj.slot.add_ons.all()
+        return [
+            {
+                'title': add_on.service.title,
+                'duration': str(add_on.service.duration) if add_on.service.duration else '0',
+            }
+            for add_on in add_ons
+        ]
 
 class ownerBookingSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
@@ -76,6 +91,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
     service_title = serializers.CharField(source='slot.service.title', read_only=True)
     service_duration = serializers.CharField(source='slot.service.duration', read_only=True) 
     refund = RefundSerializer(source="payment.refund", read_only=True)  # 👈 Added
+    add_on_services = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -93,6 +109,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             'service_duration',   
             'status',
             'refund',
+            'add_on_services',
             'created_at',
             'updated_at',
         ]
@@ -103,6 +120,19 @@ class ownerBookingSerializer(serializers.ModelSerializer):
         if obj.user.profile_image:
             return request.build_absolute_uri(obj.user.profile_image.url) if request else obj.user.profile_image.url
         return None
+    
+    def get_add_on_services(self, obj):
+        """
+        Return list of add-on services for this booking
+        """
+        add_ons = obj.slot.add_ons.all()
+        return [
+            {
+                'title': add_on.service.title,
+                'duration': str(add_on.service.duration) if add_on.service.duration else '0',
+            }
+            for add_on in add_ons
+        ]
     
 class TransactionLogSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.name', read_only=True)
