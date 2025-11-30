@@ -281,6 +281,16 @@ class ShopSerializer(serializers.ModelSerializer):
         # Backward compatibility: Keep niche as primary_niche
         rep['niche'] = instance.primary_niche
         
+        # New Dashboard Spec: Primary Niche + Capabilities
+        # primary_niche is already defined in model property
+        rep['primary_niche'] = instance.primary_niche
+        
+        # capabilities are all niches except the primary one
+        if instance.niches and len(instance.niches) > 1:
+            rep['capabilities'] = instance.niches[1:]
+        else:
+            rep['capabilities'] = []
+        
         return rep
     
     def validate_niches(self, value):

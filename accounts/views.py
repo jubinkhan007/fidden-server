@@ -52,6 +52,10 @@ class LoginView(APIView):
             shop_id = shop.id if shop else None
             shop_niche = shop.primary_niche if shop else None  # Deprecated - use shop_niches
             shop_niches = shop.niches if shop and shop.niches else ([shop.niche] if shop and shop.niche else [])
+            
+            # New Dashboard Spec
+            primary_niche = shop.primary_niche if shop else None
+            capabilities = shop.niches[1:] if shop and shop.niches and len(shop.niches) > 1 else []
 
             return Response({
                 "success": True,
@@ -59,8 +63,10 @@ class LoginView(APIView):
                 "email": user.email,
                 "role": user.role,
                 "shop_id": shop_id,
-                "shop_niche": shop_niche,    # Deprecated - use shop_niches
-                "shop_niches": shop_niches,  # New multi-niche support
+                "shop_niche": shop_niche,    # Deprecated
+                "shop_niches": shop_niches,  # Array
+                "primary_niche": primary_niche, # New Spec
+                "capabilities": capabilities,   # New Spec
                 "accessToken": data.get("accessToken"),
                 "refreshToken": data.get("refreshToken"),
             }, status=status.HTTP_200_OK)
@@ -110,6 +116,10 @@ class GoogleLoginView(APIView):
         shop_id = shop.id if shop else None
         shop_niche = shop.primary_niche if shop else None  # Deprecated - use shop_niches
         shop_niches = shop.niches if shop and shop.niches else ([shop.niche] if shop and shop.niche else [])
+        
+        # New Dashboard Spec
+        primary_niche = shop.primary_niche if shop else None
+        capabilities = shop.niches[1:] if shop and shop.niches and len(shop.niches) > 1 else []
 
         return Response({
             "success": True,
@@ -117,8 +127,10 @@ class GoogleLoginView(APIView):
             "email": user.email,
             "role": role,
             "shop_id": shop_id,
-            "shop_niche": shop_niche,    # Deprecated - use shop_niches
-            "shop_niches": shop_niches,  # New multi-niche support
+            "shop_niche": shop_niche,    # Deprecated
+            "shop_niches": shop_niches,  # Array
+            "primary_niche": primary_niche, # New Spec
+            "capabilities": capabilities,   # New Spec
             "accessToken": str(refresh.access_token),
             "refreshToken": str(refresh),
         }, status=status.HTTP_200_OK)

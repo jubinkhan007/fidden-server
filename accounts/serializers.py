@@ -124,10 +124,12 @@ class UserSerializer(serializers.ModelSerializer):
     shop_id = serializers.SerializerMethodField()
     shop_niche = serializers.SerializerMethodField()  # Deprecated - use shop_niches
     shop_niches = serializers.SerializerMethodField()
+    primary_niche = serializers.SerializerMethodField()
+    capabilities = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "name", "email", 'mobile_number', 'profile_image', 'shop_id', 'shop_niche', 'shop_niches']
+        fields = ["id", "name", "email", 'mobile_number', 'profile_image', 'shop_id', 'shop_niche', 'shop_niches', 'primary_niche', 'capabilities']
 
     def get_shop_id(self, obj):
         if hasattr(obj, 'shop'):
@@ -144,4 +146,16 @@ class UserSerializer(serializers.ModelSerializer):
         """Returns list of all niches for this shop"""
         if hasattr(obj, 'shop'):
             return obj.shop.niches if obj.shop.niches else [obj.shop.niche] if obj.shop.niche else []
+        return []
+    
+    def get_primary_niche(self, obj):
+        """Returns the primary niche (first in list)"""
+        if hasattr(obj, 'shop'):
+            return obj.shop.primary_niche
+        return None
+        
+    def get_capabilities(self, obj):
+        """Returns secondary niches as capabilities"""
+        if hasattr(obj, 'shop') and obj.shop.niches and len(obj.shop.niches) > 1:
+            return obj.shop.niches[1:]
         return []  
