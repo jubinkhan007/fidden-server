@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django import forms
 
 from .models import (
     PerformanceAnalytics,
@@ -46,8 +47,53 @@ class VerificationFileInline(admin.TabularInline):
     model = VerificationFile
     extra = 1
 
+class ShopAdminForm(forms.ModelForm):
+    """Custom form for Shop admin with better niche selection"""
+    
+    NICHE_CHOICES = [
+        ('barber', 'Barber'),
+        ('hairstylist', 'Hairstylist/Loctician'),
+        ('nail_tech', 'Nail Tech'),
+        ('tattoo_artist', 'Tattoo Artist'),
+        ('makeup_artist', 'Makeup Artist (MUA)'),
+        ('esthetician', 'Esthetician/Massage Therapist'),
+        ('fitness_trainer', 'Fitness Trainer'),
+        ('other', 'Other'),
+    ]
+    
+    selected_niches = forms.MultipleChoiceField(
+        choices=NICHE_CHOICES,
+        widget=forms.CheckboxSelectMultiple,
+        required=False,
+        help_text='Select all service types this shop offers. First selection = Primary Niche, others = Capabilities.'
+    )
+    
+    class Meta:
+        model = Shop
+        fields = '__all__'
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Pre-populate from existing niches
+        if self.instance.pk and self.instance.niches:
+            self.fields['selected_niches'].initial = self.instance.niches
+    
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        # Update niches from selected checkboxes
+        selected = self.cleaned_data.get('selected_niches', [])
+        if selected:
+            instance.niches = list(selected)
+        elif not instance.niches:
+            instance.niches = ['other']
+        
+        if commit:
+            instance.save()
+        return instance
+
 @admin.register(Shop)
 class ShopAdmin(admin.ModelAdmin):
+    form = ShopAdminForm
     list_display = (
         'name', 'owner', 'display_niches', 'address', 'location', 'capacity', 
         'status', 'is_deposit_required', 'get_subscription_plan'
@@ -60,7 +106,8 @@ class ShopAdmin(admin.ModelAdmin):
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('owner', 'name', 'address', 'location', 'niches', 'niche', 'about_us')
+            'fields': ('owner', 'name', 'address', 'location', 'selected_niches', 'about_us'),
+            'description': 'Select niches: First = Primary Niche (drives dashboard), Rest = Capabilities'
         }),
         ('Operational Settings', {
             'fields': (
