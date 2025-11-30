@@ -156,6 +156,121 @@ class Shop(models.Model):
         if self.niches and len(self.niches) > 0:
             return self.niches[0]
         return self.niche if self.niche else 'other'
+    
+    def auto_detect_niches(self):
+        """
+        Auto-detect niches based on service categories AND titles offered by this shop.
+        Maps service categories and titles to niches.
+        
+        Returns:
+            list: Detected niches sorted by frequency (most common first)
+        """
+        # Mapping of keywords to niches
+        KEYWORD_TO_NICHE_MAP = {
+            # Haircut/Barber services
+            'haircut': 'barber',
+            'hair cut': 'barber',
+            'beard': 'barber',
+            'shave': 'barber',
+            'barber': 'barber',
+            'fade': 'barber',
+            'trim': 'barber',
+            
+            # Hair styling
+            'hair': 'hairstylist',
+            'hairstyle': 'hairstylist',
+            'braid': 'hairstylist',
+            'locs': 'hairstylist',
+            'dread': 'hairstylist',
+            'perm': 'hairstylist',
+            'color': 'hairstylist',
+            
+            # Nail services
+            'nails': 'nail_tech',
+            'nail': 'nail_tech',
+            'manicure': 'nail_tech',
+            'pedicure': 'nail_tech',
+            'gel': 'nail_tech',
+            'acrylic': 'nail_tech',
+            
+            # Skin/Beauty services
+            'skincare': 'esthetician',
+            'facial': 'esthetician',
+            'waxing': 'esthetician',
+            'skin': 'esthetician',
+            'esthetic': 'esthetician',
+            
+            # Massage services
+            'massage': 'esthetician',
+            'spa': 'esthetician',
+            'therapy': 'esthetician',
+            'relax': 'esthetician',
+            
+            # Makeup
+            'makeup': 'makeup_artist',
+            'cosmetic': 'makeup_artist',
+            'glam': 'makeup_artist',
+            
+            # Tattoo/Piercing - ENHANCED
+            'tattoo': 'tattoo_artist',
+            'piercing': 'tattoo_artist',
+            'ink': 'tattoo_artist',
+            'body art': 'tattoo_artist',
+            'permanent': 'tattoo_artist',
+            
+            # Fitness
+            'fitness': 'fitness_trainer',
+            'training': 'fitness_trainer',
+            'gym': 'fitness_trainer',
+            'yoga': 'fitness_trainer',
+            'workout': 'fitness_trainer',
+        }
+        
+        # Get all service categories for this shop
+        from collections import Counter
+        niche_counts = Counter()
+        
+        for service in self.services.select_related('category').all():
+            # Check both category AND title (not exclusive)
+            
+            # Check category name
+            if service.category:
+                category_name = service.category.name.lower()
+                for keyword, niche in KEYWORD_TO_NICHE_MAP.items():
+                    if keyword in category_name:
+                        niche_counts[niche] += 1
+                        break  # Only match once per category
+            
+            # ALSO check service title
+            service_title = service.title.lower()
+            for keyword, niche in KEYWORD_TO_NICHE_MAP.items():
+                if keyword in service_title:
+                    niche_counts[niche] += 1
+                    break # Only match once per title
+        
+        # Return niches sorted by frequency (most common first)
+        detected_niches = [niche for niche, count in niche_counts.most_common()]
+        
+        # If no niches detected, return ['other']
+        return detected_niches if detected_niches else ['other']
+    
+    def update_niches_from_services(self, save=True):
+        """
+        Update this shop's niches field based on auto-detection from services.
+        
+        Args:
+            save (bool): Whether to save the shop after updating niches
+            
+        Returns:
+            list: The updated niches list
+        """
+        detected = self.auto_detect_niches()
+        self.niches = detected
+        
+        if save:
+            self.save(update_fields=['niches'])
+        
+        return self.niches
 
     ##update all service new method
     def update_all_service_deposits(self):
