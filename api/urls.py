@@ -86,6 +86,17 @@ urlpatterns = [
 ]
 
 # ==========================================
+# BARBER DASHBOARD ROUTES ✂️
+# ==========================================
+from .barber_views import TodayAppointmentsView, DailyRevenueView, NoShowAlertsView
+
+urlpatterns += [
+    path('barber/today-appointments/', TodayAppointmentsView.as_view(), name='barber-today-appointments'),
+    path('barber/daily-revenue/', DailyRevenueView.as_view(), name='barber-daily-revenue'),
+    path('barber/no-show-alerts/', NoShowAlertsView.as_view(), name='barber-no-show-alerts'),
+]
+
+# ==========================================
 # PHASE 2: TATTOO ARTIST ROUTES 🖋️
 # ==========================================
 from rest_framework.routers import DefaultRouter
