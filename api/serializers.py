@@ -33,6 +33,7 @@ from .models import (
     ConsentFormTemplate,
     SignedConsentForm,
     IDVerificationRequest,
+    Consultation,
     BookingAddOn,
 )
 from math import radians, cos, sin, asin, sqrt
@@ -1293,23 +1294,37 @@ class SignedConsentFormSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 class IDVerificationRequestSerializer(serializers.ModelSerializer):
-    user_name = serializers.CharField(source='user.name', read_only=True)
-    user_email = serializers.CharField(source='user.email', read_only=True)
-
+    user = UserSerializer(read_only=True)
+    
     class Meta:
         model = IDVerificationRequest
         fields = [
-            'id', 'shop', 'user', 'user_name', 'user_email', 'booking',
+            'id', 'shop', 'user', 'booking',
             'front_image', 'back_image', 'status', 'rejection_reason',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['shop', 'user', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
     def create(self, validated_data):
         request = self.context.get('request')
         validated_data['user'] = request.user
         # Shop must be provided in context or determined from booking
         return super().create(validated_data)
+
+
+class ConsultationSerializer(serializers.ModelSerializer):
+    """Serializer for Consultation appointments"""
+    
+    class Meta:
+        model = Consultation
+        fields = [
+            'id', 'shop', 'customer_name', 'customer_email', 'customer_phone',
+            'date', 'time', 'duration_minutes', 'status', 'notes',
+            'design_reference_images', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
 
     forecast_summary = serializers.CharField(source='get_forecast_summary_display')
     motivational_nudge = serializers.CharField(source='get_motivational_nudge_display')

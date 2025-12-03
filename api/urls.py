@@ -103,7 +103,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     PortfolioViewSet, DesignRequestViewSet, 
     ConsentFormViewSet, SignedConsentFormViewSet, 
-    IDVerificationViewSet
+    IDVerificationViewSet, ConsultationViewSet
 )
 
 router = DefaultRouter()
@@ -112,8 +112,10 @@ router.register(r'design-requests', DesignRequestViewSet, basename='design-reque
 router.register(r'consent-forms/templates', ConsentFormViewSet, basename='consent-templates')
 router.register(r'consent-forms/signed', SignedConsentFormViewSet, basename='signed-consent-forms')
 router.register(r'id-verification', IDVerificationViewSet, basename='id-verification')
+router.register(r'consultations', ConsultationViewSet, basename='consultations')
 
 urlpatterns += [
     path('', include(router.urls)),
 ]
+
 

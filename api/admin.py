@@ -29,6 +29,7 @@ from .models import (
     ConsentFormTemplate,
     SignedConsentForm,
     IDVerificationRequest,
+    Consultation,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -531,10 +532,10 @@ class SignedConsentFormAdmin(admin.ModelAdmin):
 @admin.register(IDVerificationRequest)
 class IDVerificationRequestAdmin(admin.ModelAdmin):
     list_display = ('id', 'shop', 'user', 'status', 'created_at')
-    list_filter = ('status', 'shop', 'created_at')
-    search_fields = ('shop__name', 'user__name', 'user__email')
+    list_filter = ('status', 'created_at')
+    search_fields = ('user__email', 'user__name', 'shop__name')
     ordering = ('-created_at',)
-    readonly_fields = ('created_at',)
+    readonly_fields = ('created_at', 'updated_at')
     
     fieldsets = (
         ('Verification Request', {
@@ -553,3 +554,21 @@ class IDVerificationRequestAdmin(admin.ModelAdmin):
         if obj:  # editing an existing object
             return self.readonly_fields
         return self.readonly_fields
+
+@admin.register(Consultation)
+class ConsultationAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'customer_name', 'date', 'time', 'status', 'created_at')
+    list_filter = ('status', 'date')
+    search_fields = ('customer_name', 'customer_email', 'shop__name')
+    readonly_fields = ('created_at', 'updated_at')
+    fieldsets = (
+        ('Customer Information', {
+            'fields': ('customer_name', 'customer_email', 'customer_phone')
+        }),
+        ('Appointment Details', {
+            'fields': ('shop', 'date', 'time', 'duration_minutes', 'status', 'notes')
+        }),
+        ('Additional', {
+            'fields': ('design_reference_images', 'created_at', 'updated_at')
+        }),
+    )

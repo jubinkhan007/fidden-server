@@ -1242,7 +1242,44 @@ class IDVerificationRequest(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
+    
+    class Meta:
+        ordering = ['-created_at']
+    
     def __str__(self):
-        return f"ID Verification ({self.status}) - {self.user}"
+        return f"ID Verification for {self.user.name} - {self.status}"
 
+
+class Consultation(models.Model):
+    """Pre-tattoo consultation appointments"""
+    
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('confirmed', 'Confirmed'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+        ('no_show', 'No Show'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='consultations')
+    customer_name = models.CharField(max_length=200)
+    customer_email = models.EmailField()
+    customer_phone = models.CharField(max_length=20, blank=True)
+    date = models.DateField()
+    time = models.TimeField()
+    duration_minutes = models.IntegerField(default=30)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    notes = models.TextField(blank=True)
+    design_reference_images = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['date', 'time']
+        unique_together = ['shop', 'date', 'time']
+        indexes = [
+            models.Index(fields=['shop', 'date', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"Consultation: {self.customer_name} on {self.date} at {self.time}"

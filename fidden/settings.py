@@ -7,6 +7,7 @@ import ssl
 from dotenv import load_dotenv
 import json
 import urllib.parse as urlparse
+import dj_database_url
 
 
 # Load .env file
@@ -170,15 +171,16 @@ else:
 # ==============================
 # Database
 # ==============================
+# Use PostgreSQL from DATABASE_URL environment variable
+
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://fionabari@localhost:5432/fidden_local')
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DATABASE_NAME', 'fidden'),
-        'USER': os.getenv('DATABASE_USER', 'postgres'),
-        'PASSWORD': os.getenv('DATABASE_PASSWORD', ''),
-        'HOST': os.getenv('DATABASE_HOST', 'localhost'),
-        'PORT': int(os.getenv('DATABASE_PORT', 5432)),
-    }
+    'default': dj_database_url.config(
+        default=DATABASE_URL,
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
 }
 
 # ==============================

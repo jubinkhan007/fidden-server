@@ -3,7 +3,8 @@ import random
 from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
@@ -2149,12 +2150,13 @@ class SendLoyaltyEmailView(APIView):
 from rest_framework import viewsets
 from .models import (
     PortfolioItem, DesignRequest, DesignRequestImage, 
-    ConsentFormTemplate, SignedConsentForm, IDVerificationRequest
+    ConsentFormTemplate, SignedConsentForm, IDVerificationRequest,
+    Consultation
 )
 from .serializers import (
     PortfolioItemSerializer, DesignRequestSerializer, 
     ConsentFormTemplateSerializer, SignedConsentFormSerializer, 
-    IDVerificationRequestSerializer
+    IDVerificationRequestSerializer, ConsultationSerializer
 )
 
 class PortfolioViewSet(viewsets.ModelViewSet):
@@ -2238,3 +2240,75 @@ class IDVerificationViewSet(viewsets.ModelViewSet):
             return IDVerificationRequest.objects.filter(shop=user.shop).order_by('-created_at')
         return IDVerificationRequest.objects.filter(user=user).order_by('-created_at')
 
+
+class ConsultationViewSet(viewsets.ModelViewSet):
+    """
+    Consultation appointment management for tattoo artists
+    
+    Endpoints:
+    - GET /api/consultations/ - List consultations (filterable by date, status)
+    - POST /api/consultations/ - Create consultation
+    - GET /api/consultations/{id}/ - Get consultation details
+    - PATCH /api/consultations/{id}/ - Update consultation
+    - DELETE /api/consultations/{id}/ - Delete consultation
+    - POST /api/consultations/{id}/confirm/ - Confirm consultation
+    - POST /api/consultations/{id}/complete/ - Mark as completed
+    - POST /api/consultations/{id}/cancel/ - Cancel consultation
+    - POST /api/consultations/{id}/mark_no_show/ - Mark as no-show
+    """
+    serializer_class = ConsultationSerializer
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+    
+    def get_queryset(self):
+        queryset = Consultation.objects.filter(shop=self.request.user.shop)
+        
+        # Filter by date range
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        if date_from:
+            queryset = queryset.filter(date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(date__lte=date_to)
+        
+        # Filter by status
+        status = self.request.query_params.get('status')
+        if status:
+            queryset = queryset.filter(status=status)
+        
+        return queryset
+    
+    def perform_create(self, serializer):
+        serializer.save(shop=self.request.user.shop)
+    
+    @action(detail=True, methods=['post'])
+    def confirm(self, request, pk=None):
+        """Confirm a scheduled consultation"""
+        consultation = self.get_object()
+        consultation.status = 'confirmed'
+        consultation.save()
+        return Response(ConsultationSerializer(consultation).data)
+    
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """Mark consultation as completed with optional notes"""
+        consultation = self.get_object()
+        consultation.status = 'completed'
+        consultation.notes = request.data.get('notes', consultation.notes)
+        consultation.save()
+        return Response(ConsultationSerializer(consultation).data)
+    
+    @action(detail=True, methods=['post'])
+    def cancel(self, request,pk=None):
+        """Cancel a consultation"""
+        consultation = self.get_object()
+        consultation.status = 'cancelled'
+        consultation.save()
+        return Response(ConsultationSerializer(consultation).data)
+    
+    @action(detail=True, methods=['post'])
+    def mark_no_show(self, request, pk=None):
+        """Mark customer as no-show"""
+        consultation = self.get_object()
+        consultation.status = 'no_show'
+        consultation.save()
+        return Response(ConsultationSerializer(consultation).data)
