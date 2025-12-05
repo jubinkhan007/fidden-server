@@ -29,13 +29,14 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-default-key')
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 't')
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost').split(',')
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost').split(',') + ['10.0.2.2']
 SAFE_REDIRECT_SCHEMES = ["http", "https", "myapp"]
 
 # ==============================
 # Installed Apps
 # ==============================
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -107,6 +108,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'fidden.wsgi.application'
+ASGI_APPLICATION = 'fidden.asgi.application'
 
 # Channels / Redis with env-based config and safe fallback (best for free Render)
 # ==============================

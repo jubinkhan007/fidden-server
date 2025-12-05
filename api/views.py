@@ -956,7 +956,7 @@ class GlobalSearchView(APIView):
         results = []
 
         # --- Shops search ---
-        shops = Shop.objects.annotate(
+        shops = Shop.objects.filter(is_verified=True).annotate(
             avg_rating=Avg("ratings__rating"),
             review_count=Count("ratings")
         ).distinct()
