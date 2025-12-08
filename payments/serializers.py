@@ -30,6 +30,7 @@ class userBookingSerializer(serializers.ModelSerializer):
     total_reviews = serializers.SerializerMethodField()
     refund = RefundSerializer(source="payment.refund", read_only=True)  # 👈 Added
     add_on_services = serializers.SerializerMethodField()
+    shop_timezone = serializers.SerializerMethodField()  # 🆕 For Flutter timezone conversion
 
     class Meta:
         model = Booking
@@ -53,6 +54,7 @@ class userBookingSerializer(serializers.ModelSerializer):
             'total_reviews',
             "refund",
             'add_on_services',
+            'shop_timezone',  # 🆕
         ]
         read_only_fields = fields
 
@@ -82,6 +84,12 @@ class userBookingSerializer(serializers.ModelSerializer):
             for add_on in add_ons
         ]
 
+    def get_shop_timezone(self, obj):
+        """Return shop's timezone for Flutter to convert UTC slot_time to local."""
+        if obj.shop:
+            return obj.shop.time_zone
+        return None
+
 class ownerBookingSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     user_name = serializers.CharField(source='user.name', read_only=True)
@@ -92,6 +100,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
     service_duration = serializers.CharField(source='slot.service.duration', read_only=True) 
     refund = RefundSerializer(source="payment.refund", read_only=True)  # 👈 Added
     add_on_services = serializers.SerializerMethodField()
+    shop_timezone = serializers.SerializerMethodField()  # 🆕 For Flutter timezone conversion
 
     class Meta:
         model = Booking
@@ -110,6 +119,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             'status',
             'refund',
             'add_on_services',
+            'shop_timezone',  # 🆕
             'created_at',
             'updated_at',
         ]
@@ -133,6 +143,12 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             }
             for add_on in add_ons
         ]
+
+    def get_shop_timezone(self, obj):
+        """Return shop's timezone for Flutter to convert UTC slot_time to local."""
+        if obj.shop:
+            return obj.shop.time_zone
+        return None
     
 class TransactionLogSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.name', read_only=True)
