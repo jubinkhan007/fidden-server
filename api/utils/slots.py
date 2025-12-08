@@ -28,7 +28,11 @@ def generate_slots_for_service(service, *, days_ahead=14, start_date=None):
     Create time-slots for a single service from start_date for days_ahead.
     Uses shop.get_intervals_for_date (same as prefill_slots).
     Idempotent: skips existing Slot.start_time values.
+    
+    IMPORTANT: Uses shop.time_zone to correctly interpret working hours.
     """
+    import zoneinfo
+    
     shop = service.shop
 
     if start_date is None:
@@ -36,6 +40,12 @@ def generate_slots_for_service(service, *, days_ahead=14, start_date=None):
 
     target_end = start_date + timedelta(days=days_ahead - 1)
     duration = service.duration or 30
+    
+    # Get shop's timezone (default to America/New_York if not set)
+    try:
+        shop_tz = zoneinfo.ZoneInfo(shop.time_zone or "America/New_York")
+    except Exception:
+        shop_tz = zoneinfo.ZoneInfo("America/New_York")
 
     for offset in range((target_end - start_date).days + 1):
         date = start_date + timedelta(days=offset)
@@ -56,8 +66,14 @@ def generate_slots_for_service(service, *, days_ahead=14, start_date=None):
 
         batch = []
         for (start_t, end_t) in intervals:
-            start_dt = timezone.make_aware(datetime.combine(date, start_t))
-            end_dt = timezone.make_aware(datetime.combine(date, end_t))
+            # Combine date + time in shop's local timezone, then convert to aware datetime
+            naive_start = datetime.combine(date, start_t)
+            naive_end = datetime.combine(date, end_t)
+            
+            # Make aware using shop's timezone (this is the key fix!)
+            start_dt = naive_start.replace(tzinfo=shop_tz)
+            end_dt = naive_end.replace(tzinfo=shop_tz)
+            
             if end_dt <= start_dt:
                 continue
 

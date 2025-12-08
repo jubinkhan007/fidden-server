@@ -44,6 +44,12 @@ class Shop(models.Model):
     about_us = models.TextField(blank=True, null=True)
     shop_img = models.ImageField(upload_to='shop/', blank=True, null=True)
     ai_partner_name = models.CharField(max_length=50, blank=True, null=True, default="Amara")
+    # 🆕 Shop's local timezone for slot generation (IANA format, e.g. "America/New_York")
+    time_zone = models.CharField(
+        max_length=50, 
+        default="America/New_York",
+        help_text="IANA timezone (e.g., 'America/New_York', 'America/Los_Angeles')"
+    )
 
     close_days = models.JSONField(
         default=list,

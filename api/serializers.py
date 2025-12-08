@@ -252,7 +252,8 @@ class ShopSerializer(serializers.ModelSerializer):
             'shop_img', 'close_days', "business_hours", 'owner_id', 'is_verified', 'status', 
             'verification_files', 'uploaded_files', 'is_deposit_required',
             'default_deposit_percentage',
-            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
+            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
+            'time_zone',  # 🆕 Shop's local timezone for slot generation
         ]
         read_only_fields = ('owner_id','is_verified', 'uploaded_files')
 
@@ -591,7 +592,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
             'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id',
             'avg_rating', 'review_count', 'distance', 'services', 'reviews',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
-            'is_deposit_required', 'default_deposit_percentage'
+            'is_deposit_required', 'default_deposit_percentage', 'time_zone',
         ]
 
 

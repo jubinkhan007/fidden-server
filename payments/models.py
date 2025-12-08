@@ -214,6 +214,47 @@ class TransactionLog(models.Model):
         return f"{self.transaction_type.capitalize()} {self.id} - {self.status} - {self.amount} {self.currency}"
 
 # -----------------------------
+# Shop Payout Table (PayPal → Stripe Transfer)
+# -----------------------------
+class ShopPayout(models.Model):
+    """
+    Tracks payouts from Fidden to shops for PayPal bookings.
+    Commission is calculated from total service price, not deposit.
+    Foundation: Commission = 10% of service price (often equals deposit)
+    Momentum/Icon: Commission = 0%, full deposit transferred to shop
+    """
+    STATUS_PENDING = "pending"
+    STATUS_PROCESSING = "processing"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_PROCESSING, "Processing"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="payouts")
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="payouts")
+    gross_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Deposit amount received")
+    commission_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Fidden's commission (from service price)")
+    net_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Amount transferred to shop")
+    commission_rate = models.DecimalField(max_digits=5, decimal_places=2, help_text="Commission rate applied (%)")
+    stripe_transfer_id = models.CharField(max_length=255, blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Shop Payout"
+        verbose_name_plural = "Shop Payouts"
+
+    def __str__(self):
+        return f"Payout #{self.pk} - {self.shop.name} - ${self.net_amount} ({self.status})"
+
+# -----------------------------
 # CouponUsage Table
 # -----------------------------
 class CouponUsage(models.Model):

@@ -1943,7 +1943,16 @@ class CapturePayPalOrderView(APIView):
                     status="succeeded",
                 )
 
-                return Response({"status": "success", "booking_id": payment.booking.id})
+                # Process payout to shop via Stripe Transfer
+                from payments.utils.payouts import process_shop_payout
+                payout = process_shop_payout(payment)
+
+                return Response({
+                    "status": "success", 
+                    "booking_id": payment.booking.id,
+                    "payout_status": payout.status,
+                    "payout_amount": float(payout.net_amount),
+                })
         
         return Response({"detail": "Payment could not be captured"}, status=400)
     

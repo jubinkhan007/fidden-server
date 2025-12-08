@@ -8,7 +8,8 @@ from .models import (
     Booking,
     Refund,
     TransactionLog,
-    CouponUsage
+    CouponUsage,
+    ShopPayout,
 )
 
 # -----------------------------
@@ -97,3 +98,37 @@ class CouponUsageAdmin(admin.ModelAdmin):
     list_filter = ('coupon', 'used_at')
     search_fields = ('user__username', 'coupon__code')
     ordering = ('-used_at',)
+
+# -----------------------------
+# ShopPayout Admin (PayPal → Stripe Transfer)
+# -----------------------------
+@admin.register(ShopPayout)
+class ShopPayoutAdmin(admin.ModelAdmin):
+    list_display = (
+        "id", 
+        "shop", 
+        "gross_amount", 
+        "commission_amount", 
+        "net_amount", 
+        "commission_rate",
+        "status", 
+        "created_at",
+        "completed_at",
+    )
+    list_filter = ("status", "created_at", "shop")
+    search_fields = ("shop__name", "stripe_transfer_id", "payment__stripe_payment_intent_id")
+    readonly_fields = ("stripe_transfer_id", "created_at", "completed_at", "error_message")
+    raw_id_fields = ("shop", "payment")
+    
+    actions = ["retry_failed_payouts"]
+    
+    @admin.action(description="Retry failed payouts (transfer to Stripe)")
+    def retry_failed_payouts(self, request, queryset):
+        from payments.utils.payouts import process_shop_payout
+        failed = queryset.filter(status=ShopPayout.STATUS_FAILED)
+        success_count = 0
+        for payout in failed:
+            new_payout = process_shop_payout(payout.payment)
+            if new_payout.status == ShopPayout.STATUS_COMPLETED:
+                success_count += 1
+        self.message_user(request, f"Retried {failed.count()} payouts. {success_count} succeeded.")

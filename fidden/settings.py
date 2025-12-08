@@ -309,6 +309,8 @@ if google_ids_str:
 # CSRF Trusted Origins
 # ==============================
 CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if x]
+# Add localhost for local development
+CSRF_TRUSTED_ORIGINS += ['http://localhost:8000', 'http://127.0.0.1:8000']
 
 # ==============================
 # Celery Configuration
