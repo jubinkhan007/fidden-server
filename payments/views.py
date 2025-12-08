@@ -460,13 +460,37 @@ class StripeRefreshView(APIView):
 
 class ShopSlotsView(APIView):
     def get(self, request, shop_id):
+        import zoneinfo
+        from datetime import datetime, timedelta
+        
         service_id = request.query_params.get('service')
         date_str   = request.query_params.get('date')  # YYYY-MM-DD
-
+        
+        # Get shop's timezone for proper date filtering
+        shop = get_object_or_404(Shop, id=shop_id)
+        try:
+            shop_tz = zoneinfo.ZoneInfo(shop.time_zone or "America/New_York")
+        except Exception:
+            shop_tz = zoneinfo.ZoneInfo("America/New_York")
+        
+        # Parse the date and create start/end of day in shop's timezone
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+        
+        # Start of day in shop's timezone
+        day_start_local = datetime.combine(date_obj, datetime.min.time()).replace(tzinfo=shop_tz)
+        day_end_local = day_start_local + timedelta(days=1)
+        
+        # Query slots that fall within this date in shop's timezone
         qs = (Slot.objects
-              .filter(shop_id=shop_id, service_id=service_id, start_time__date=date_str)
+              .filter(
+                  shop_id=shop_id, 
+                  service_id=service_id, 
+                  start_time__gte=day_start_local,
+                  start_time__lt=day_end_local
+              )
               .select_related('service', 'service__shop')
-              .prefetch_related('service__disabled_times'))
+              .prefetch_related('service__disabled_times')
+              .order_by('start_time'))
 
         data = SlotSerializer(qs, many=True, context={'request': request}).data
         return Response({'slots': data})
