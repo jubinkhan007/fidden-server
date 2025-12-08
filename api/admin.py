@@ -20,7 +20,8 @@ from .models import (
     Coupon,
     GlobalSettings,
     WaitlistEntry, 
-    AutoFillLog
+    AutoFillLog,
+    GalleryItem,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -360,3 +361,12 @@ class AutoFillLogAdmin(admin.ModelAdmin):
     list_display = ('shop', 'status', 'revenue_recovered', 'created_at')
     list_filter = ('status', 'shop')
     readonly_fields = ('original_booking', 'filled_by_booking')
+
+
+@admin.register(GalleryItem)
+class GalleryItemAdmin(admin.ModelAdmin):
+    list_display = ('shop', 'caption', 'service', 'category_tag', 'is_public', 'created_at')
+    list_filter = ('is_public', 'category_tag', 'shop')
+    search_fields = ('shop__name', 'caption', 'category_tag')
+    readonly_fields = ('thumbnail', 'created_at')
+    raw_id_fields = ('shop', 'service')

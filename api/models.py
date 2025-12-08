@@ -50,6 +50,12 @@ class Shop(models.Model):
         default="America/New_York",
         help_text="IANA timezone (e.g., 'America/New_York', 'America/Los_Angeles')"
     )
+    
+    # 🆕 Social Links
+    instagram_url = models.URLField(max_length=200, blank=True, null=True)
+    tiktok_url = models.URLField(max_length=200, blank=True, null=True)
+    youtube_url = models.URLField(max_length=200, blank=True, null=True)
+    website_url = models.URLField(max_length=200, blank=True, null=True)
 
     close_days = models.JSONField(
         default=list,
@@ -311,6 +317,70 @@ class VerificationFile(models.Model):
 
     def __str__(self):
         return f"{self.shop.name} - {self.file.name}"
+
+
+class GalleryItem(models.Model):
+    """
+    Client-facing gallery for service providers to showcase their work.
+    Auto-generates thumbnail on upload.
+    """
+    shop = models.ForeignKey(
+        "Shop",
+        on_delete=models.CASCADE,
+        related_name="gallery_items"
+    )
+    image = models.ImageField(upload_to="gallery/")
+    thumbnail = models.ImageField(upload_to="gallery/thumbnails/", blank=True, null=True)
+    caption = models.CharField(max_length=255, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    service = models.ForeignKey(
+        "Service",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="gallery_items"
+    )
+    category_tag = models.CharField(max_length=50, blank=True, null=True)
+    tags = models.JSONField(default=list, blank=True)
+    is_public = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.shop.name} - {self.caption or 'Gallery Item'}"
+
+    def save(self, *args, **kwargs):
+        # Auto-generate thumbnail if image is provided and thumbnail is not
+        if self.image and not self.thumbnail:
+            self._generate_thumbnail()
+        super().save(*args, **kwargs)
+
+    def _generate_thumbnail(self, max_size=300):
+        """Generate a thumbnail version of the image."""
+        from PIL import Image
+        from io import BytesIO
+        from django.core.files.base import ContentFile
+        import os
+
+        try:
+            img = Image.open(self.image)
+            # Convert to RGB if necessary (for PNG transparency)
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
+            thumb_io = BytesIO()
+            img.save(thumb_io, format='JPEG', quality=85)
+            
+            # Generate thumbnail filename
+            base_name = os.path.splitext(os.path.basename(self.image.name))[0]
+            thumb_name = f"thumb_{base_name}.jpg"
+            
+            self.thumbnail.save(thumb_name, ContentFile(thumb_io.getvalue()), save=False)
+        except Exception as e:
+            logger.warning(f"Failed to generate thumbnail for gallery item: {e}")
 
 class ServiceCategory(models.Model):
     name = models.CharField(max_length=100, unique=True)

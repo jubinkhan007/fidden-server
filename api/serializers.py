@@ -27,6 +27,7 @@ from .models import (
     Coupon,
     ServiceDisabledTime,
     BookingAddOn,
+    GalleryItem,
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -253,7 +254,9 @@ class ShopSerializer(serializers.ModelSerializer):
             'verification_files', 'uploaded_files', 'is_deposit_required',
             'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
-            'time_zone',  # 🆕 Shop's local timezone for slot generation
+            'time_zone',
+            # 🆕 Social Links
+            'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
         ]
         read_only_fields = ('owner_id','is_verified', 'uploaded_files')
 
@@ -596,6 +599,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
     distance = serializers.FloatField(read_only=True)  # in meters
     services = serializers.SerializerMethodField()
     reviews = serializers.SerializerMethodField()
+    gallery_preview = serializers.SerializerMethodField()  # 🆕 First 5 public gallery items
 
     class Meta:
         model = Shop
@@ -605,7 +609,24 @@ class ShopDetailSerializer(serializers.ModelSerializer):
             'avg_rating', 'review_count', 'distance', 'services', 'reviews',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
             'is_deposit_required', 'default_deposit_percentage', 'time_zone',
+            # 🆕 Social Links
+            'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
+            'gallery_preview',
         ]
+
+    def get_gallery_preview(self, obj):
+        """Return first 5 public gallery items for horizontal scroll preview."""
+        request = self.context.get('request')
+        items = obj.gallery_items.filter(is_public=True)[:5]
+        result = []
+        for item in items:
+            result.append({
+                'id': item.id,
+                'thumbnail_url': request.build_absolute_uri(item.thumbnail.url) if item.thumbnail and request else None,
+                'image_url': request.build_absolute_uri(item.image.url) if item.image and request else None,
+                'caption': item.caption,
+            })
+        return result
 
 
     def get_services(self, obj):
@@ -1288,3 +1309,59 @@ class WeeklySummarySerializer(serializers.ModelSerializer):
 class WeeklySummaryActionSerializer(serializers.Serializer):
     summary_id = serializers.UUIDField()
     preview_only = serializers.BooleanField(required=False, default=False)
+
+
+# ==================== Gallery Serializers ====================
+
+class GalleryItemSerializer(serializers.ModelSerializer):
+    """Serializer for gallery items - used by shop owners for CRUD."""
+    service_name = serializers.CharField(source='service.title', read_only=True)
+    image_url = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GalleryItem
+        fields = [
+            'id', 'shop', 'image', 'image_url', 'thumbnail', 'thumbnail_url',
+            'caption', 'description', 'service', 'service_name',
+            'category_tag', 'tags', 'is_public', 'created_at'
+        ]
+        read_only_fields = ['id', 'shop', 'thumbnail', 'created_at']
+
+    def get_image_url(self, obj):
+        request = self.context.get('request')
+        if obj.image:
+            return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        return None
+
+    def get_thumbnail_url(self, obj):
+        request = self.context.get('request')
+        if obj.thumbnail:
+            return request.build_absolute_uri(obj.thumbnail.url) if request else obj.thumbnail.url
+        return None
+
+
+class PublicGalleryItemSerializer(serializers.ModelSerializer):
+    """Serializer for public gallery items - used by client app."""
+    service_name = serializers.CharField(source='service.title', read_only=True)
+    image_url = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GalleryItem
+        fields = [
+            'id', 'image_url', 'thumbnail_url', 'caption',
+            'service', 'service_name', 'category_tag', 'created_at'
+        ]
+
+    def get_image_url(self, obj):
+        request = self.context.get('request')
+        if obj.image:
+            return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        return None
+
+    def get_thumbnail_url(self, obj):
+        request = self.context.get('request')
+        if obj.thumbnail:
+            return request.build_absolute_uri(obj.thumbnail.url) if request else obj.thumbnail.url
+        return None

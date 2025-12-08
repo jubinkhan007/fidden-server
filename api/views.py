@@ -35,7 +35,8 @@ from .models import (
     Notification,
     Revenue,
     Coupon,
-    WeeklySummary
+    WeeklySummary,
+    GalleryItem,
 )
 from payments.models import Booking
 from .serializers import (
@@ -64,6 +65,8 @@ from .serializers import (
     UserCouponRetrieveSerializer,
     WeeklySummaryActionSerializer,
     WeeklySummarySerializer,
+    GalleryItemSerializer,
+    PublicGalleryItemSerializer,
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 from datetime import date, datetime, timedelta
@@ -2143,3 +2146,85 @@ class SendLoyaltyEmailView(APIView):
                 "preview_only": True,
             }
         )
+
+
+# ==================== Gallery Views ====================
+
+class GalleryItemView(APIView):
+    """
+    CRUD operations for shop owner's gallery items.
+    GET: List all gallery items for the owner's shop
+    POST: Create a new gallery item (with auto-thumbnail)
+    """
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get(self, request):
+        shop = request.user.shop
+        items = GalleryItem.objects.filter(shop=shop).order_by('-created_at')
+        serializer = GalleryItemSerializer(items, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    def post(self, request):
+        shop = request.user.shop
+        serializer = GalleryItemSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save(shop=shop)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GalleryItemDetailView(APIView):
+    """
+    Update or delete a specific gallery item.
+    PATCH: Update gallery item
+    DELETE: Delete gallery item
+    """
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_object(self, pk, shop):
+        return get_object_or_404(GalleryItem, pk=pk, shop=shop)
+
+    def patch(self, request, pk):
+        shop = request.user.shop
+        item = self.get_object(pk, shop)
+        serializer = GalleryItemSerializer(item, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        shop = request.user.shop
+        item = self.get_object(pk, shop)
+        item.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PublicGalleryView(APIView):
+    """
+    Public gallery for client app - lists public gallery items for a shop.
+    Paginated with 20 items per page.
+    """
+    def get(self, request, shop_id):
+        shop = get_object_or_404(Shop, id=shop_id)
+        items = GalleryItem.objects.filter(shop=shop, is_public=True).order_by('-created_at')
+        
+        # Pagination
+        page = request.query_params.get('page', 1)
+        paginator = Paginator(items, 20)  # 20 items per page
+        page_obj = paginator.get_page(page)
+        
+        serializer = PublicGalleryItemSerializer(
+            page_obj.object_list, 
+            many=True, 
+            context={'request': request}
+        )
+        
+        return Response({
+            'count': paginator.count,
+            'num_pages': paginator.num_pages,
+            'current_page': page_obj.number,
+            'results': serializer.data
+        })
