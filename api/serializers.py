@@ -418,6 +418,18 @@ class SlotSerializer(serializers.ModelSerializer):
         local_tod = self._local_tod(obj.start_time)
         return local_tod in self._disabled_set(obj)
 
+    def to_representation(self, instance):
+        """Override to return times in UTC format for consistent API responses."""
+        import zoneinfo
+        data = super().to_representation(instance)
+        utc = zoneinfo.ZoneInfo("UTC")
+        # Convert to UTC and format as ISO 8601
+        if instance.start_time:
+            data['start_time'] = instance.start_time.astimezone(utc).isoformat().replace('+00:00', 'Z')
+        if instance.end_time:
+            data['end_time'] = instance.end_time.astimezone(utc).isoformat().replace('+00:00', 'Z')
+        return data
+
 
 class SlotBookingSerializer(serializers.ModelSerializer):
     slot_id = serializers.PrimaryKeyRelatedField(

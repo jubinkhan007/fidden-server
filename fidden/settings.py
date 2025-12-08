@@ -63,7 +63,10 @@ INSTALLED_APPS = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-    )
+    ),
+    # Return datetimes in ISO 8601 format with UTC timezone
+    # This ensures the API returns UTC times so Flutter can convert to any timezone
+    'DATETIME_FORMAT': '%Y-%m-%dT%H:%M:%SZ',
 }
 
 SIMPLE_JWT = {
