@@ -92,11 +92,11 @@ class userBookingSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         """Override to ensure slot_time is returned in UTC, not Django's default timezone."""
-        from django.utils import timezone
+        from datetime import timezone as dt_tz
         rep = super().to_representation(instance)
         # Explicitly convert slot_time to UTC
         if instance.slot and instance.slot.start_time:
-            rep['slot_time'] = instance.slot.start_time.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            rep['slot_time'] = instance.slot.start_time.astimezone(dt_tz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         return rep
 
 class ownerBookingSerializer(serializers.ModelSerializer):
@@ -161,11 +161,11 @@ class ownerBookingSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         """Override to ensure slot_time is returned in UTC, not Django's default timezone."""
-        from django.utils import timezone
+        from datetime import timezone as dt_tz
         rep = super().to_representation(instance)
         # Explicitly convert slot_time to UTC
         if instance.slot and instance.slot.start_time:
-            rep['slot_time'] = instance.slot.start_time.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            rep['slot_time'] = instance.slot.start_time.astimezone(dt_tz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         return rep
     
 class TransactionLogSerializer(serializers.ModelSerializer):
