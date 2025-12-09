@@ -90,6 +90,15 @@ class userBookingSerializer(serializers.ModelSerializer):
             return obj.shop.time_zone
         return None
 
+    def to_representation(self, instance):
+        """Override to ensure slot_time is returned in UTC, not Django's default timezone."""
+        from django.utils import timezone
+        rep = super().to_representation(instance)
+        # Explicitly convert slot_time to UTC
+        if instance.slot and instance.slot.start_time:
+            rep['slot_time'] = instance.slot.start_time.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        return rep
+
 class ownerBookingSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     user_name = serializers.CharField(source='user.name', read_only=True)
@@ -149,6 +158,15 @@ class ownerBookingSerializer(serializers.ModelSerializer):
         if obj.shop:
             return obj.shop.time_zone
         return None
+
+    def to_representation(self, instance):
+        """Override to ensure slot_time is returned in UTC, not Django's default timezone."""
+        from django.utils import timezone
+        rep = super().to_representation(instance)
+        # Explicitly convert slot_time to UTC
+        if instance.slot and instance.slot.start_time:
+            rep['slot_time'] = instance.slot.start_time.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        return rep
     
 class TransactionLogSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.name', read_only=True)
