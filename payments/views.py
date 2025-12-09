@@ -359,7 +359,8 @@ class CreatePaymentIntentView(APIView):
                 commission_rate = 0.0
             application_fee_cents = 0
             if commission_rate > 0:
-                commission = (total_amount * commission_rate) / 100.0
+                # Fidden Pay: Commission = 10% of FULL service price, not just deposit
+                commission = (float(full_service_amount) * commission_rate) / 100.0
                 application_fee_cents = int(round(commission * 100))
 
             # 9) Create PaymentIntent (Connect destination charges)
@@ -395,8 +396,12 @@ class CreatePaymentIntentView(APIView):
                         "remaining_amount": remaining_balance,
                         "deposit_paid": 0,
                         "tips_amount": 0,
-                        "application_fee_amount": 0,
+                        "application_fee_amount": application_fee_cents / 100.0 if application_fee_cents > 0 else 0,
                         "payment_type": "full",
+                        # Fidden Pay fields
+                        "service_price": full_service_amount,
+                        "deposit_status": "held" if shop.is_deposit_required else "credited",
+                        "tip_base": full_service_amount,  # Tip calculated on full service price
                     },
                 )
 

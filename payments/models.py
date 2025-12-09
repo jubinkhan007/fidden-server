@@ -72,6 +72,32 @@ class Payment(models.Model):
     application_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
+    # Fidden Pay - Deposit Status
+    DEPOSIT_STATUS_CHOICES = [
+        ('held', 'Held'),           # Deposit collected, awaiting checkout
+        ('credited', 'Credited'),   # Applied at checkout
+        ('forfeited', 'Forfeited'), # No-show/late-cancel
+    ]
+    deposit_status = models.CharField(max_length=15, choices=DEPOSIT_STATUS_CHOICES, default='held')
+    service_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Full service price for commission calculation")
+    
+    # Fidden Pay - Tips
+    TIP_OPTION_CHOICES = [
+        ('10', '10%'),
+        ('15', '15%'),
+        ('20', '20%'),
+        ('custom', 'Custom'),
+    ]
+    tip_percent = models.DecimalField(max_digits=5, decimal_places=4, null=True, blank=True)
+    tip_base = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Base amount for tip calculation (usually service_price)")
+    tip_option_selected = models.CharField(max_length=10, choices=TIP_OPTION_CHOICES, null=True, blank=True)
+    final_charge_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Final checkout amount (remaining + tip)")
+
+    # Checkout tracking
+    checkout_initiated_at = models.DateTimeField(null=True, blank=True)
+    checkout_completed_at = models.DateTimeField(null=True, blank=True)
+    final_payment_intent_id = models.CharField(max_length=255, blank=True, null=True, help_text="Stripe PaymentIntent for final checkout")
+
     coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, blank=True, null=True, related_name='payment_coupon',
         help_text="Coupon applied to this payment"
     )
