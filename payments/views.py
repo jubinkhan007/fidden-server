@@ -1795,9 +1795,31 @@ class StripeWebhookView(APIView):
             logger.info("   - Amount: %s", payment.amount)
 
         except Payment.DoesNotExist:
-            # Only warn for non-subscription PIs (we already early-returned if it was invoice-backed)
-            logger.warning("No local Payment row for intent: %s (non-invoice). Skipping.", intent_id)
-            return
+            # Check if this is a final checkout payment
+            try:
+                payment = Payment.objects.get(final_payment_intent_id=intent_id)
+                logger.info("Found final checkout payment for intent: %s", intent_id)
+                
+                # If final payment succeeded, mark deposit as credited
+                if new_status == "succeeded":
+                    payment.deposit_status = 'credited'
+                    payment.checkout_completed_at = timezone.now()
+                    payment.save(update_fields=['deposit_status', 'checkout_completed_at'])
+                    logger.info(
+                        "✅ Checkout completed - Payment #%s deposit_status set to 'credited' (intent: %s)",
+                        payment.id, intent_id
+                    )
+                    
+                    # Update booking status to completed
+                    if hasattr(payment, 'booking') and payment.booking:
+                        payment.booking.status = 'completed'
+                        payment.booking.save(update_fields=['status'])
+                        logger.info("   - Booking #%s marked as completed", payment.booking.id)
+                
+            except Payment.DoesNotExist:
+                # Only warn for non-subscription PIs (we already early-returned if it was invoice-backed)
+                logger.warning("No local Payment row for intent: %s (non-invoice). Skipping.", intent_id)
+                return
 
         # If we do have a corresponding Payment row, optionally emit Klaviyo
         try:
