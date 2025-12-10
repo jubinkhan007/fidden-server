@@ -1595,10 +1595,9 @@ class CancelBookingView(APIView):
         if reason not in VALID_STRIPE_REASONS:
             reason = "requested_by_customer"
 
-        # OWNER → force full refund
+        # Cancel the booking
         success, message = booking.cancel_booking(
             reason=reason,
-            force_full_refund=is_owner,
         )
 
         if success:
