@@ -477,6 +477,7 @@ class InitiateCheckoutView(APIView):
             
             # Send push notification to client
             try:
+                logger.info(f"Sending checkout_initiated notification to user {booking.user.id} ({booking.user.email})")
                 notify_user(
                     user=booking.user,
                     message=f"Time to complete payment at {booking.shop.name}. Add a tip and pay to finish your appointment.",
@@ -488,8 +489,9 @@ class InitiateCheckoutView(APIView):
                         "service_price": str(float(payment.service_price or payment.amount)),
                     }
                 )
+                logger.info(f"Checkout notification sent successfully for booking {booking.id}")
             except Exception as e:
-                logger.warning(f"Failed to send checkout notification: {e}")
+                logger.error(f"Failed to send checkout notification for booking {booking.id}: {e}")
             
             return Response({
                 "booking_id": booking.id,
