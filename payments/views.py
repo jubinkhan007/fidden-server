@@ -471,6 +471,13 @@ class InitiateCheckoutView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # Check if there's any remaining balance to pay
+            if payment.remaining_amount <= 0:
+                return Response(
+                    {"detail": "No remaining balance to pay - booking is fully paid"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             # Get payment method (cash or app) - default to 'app'
             checkout_method = request.data.get('payment_method', 'app') if request.data else 'app'
             if checkout_method not in ['cash', 'app']:
