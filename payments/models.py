@@ -103,8 +103,13 @@ class Payment(models.Model):
     final_charge_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Final checkout amount (remaining + tip)")
 
     # Checkout tracking
+    CHECKOUT_PAYMENT_METHOD_CHOICES = [
+        ('app', 'Pay via App'),
+        ('cash', 'Pay in Cash'),
+    ]
     checkout_initiated_at = models.DateTimeField(null=True, blank=True)
     checkout_completed_at = models.DateTimeField(null=True, blank=True)
+    checkout_payment_method = models.CharField(max_length=10, choices=CHECKOUT_PAYMENT_METHOD_CHOICES, null=True, blank=True, help_text="How final payment is made: app or cash")
     final_payment_intent_id = models.CharField(max_length=255, blank=True, null=True, help_text="Stripe PaymentIntent for final checkout")
 
     coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, blank=True, null=True, related_name='payment_coupon',

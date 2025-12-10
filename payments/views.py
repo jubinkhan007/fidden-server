@@ -471,30 +471,46 @@ class InitiateCheckoutView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # Get payment method (cash or app) - default to 'app'
+            checkout_method = request.data.get('payment_method', 'app') if request.data else 'app'
+            if checkout_method not in ['cash', 'app']:
+                checkout_method = 'app'
+            
             # Mark checkout initiated
             payment.checkout_initiated_at = timezone.now()
-            payment.save(update_fields=['checkout_initiated_at'])
+            payment.checkout_payment_method = checkout_method
+            payment.save(update_fields=['checkout_initiated_at', 'checkout_payment_method'])
             
-            # Send push notification to client
-            try:
-                logger.info(f"Sending checkout_initiated notification to user {booking.user.id} ({booking.user.email})")
-                notify_user(
-                    user=booking.user,
-                    message=f"Time to complete payment at {booking.shop.name}. Add a tip and pay to finish your appointment.",
-                    notification_type="checkout_initiated",
-                    data={
-                        "booking_id": str(booking.id),
-                        "shop_name": booking.shop.name,
-                        "remaining_amount": str(float(payment.remaining_amount)),
-                        "service_price": str(float(payment.service_price or payment.amount)),
-                    }
-                )
-                logger.info(f"Checkout notification sent successfully for booking {booking.id}")
-            except Exception as e:
-                logger.error(f"Failed to send checkout notification for booking {booking.id}: {e}")
+            # If cash payment, mark as credited immediately (no app payment needed)
+            if checkout_method == 'cash':
+                payment.deposit_status = 'credited'
+                payment.checkout_completed_at = timezone.now()
+                payment.save(update_fields=['deposit_status', 'checkout_completed_at'])
+            
+            # Send push notification to client (only for app payments)
+            if checkout_method == 'app':
+                try:
+                    logger.info(f"Sending checkout_initiated notification to user {booking.user.id} ({booking.user.email})")
+                    notify_user(
+                        user=booking.user,
+                        message=f"Time to complete payment at {booking.shop.name}. Add a tip and pay to finish your appointment.",
+                        notification_type="checkout_initiated",
+                        data={
+                            "booking_id": str(booking.id),
+                            "shop_name": booking.shop.name,
+                            "remaining_amount": str(float(payment.remaining_amount)),
+                            "service_price": str(float(payment.service_price or payment.amount)),
+                            "payment_method": checkout_method,
+                        }
+                    )
+                    logger.info(f"Checkout notification sent successfully for booking {booking.id}")
+                except Exception as e:
+                    logger.error(f"Failed to send checkout notification for booking {booking.id}: {e}")
             
             return Response({
                 "booking_id": booking.id,
+                "payment_method": checkout_method,
+                "checkout_completed": checkout_method == 'cash',  # Cash = already done
                 "service_price": float(payment.service_price or payment.amount),
                 "deposit_paid": float(payment.deposit_amount),
                 "remaining_amount": float(payment.remaining_amount),
