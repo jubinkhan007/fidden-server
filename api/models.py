@@ -1056,6 +1056,11 @@ def on_booking_status_change(sender, instance, **kwargs):
             if sb and sb.status != "cancelled":
                 sb.status = "cancelled"
                 sb.save(update_fields=["status"])
+                
+                # Restore capacity so it can be rebooked
+                if sb.slot:
+                    sb.slot.capacity_left += 1
+                    sb.slot.save(update_fields=["capacity_left"])
         except Exception:
             pass
 
