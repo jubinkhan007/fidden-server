@@ -200,6 +200,96 @@ class BookingPayment {
 
 ---
 
+## Pro Earnings Report (Owner App)
+
+### 4. Shop Earnings Report (NEW - Owner App)
+```
+GET /payments/shop-earnings/{shop_id}/?period=month
+Authorization: Bearer {owner_token}
+```
+
+**Query Parameters:**
+- `period`: `day` | `week` | `month` (default: month)
+
+**Response:**
+```json
+{
+  "shop_id": 1,
+  "shop_name": "All-in-one Shop",
+  "period": "month",
+  "start_date": "2025-12-01T00:00:00Z",
+  "end_date": "2025-12-10T15:30:00Z",
+  "earnings": {
+    "service_revenue": 500.00,
+    "tips_total": 75.00,
+    "gross_revenue": 575.00,
+    "commission": 50.00,
+    "net_payout": 525.00
+  },
+  "deposits": {
+    "credited": 150.00,
+    "forfeited": 30.00
+  },
+  "bookings": {
+    "total": 10,
+    "completed": 9,
+    "forfeited": 1
+  }
+}
+```
+
+### Flutter Implementation - Earnings Dashboard
+
+```dart
+class EarningsScreen extends StatefulWidget {
+  final int shopId;
+  // ...
+}
+
+class _EarningsScreenState extends State<EarningsScreen> {
+  String selectedPeriod = 'month';
+  Map<String, dynamic>? earnings;
+  
+  Future<void> fetchEarnings() async {
+    final response = await dio.get(
+      '/payments/shop-earnings/${widget.shopId}/',
+      queryParameters: {'period': selectedPeriod},
+    );
+    
+    if (response.statusCode == 200) {
+      setState(() => earnings = response.data);
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Period selector
+        SegmentedButton(
+          segments: ['day', 'week', 'month'],
+          selected: selectedPeriod,
+          onChanged: (period) {
+            selectedPeriod = period;
+            fetchEarnings();
+          },
+        ),
+        
+        // Earnings cards
+        if (earnings != null) ...[
+          Text('Net Payout: \$${earnings!['earnings']['net_payout']}'),
+          Text('Tips: \$${earnings!['earnings']['tips_total']}'),
+          Text('Commission: \$${earnings!['earnings']['commission']}'),
+          Text('Bookings: ${earnings!['bookings']['total']}'),
+        ],
+      ],
+    );
+  }
+}
+```
+
+---
+
 ## Error Handling
 
 | Status Code | Error | Action |
