@@ -444,6 +444,8 @@ class InitiateCheckoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, booking_id):
+        from api.utils.fcm import notify_user
+        
         try:
             booking = get_object_or_404(Booking, id=booking_id)
             
@@ -472,6 +474,22 @@ class InitiateCheckoutView(APIView):
             # Mark checkout initiated
             payment.checkout_initiated_at = timezone.now()
             payment.save(update_fields=['checkout_initiated_at'])
+            
+            # Send push notification to client
+            try:
+                notify_user(
+                    user=booking.user,
+                    message=f"Time to complete payment at {booking.shop.name}. Add a tip and pay to finish your appointment.",
+                    notification_type="checkout_initiated",
+                    data={
+                        "booking_id": str(booking.id),
+                        "shop_name": booking.shop.name,
+                        "remaining_amount": str(float(payment.remaining_amount)),
+                        "service_price": str(float(payment.service_price or payment.amount)),
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send checkout notification: {e}")
             
             return Response({
                 "booking_id": booking.id,
