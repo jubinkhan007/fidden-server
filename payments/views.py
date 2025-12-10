@@ -1590,7 +1590,7 @@ class CancelBookingView(APIView):
             return Response({"error": f"Cannot cancel a booking in status '{booking.status}'"}, status=status.HTTP_400_BAD_REQUEST)
 
         # normalize reason coming from client; Stripe-safe fallback
-        incoming = request.data.get("reason") or request.POST.get("reason")
+        incoming = (request.data or {}).get("reason") or (request.POST or {}).get("reason")
         reason = _norm_reason(incoming) or "requested_by_customer"
         if reason not in VALID_STRIPE_REASONS:
             reason = "requested_by_customer"
