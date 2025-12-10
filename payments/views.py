@@ -432,6 +432,274 @@ class CreatePaymentIntentView(APIView):
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+# ===========================
+# Fidden Pay - Checkout Views
+# ===========================
+
+class InitiateCheckoutView(APIView):
+    """
+    Owner initiates checkout when client arrives.
+    Returns payment details for client to complete with tip.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, booking_id):
+        try:
+            booking = get_object_or_404(Booking, id=booking_id)
+            
+            # Verify owner has access to this booking
+            if booking.shop.owner != request.user:
+                return Response(
+                    {"detail": "Not authorized to checkout this booking"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            payment = booking.payment
+            
+            # Check if already checked out
+            if payment.deposit_status == 'credited':
+                return Response(
+                    {"detail": "Booking already checked out"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if payment.deposit_status == 'forfeited':
+                return Response(
+                    {"detail": "Deposit was forfeited (no-show/late cancel)"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Mark checkout initiated
+            payment.checkout_initiated_at = timezone.now()
+            payment.save(update_fields=['checkout_initiated_at'])
+            
+            return Response({
+                "booking_id": booking.id,
+                "service_price": float(payment.service_price or payment.amount),
+                "deposit_paid": float(payment.deposit_amount),
+                "remaining_amount": float(payment.remaining_amount),
+                "tip_base": float(payment.tip_base or payment.service_price or payment.amount),
+                "tip_options": [
+                    {"option": "10", "amount": float((payment.service_price or payment.amount) * Decimal('0.10'))},
+                    {"option": "15", "amount": float((payment.service_price or payment.amount) * Decimal('0.15'))},
+                    {"option": "20", "amount": float((payment.service_price or payment.amount) * Decimal('0.20'))},
+                ],
+                "shop_name": booking.shop.name,
+                "service_title": booking.slot.service.title if booking.slot else None,
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"InitiateCheckout failed: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CompleteCheckoutView(APIView):
+    """
+    Client completes checkout by paying remaining amount + tip.
+    No additional commission (already taken from deposit).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, booking_id):
+        from payments.utils.tips import calculate_tip, get_tip_percent
+        from .models import ShopStripeAccount
+        
+        try:
+            booking = get_object_or_404(Booking, id=booking_id)
+            payment = booking.payment
+            
+            # Verify this is the client's booking
+            if payment.user != request.user:
+                return Response(
+                    {"detail": "Not authorized to complete this checkout"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            # Check deposit status
+            if payment.deposit_status != 'held':
+                return Response(
+                    {"detail": f"Cannot checkout - deposit status is '{payment.deposit_status}'"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get tip info
+            tip_option = request.data.get('tip_option', '0')  # '10', '15', '20', 'custom', or '0'
+            custom_tip = request.data.get('tip_amount', 0)
+            
+            # Calculate amounts
+            service_price = payment.service_price or payment.amount
+            remaining = payment.remaining_amount
+            
+            if tip_option == '0' or not tip_option:
+                tip_amount = Decimal('0')
+            else:
+                tip_amount = calculate_tip(service_price, tip_option, Decimal(str(custom_tip or 0)))
+            
+            final_charge = remaining + tip_amount
+            
+            # Get shop's Stripe account
+            shop = booking.shop
+            try:
+                shop_account = ShopStripeAccount.objects.get(shop=shop)
+            except ShopStripeAccount.DoesNotExist:
+                return Response(
+                    {"detail": "Shop is not set up for payments"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get or create customer
+            user_customer, _ = UserStripeCustomer.objects.get_or_create(
+                user=request.user,
+                defaults={"stripe_customer_id": stripe.Customer.create(email=request.user.email).id}
+            )
+            
+            # Create final PaymentIntent (NO application fee - already taken from deposit)
+            amount_cents = int(final_charge * 100)
+            
+            if amount_cents > 0:
+                payment_intent = stripe.PaymentIntent.create(
+                    amount=amount_cents,
+                    currency="usd",
+                    customer=user_customer.stripe_customer_id,
+                    payment_method_types=["card"],
+                    transfer_data={"destination": shop_account.stripe_account_id},
+                    metadata={
+                        "type": "final",
+                        "booking_id": str(booking.id),
+                        "service_price": str(service_price),
+                        "remaining_amount": str(remaining),
+                        "tip_amount": str(tip_amount),
+                        "tip_option": tip_option,
+                    },
+                )
+                
+                # Update payment record
+                payment.final_payment_intent_id = payment_intent.id
+                payment.tips_amount = tip_amount
+                payment.tip_percent = get_tip_percent(service_price, tip_amount)
+                payment.tip_option_selected = tip_option
+                payment.final_charge_amount = final_charge
+                payment.save()
+                
+                # Create ephemeral key
+                ephemeral_key = stripe.EphemeralKey.create(
+                    customer=user_customer.stripe_customer_id,
+                    stripe_version="2024-04-10",
+                )
+                
+                return Response({
+                    "client_secret": payment_intent.client_secret,
+                    "payment_intent_id": payment_intent.id,
+                    "ephemeral_key": ephemeral_key.secret,
+                    "customer_id": user_customer.stripe_customer_id,
+                    "final_amount": float(final_charge),
+                    "remaining_amount": float(remaining),
+                    "tip_amount": float(tip_amount),
+                }, status=status.HTTP_200_OK)
+            else:
+                # No payment needed (e.g., full amount paid as deposit)
+                payment.deposit_status = 'credited'
+                payment.checkout_completed_at = timezone.now()
+                payment.save()
+                
+                return Response({
+                    "message": "Checkout complete - no additional payment needed",
+                    "final_amount": 0,
+                }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            import traceback
+            logger.error(f"CompleteCheckout failed: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ShopEarningsReportView(APIView):
+    """
+    Pro reporting: earnings breakdown by period (day/week/month).
+    Shows service revenue, tips, deposit status, commission, and net payout.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, shop_id):
+        from django.db.models import Sum, Count, Q
+        
+        try:
+            shop = get_object_or_404(Shop, id=shop_id, owner=request.user)
+            
+            # Get period filter (default: this month)
+            period = request.query_params.get('period', 'month')  # day, week, month
+            now = timezone.now()
+            
+            if period == 'day':
+                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif period == 'week':
+                start_date = now - timedelta(days=now.weekday())
+                start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            else:  # month
+                start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            
+            # Get completed bookings for this shop in period
+            payments = Payment.objects.filter(
+                booking__shop=shop,
+                status='succeeded',
+                created_at__gte=start_date
+            )
+            
+            # Aggregate earnings
+            totals = payments.aggregate(
+                service_revenue=Sum('service_price'),
+                tips_total=Sum('tips_amount'),
+                commission_total=Sum('application_fee_amount'),
+                deposit_credited=Sum('deposit_amount', filter=Q(deposit_status='credited')),
+                deposit_forfeited=Sum('deposit_amount', filter=Q(deposit_status='forfeited')),
+            )
+            
+            service_revenue = float(totals['service_revenue'] or 0)
+            tips_total = float(totals['tips_total'] or 0)
+            commission_total = float(totals['commission_total'] or 0)
+            deposit_credited = float(totals['deposit_credited'] or 0)
+            deposit_forfeited = float(totals['deposit_forfeited'] or 0)
+            
+            # Net payout = service revenue + tips - commission
+            net_payout = service_revenue + tips_total - commission_total
+            
+            # Count bookings
+            booking_counts = payments.aggregate(
+                total_bookings=Count('id'),
+                completed=Count('id', filter=Q(deposit_status='credited')),
+                forfeited=Count('id', filter=Q(deposit_status='forfeited')),
+            )
+            
+            return Response({
+                "shop_id": shop.id,
+                "shop_name": shop.name,
+                "period": period,
+                "start_date": start_date.isoformat(),
+                "end_date": now.isoformat(),
+                "earnings": {
+                    "service_revenue": service_revenue,
+                    "tips_total": tips_total,
+                    "gross_revenue": service_revenue + tips_total,
+                    "commission": commission_total,
+                    "net_payout": net_payout,
+                },
+                "deposits": {
+                    "credited": deposit_credited,
+                    "forfeited": deposit_forfeited,
+                },
+                "bookings": {
+                    "total": booking_counts['total_bookings'],
+                    "completed": booking_counts['completed'],
+                    "forfeited": booking_counts['forfeited'],
+                },
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"ShopEarningsReport failed: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 APP_SCHEME = getattr(settings, "APP_URL_SCHEME", "myapp")
 APP_HOST   = getattr(settings, "APP_URL_HOST",   "stripe")
 
