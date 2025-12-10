@@ -60,6 +60,15 @@ class Payment(models.Model):
     booking = models.OneToOneField(SlotBooking, on_delete=models.CASCADE, related_name='payment')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Payment method tracking
+    PAYMENT_METHOD_CHOICES = [
+        ('stripe', 'Stripe'),
+        ('paypal', 'PayPal'),
+    ]
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, default='stripe')
+    paypal_capture_id = models.CharField(max_length=255, blank=True, null=True, help_text="PayPal capture ID for refunds")
+    
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     is_deposit = models.BooleanField(default=False)
     remaining_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
@@ -98,6 +107,7 @@ class Refund(models.Model):
 
     payment = models.OneToOneField(Payment, on_delete=models.CASCADE, related_name="refund")
     stripe_refund_id = models.CharField(max_length=255, blank=True, null=True)
+    paypal_refund_id = models.CharField(max_length=255, blank=True, null=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     reason = models.CharField(max_length=255, blank=True, null=True)
@@ -147,20 +157,45 @@ class Booking(models.Model):
             elif hours_before_booking > self.shop.no_refund_hours:
                 refund_amount = self.payment.amount * (100 - self.shop.cancellation_fee_percentage) / 100
 
-            # Refund via Stripe only if > 0
+            # Process refund based on payment method
+            refund_record = None
             if refund_amount > 0:
-                refund = stripe.Refund.create(
-                    payment_intent=self.stripe_payment_intent_id,
-                    amount=int(refund_amount * 100),
-                    reason=reason,  # must be one of Stripe's 3 reasons
-                )
-                Refund.objects.create(
-                    payment=self.payment,
-                    stripe_refund_id=refund.id,
-                    amount=refund_amount,
-                    status=refund.status,
-                    reason=reason,     # you can store a separate "local_reason" if desired
-                )
+                payment_method = self.payment.payment_method
+                
+                if payment_method == 'stripe':
+                    # Stripe refund
+                    refund = stripe.Refund.create(
+                        payment_intent=self.stripe_payment_intent_id,
+                        amount=int(refund_amount * 100),
+                        reason=reason,
+                    )
+                    refund_record = Refund.objects.create(
+                        payment=self.payment,
+                        stripe_refund_id=refund.id,
+                        amount=refund_amount,
+                        status=refund.status,
+                        reason=reason,
+                    )
+                    
+                elif payment_method == 'paypal':
+                    # PayPal refund
+                    from payments.utils.paypal_refund import process_paypal_refund
+                    paypal_result = process_paypal_refund(
+                        self.payment.paypal_capture_id,
+                        float(refund_amount),
+                        reason
+                    )
+                    if paypal_result.get('success'):
+                        refund_record = Refund.objects.create(
+                            payment=self.payment,
+                            paypal_refund_id=paypal_result.get('refund_id'),
+                            amount=refund_amount,
+                            status='succeeded',
+                            reason=reason,
+                        )
+                    else:
+                        # PayPal refund failed
+                        return False, f"PayPal refund failed: {paypal_result.get('error', 'Unknown error')}"
 
             # Update booking
             self.status = "cancelled"
@@ -168,7 +203,6 @@ class Booking(models.Model):
 
             # Update payment status
             self.payment.status = "refunded" if refund_amount > 0 else self.payment.status
-            # (keep 'succeeded' when no refund; do not flip to 'failed')
             self.payment.save(update_fields=["status", "updated_at"])
 
             # Cancel SlotBooking + restore capacity
@@ -184,8 +218,10 @@ class Booking(models.Model):
                 slot_booking.shop.capacity += 1
                 slot_booking.shop.save(update_fields=["capacity"])
 
-            return True, "Refund processed and booking cancelled successfully" if refund_amount > 0 \
-                else True, "Booking cancelled (no refund due per policy)"
+            if refund_amount > 0:
+                return True, "Refund processed and booking cancelled successfully"
+            else:
+                return True, "Booking cancelled (no refund due per policy)"
         except Exception as e:
             return False, str(e)
 

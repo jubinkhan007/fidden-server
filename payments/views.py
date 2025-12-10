@@ -1908,11 +1908,12 @@ class CreatePayPalOrderView(APIView):
                 coupon=coupon,
                 coupon_amount=discount if coupon else None,
                 stripe_payment_intent_id=paypal_order_id, # Storing PayPal ID here
+                payment_method='paypal',  # Track payment method for refunds
                 status="pending",
                 is_deposit=shop.is_deposit_required,
                 deposit_amount=deposit_amount if shop.is_deposit_required else 0,
                 remaining_amount=remaining_balance,
-                payment_type="full",  # You might want to add a 'provider' field later
+                payment_type="full",
             )
 
             approve_link = next(link['href'] for link in order_data['links'] if link['rel'] == 'approve')
@@ -1949,9 +1950,19 @@ class CapturePayPalOrderView(APIView):
         if resp.status_code in [200, 201]:
             data = resp.json()
             if data["status"] == "COMPLETED":
+                # Extract capture ID for refunds
+                capture_id = None
+                try:
+                    captures = data.get("purchase_units", [{}])[0].get("payments", {}).get("captures", [])
+                    if captures:
+                        capture_id = captures[0].get("id")
+                except Exception:
+                    pass
+                
                 # Success! Update local state
                 payment.status = "succeeded"
-                payment.save()
+                payment.paypal_capture_id = capture_id  # Store for refunds
+                payment.save(update_fields=["status", "paypal_capture_id", "updated_at"])
                 
                 # Create Transaction Log
                 TransactionLog.objects.create(
@@ -1959,10 +1970,10 @@ class CapturePayPalOrderView(APIView):
                     payment=payment,
                     user=payment.user,
                     shop=payment.booking.shop,
-                    slot=payment.booking,  # ✅ Fixed: SlotBooking instance, not Slot
+                    slot=payment.booking,
                     service=payment.booking.service,
                     amount=payment.amount,
-                    currency="usd",  # or data['purchase_units'][0]['amount']['currency_code']
+                    currency="usd",
                     status="succeeded",
                 )
 
