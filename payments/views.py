@@ -513,6 +513,67 @@ class InitiateCheckoutView(APIView):
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class GetCheckoutDetailsView(APIView):
+    """
+    Client fetches checkout details after receiving notification.
+    Used when client clicks on checkout_initiated notification.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, booking_id):
+        try:
+            booking = get_object_or_404(Booking, id=booking_id)
+            
+            # Verify this is the client's booking
+            if booking.user != request.user:
+                return Response(
+                    {"detail": "Not authorized to view this checkout"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            payment = booking.payment
+            
+            # Check if checkout was initiated
+            if not payment.checkout_initiated_at:
+                return Response(
+                    {"detail": "Checkout has not been initiated by the shop"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check deposit status
+            if payment.deposit_status == 'credited':
+                return Response(
+                    {"detail": "Checkout already completed"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if payment.deposit_status == 'forfeited':
+                return Response(
+                    {"detail": "Deposit was forfeited"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            return Response({
+                "booking_id": booking.id,
+                "service_price": float(payment.service_price or payment.amount),
+                "deposit_paid": float(payment.deposit_amount),
+                "remaining_amount": float(payment.remaining_amount),
+                "tip_base": float(payment.tip_base or payment.service_price or payment.amount),
+                "tip_options": [
+                    {"option": "10", "amount": float((payment.service_price or payment.amount) * Decimal('0.10'))},
+                    {"option": "15", "amount": float((payment.service_price or payment.amount) * Decimal('0.15'))},
+                    {"option": "20", "amount": float((payment.service_price or payment.amount) * Decimal('0.20'))},
+                ],
+                "shop_name": booking.shop.name,
+                "service_title": booking.slot.service.title if booking.slot else None,
+                "checkout_initiated_at": payment.checkout_initiated_at.isoformat() if payment.checkout_initiated_at else None,
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"GetCheckoutDetails failed: {str(e)}")
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class CompleteCheckoutView(APIView):
     """
     Client completes checkout by paying remaining amount + tip.

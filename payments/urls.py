@@ -17,6 +17,7 @@ from .views import (
     RemainingPaymentView,
     # Fidden Pay
     InitiateCheckoutView,
+    GetCheckoutDetailsView,
     CompleteCheckoutView,
     ShopEarningsReportView,
 )
@@ -39,6 +40,7 @@ urlpatterns = [
     path("paypal-webhook/", PayPalWebhookView.as_view(), name="paypal-webhook"),
     # Fidden Pay - Checkout & Reporting
     path("initiate-checkout/<int:booking_id>/", InitiateCheckoutView.as_view(), name="initiate-checkout"),
+    path("checkout-details/<int:booking_id>/", GetCheckoutDetailsView.as_view(), name="checkout-details"),  # GET for client
     path("complete-checkout/<int:booking_id>/", CompleteCheckoutView.as_view(), name="complete-checkout"),
     path("shop-earnings/<int:shop_id>/", ShopEarningsReportView.as_view(), name="shop-earnings"),
 ]
