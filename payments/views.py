@@ -2313,6 +2313,10 @@ class CreatePayPalOrderView(APIView):
                 deposit_amount=deposit_amount if shop.is_deposit_required else 0,
                 remaining_amount=remaining_balance,
                 payment_type="full",
+                # Fidden Pay fields
+                service_price=full_service_amount,
+                deposit_status="held" if shop.is_deposit_required else "credited",
+                tip_base=full_service_amount,
             )
 
             approve_link = next(link['href'] for link in order_data['links'] if link['rel'] == 'approve')
