@@ -1185,13 +1185,20 @@ class UserMessageView(APIView):
 
         # Notify owner and get the created notification
         from api.models import Notification
+        chat_notification_data = {
+            "thread_id": str(thread.id),
+            "shop_id": str(shop.id),
+            "shop_name": shop.name,
+            "sender_email": user.email,
+            "is_owner": "false",  # Customer is sending
+        }
         notification = Notification.objects.create(
             recipient=shop.owner,
             message=f"New message from {user.email}",
             notification_type="chat",
-            data={"thread_id": thread.id}
+            data=chat_notification_data
         )
-        notify_user(shop.owner, f"New message from {user.email}", data={"thread_id": thread.id})
+        notify_user(shop.owner, f"New message from {user.email}", notification_type="chat", data=chat_notification_data)
 
         # Broadcast notification over websockets to recipient
         channel_layer = get_channel_layer()
@@ -1235,13 +1242,20 @@ class OwnerMessageView(APIView):
         message = Message.objects.create(thread=thread, sender=owner, content=content)
         # Notify user and get the created notification
         from api.models import Notification
+        chat_notification_data = {
+            "thread_id": str(thread.id),
+            "shop_id": str(thread.shop.id),
+            "shop_name": thread.shop.name,
+            "sender_email": owner.email,
+            "is_owner": "true",  # Owner is sending
+        }
         notification = Notification.objects.create(
             recipient=thread.user,
             message=f"Reply from {owner.email}",
             notification_type="chat",
-            data={"thread_id": thread.id}
+            data=chat_notification_data
         )
-        notify_user(thread.user, f"Reply from {owner.email}", data={"thread_id": thread.id})
+        notify_user(thread.user, f"Reply from {owner.email}", notification_type="chat", data=chat_notification_data)
 
         # Broadcast notification over websockets to recipient
         channel_layer = get_channel_layer()
