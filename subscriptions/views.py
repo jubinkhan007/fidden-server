@@ -880,8 +880,29 @@ class CancelPayPalAiAddonView(APIView):
 
 class PayPalReturnView(View):
     def get(self, request):
-        # PayPal redirects here with token=...
-        # We can just deep link back to the app, similar to Stripe
+        # PayPal redirects here with token and subscription_id
+        subscription_id = request.GET.get("subscription_id")
+        
+        # Optimistically activate AI addon if subscription_id is present
+        if subscription_id:
+            from subscriptions.models import ShopSubscription
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            try:
+                # Try to find AI addon subscription
+                shop_sub = ShopSubscription.objects.filter(
+                    ai_paypal_subscription_id=subscription_id
+                ).first()
+                
+                if shop_sub and not shop_sub.has_ai_addon:
+                    shop_sub.has_ai_addon = True
+                    shop_sub.save(update_fields=["has_ai_addon"])
+                    logger.info(f"✅ Optimistically activated AI addon for subscription {subscription_id}")
+            except Exception as e:
+                logger.error(f"Error optimistically activating AI addon: {e}")
+                # Don't fail the redirect - webhook will handle it
+        
         deeplink = f"{APP_SCHEME}://subscription/success" 
         return HttpResponse(_HTML % {"deeplink": deeplink})
 

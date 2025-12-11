@@ -1815,6 +1815,28 @@ class StripeWebhookView(APIView):
                         payment.booking.status = 'completed'
                         payment.booking.save(update_fields=['status'])
                         logger.info("   - Booking #%s marked as completed", payment.booking.id)
+                        
+                        # Send push notification to shop owner
+                        try:
+                            from api.utils.fcm import notify_user
+                            booking = payment.booking
+                            owner = booking.shop.owner
+                            
+                            notify_user(
+                                user=owner,
+                                message=f"Payment completed! {booking.user.email} paid ${float(payment.final_charge_amount or payment.remaining_amount):.2f} for {booking.slot.service.title}.",
+                                notification_type="checkout_completed",
+                                data={
+                                    "booking_id": str(booking.id),
+                                    "customer_email": booking.user.email,
+                                    "service_title": booking.slot.service.title,
+                                    "total_paid": str(float(payment.final_charge_amount or payment.remaining_amount)),
+                                    "tip_amount": str(float(payment.tips_amount or 0)),
+                                }
+                            )
+                            logger.info("   - Push notification sent to owner (user %s)", owner.id)
+                        except Exception as notif_err:
+                            logger.error("   - Failed to send owner notification: %s", notif_err)
                 
             except Payment.DoesNotExist:
                 # Only warn for non-subscription PIs (we already early-returned if it was invoice-backed)
@@ -2429,6 +2451,10 @@ class PayPalWebhookView(APIView):
             self._handle_subscription_cancelled(subscription_id, resource)
         elif event_type == "PAYMENT.SALE.COMPLETED":
             self._handle_payment_completed(subscription_id, resource)
+        elif event_type == "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
+            self._handle_payment_failed(subscription_id, resource)
+        elif event_type == "BILLING.SUBSCRIPTION.SUSPENDED":
+            self._handle_subscription_suspended(subscription_id, resource)
 
         return Response(status=status.HTTP_200_OK)
 
@@ -2525,6 +2551,47 @@ class PayPalWebhookView(APIView):
             status="succeeded",
             description=f"PayPal Subscription Payment: {subscription_id}"
         )
+
+    def _handle_payment_failed(self, subscription_id, resource):
+        """
+        Safety net: Deactivate AI addon if payment fails after optimistic activation.
+        This handles cases where we optimistically activated in return handler but payment failed.
+        """
+        logger.warning(f"Payment failed for PayPal subscription {subscription_id}")
+        
+        # Check if this is an AI addon subscription
+        try:
+            sub = ShopSubscription.objects.get(ai_paypal_subscription_id=subscription_id)
+            if sub.has_ai_addon:
+                sub.has_ai_addon = False
+                sub.save(update_fields=["has_ai_addon"])
+                logger.info(f"🔴 Deactivated AI addon due to payment failure: {subscription_id}")
+        except ShopSubscription.DoesNotExist:
+            # Might be a main subscription - log but don't deactivate (they might have grace period)
+            logger.info(f"Payment failed for main subscription {subscription_id} - not auto-deactivating")
+
+    def _handle_subscription_suspended(self, subscription_id, resource):
+        """
+        Safety net: Deactivate AI addon if subscription is suspended by PayPal.
+        """
+        logger.warning(f"PayPal subscription suspended: {subscription_id}")
+        
+        # Check if this is an AI addon subscription
+        try:
+            sub = ShopSubscription.objects.get(ai_paypal_subscription_id=subscription_id)
+            if sub.has_ai_addon:
+                sub.has_ai_addon = False
+                sub.save(update_fields=["has_ai_addon"])
+                logger.info(f"🔴 Deactivated AI addon due to suspension: {subscription_id}")
+        except ShopSubscription.DoesNotExist:
+            # Might be a main subscription
+            try:
+                sub = ShopSubscription.objects.get(paypal_subscription_id=subscription_id)
+                sub.status = "suspended"
+                sub.save(update_fields=["status"])
+                logger.info(f"⚠️ Marked main subscription as suspended: {subscription_id}")
+            except ShopSubscription.DoesNotExist:
+                logger.error(f"No subscription found for suspended PayPal sub {subscription_id}")
 
 
 # ==========================================

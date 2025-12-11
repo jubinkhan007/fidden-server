@@ -297,3 +297,83 @@ class _EarningsScreenState extends State<EarningsScreen> {
 | 403 | Not authorized | User mismatch |
 | 400 | Already checked out | Show message |
 | 400 | Deposit forfeited | Show no-show message |
+
+---
+
+## Push Notifications
+
+### 1. `checkout_initiated` (Customer App)
+**Trigger:** Owner initiates checkout for a booking
+**Recipient:** The customer (booking.user)
+
+```json
+{
+  "type": "checkout_initiated",
+  "booking_id": "15",
+  "shop_name": "All-in-one Shop",
+  "remaining_amount": "70.00",
+  "service_price": "100.00",
+  "payment_method": "app"
+}
+```
+
+**Flutter Action:**
+- Navigate to checkout screen
+- Display tip selection UI
+- Show remaining amount to pay
+
+---
+
+### 2. `checkout_completed` (Owner App)
+**Trigger:** Customer successfully completes payment via Stripe
+**Recipient:** The shop owner (booking.shop.owner)
+
+```json
+{
+  "type": "checkout_completed",
+  "booking_id": "15",
+  "customer_email": "protim@example.com",
+  "service_title": "HairCut",
+  "total_paid": "85.00",
+  "tip_amount": "15.00"
+}
+```
+
+**Flutter Action:**
+- Refresh bookings list (auto-removes "Checkout Customer" button)
+- Optionally show a toast/snackbar: "Payment received from protim@example.com"
+
+---
+
+### Flutter Notification Handler Example
+
+```dart
+// In notification_service.dart
+
+void handleNotification(RemoteMessage message) {
+  final data = message.data;
+  final type = data['type'];
+  
+  switch (type) {
+    case 'checkout_initiated':
+      // Customer app: Open checkout screen
+      final bookingId = int.parse(data['booking_id']);
+      final remainingAmount = double.parse(data['remaining_amount']);
+      Get.toNamed('/checkout', arguments: {
+        'bookingId': bookingId,
+        'remainingAmount': remainingAmount,
+      });
+      break;
+      
+    case 'checkout_completed':
+      // Owner app: Refresh bookings list
+      Get.find<BookingsController>().refreshBookings();
+      Get.snackbar(
+        'Payment Received',
+        '${data['customer_email']} paid \$${data['total_paid']}',
+        snackPosition: SnackPosition.TOP,
+      );
+      break;
+  }
+}
+```
