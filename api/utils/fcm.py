@@ -99,8 +99,7 @@ def send_push_notification(
 
     tokens: List[str] = [d.fcm_token for d in user.devices.all() if _valid(getattr(d, "fcm_token", ""))]
     if not tokens:
-        if debug:
-            print(f"No valid FCM tokens for user {user.id}")
+        print(f"⚠️ No valid FCM tokens for user {user.id} ({getattr(user, 'email', 'unknown')})")
         return
 
     # FCM requires string values in data
