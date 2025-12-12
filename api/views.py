@@ -2238,3 +2238,137 @@ class PublicGalleryView(APIView):
             'current_page': page_obj.number,
             'results': serializer.data
         })
+
+
+# ==========================================
+# PHASE 2: TATTOO ARTIST VIEWSETS 🖋️
+# ==========================================
+from rest_framework import viewsets
+from .models import DesignRequest, ConsentFormTemplate, SignedConsentForm, IDVerificationRequest, Consultation
+from .serializers import (
+    DesignRequestSerializer, ConsentFormTemplateSerializer, 
+    SignedConsentFormSerializer, IDVerificationRequestSerializer, ConsultationSerializer
+)
+
+
+class PortfolioViewSet(viewsets.ModelViewSet):
+    """
+    Portfolio management for tattoo artists.
+    Uses GalleryItem model with niche-specific filtering.
+    """
+    permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
+    serializer_class = GalleryItemSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    
+    def get_queryset(self):
+        shop = self.request.user.shop
+        # Portfolio items are gallery items tagged for portfolio
+        return GalleryItem.objects.filter(shop=shop).order_by('-created_at')
+    
+    def perform_create(self, serializer):
+        serializer.save(shop=self.request.user.shop)
+
+
+class DesignRequestViewSet(viewsets.ModelViewSet):
+    """
+    Design requests from clients (tattoo sketches, ideas, reference images).
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = DesignRequestSerializer
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'owner':
+            # Owners see requests for their shop
+            return DesignRequest.objects.filter(shop=user.shop).order_by('-created_at')
+        else:
+            # Clients see their own requests
+            return DesignRequest.objects.filter(user=user).order_by('-created_at')
+    
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class ConsentFormViewSet(viewsets.ModelViewSet):
+    """
+    Consent form templates created by shop owners.
+    """
+    permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
+    serializer_class = ConsentFormTemplateSerializer
+    
+    def get_queryset(self):
+        return ConsentFormTemplate.objects.filter(shop=self.request.user.shop)
+    
+    def perform_create(self, serializer):
+        serializer.save(shop=self.request.user.shop)
+
+
+class SignedConsentFormViewSet(viewsets.ModelViewSet):
+    """
+    Signed consent forms by clients.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = SignedConsentFormSerializer
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'owner':
+            # Owners see signed forms for their shop
+            return SignedConsentForm.objects.filter(
+                template__shop=user.shop
+            ).select_related('user', 'template', 'booking')
+        else:
+            # Clients see their own signed forms
+            return SignedConsentForm.objects.filter(user=user)
+    
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class IDVerificationViewSet(viewsets.ModelViewSet):
+    """
+    ID verification requests for age-restricted services.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = IDVerificationRequestSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'owner':
+            # Owners see verifications for their shop
+            return IDVerificationRequest.objects.filter(shop=user.shop).order_by('-created_at')
+        else:
+            # Clients see their own verifications
+            return IDVerificationRequest.objects.filter(user=user)
+    
+    def perform_create(self, serializer):
+        # If client is creating, associate with their booking's shop
+        serializer.save(user=self.request.user)
+
+
+class ConsultationViewSet(viewsets.ModelViewSet):
+    """
+    Consultation appointments for tattoo artists.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = ConsultationSerializer
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'owner':
+            return Consultation.objects.filter(shop=user.shop).order_by('date', 'time')
+        else:
+            # Clients can view consultations by email match
+            return Consultation.objects.filter(customer_email=user.email)
+    
+    def perform_create(self, serializer):
+        if self.request.user.role == 'owner':
+            serializer.save(shop=self.request.user.shop)
+        else:
+            # Client creating consultation - need shop_id in request
+            shop_id = self.request.data.get('shop_id')
+            if shop_id:
+                from .models import Shop
+                shop = get_object_or_404(Shop, id=shop_id)
+                serializer.save(shop=shop, customer_email=self.request.user.email)
