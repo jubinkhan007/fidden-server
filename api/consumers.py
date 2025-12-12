@@ -17,7 +17,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.accept()
 
     async def disconnect(self, close_code):
-        await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
+        # Only discard from group if room_group_name was set (i.e., connect succeeded)
+        if hasattr(self, 'room_group_name'):
+            await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
 
     async def receive(self, text_data):
         data = json.loads(text_data)
@@ -32,19 +34,30 @@ class ChatConsumer(AsyncWebsocketConsumer):
         thread = ChatThread.objects.get(id=thread_id)
         message = Message.objects.create(thread=thread, sender=sender, content=content)
 
-        # Determine correct recipient
+        # Determine correct recipient and is_owner flag
         if sender == thread.user:
             recipient = thread.shop.owner
+            is_owner = "false"  # Customer is sending
         else:
             recipient = thread.user
+            is_owner = "true"  # Owner is sending
 
         # Safety: never notify sender
         if recipient != sender:
             print(f"[DEBUG] Sender: {sender.email}, Recipient: {recipient.email}")
+            chat_notification_data = {
+                "thread_id": str(thread.id),
+                "shop_id": str(thread.shop.id),
+                "shop_name": thread.shop.name,
+                "sender_email": sender.email,
+                "is_owner": is_owner,
+                "message": content,
+            }
             notify_user(
                 recipient,
                 f"New message from {sender.name or sender.email}",
-                data={"thread_id": thread.id, "message": content},
+                notification_type="chat",
+                data=chat_notification_data,
             )
 
         return MessageSerializer(message).data, recipient.id

@@ -60,6 +60,15 @@ class Payment(models.Model):
     booking = models.OneToOneField(SlotBooking, on_delete=models.CASCADE, related_name='payment')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Payment method tracking
+    PAYMENT_METHOD_CHOICES = [
+        ('stripe', 'Stripe'),
+        ('paypal', 'PayPal'),
+    ]
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, default='stripe')
+    paypal_capture_id = models.CharField(max_length=255, blank=True, null=True, help_text="PayPal capture ID for refunds")
+    
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     is_deposit = models.BooleanField(default=False)
     remaining_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
@@ -71,6 +80,37 @@ class Payment(models.Model):
     tips_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     application_fee_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    # Fidden Pay - Deposit Status
+    DEPOSIT_STATUS_CHOICES = [
+        ('held', 'Held'),           # Deposit collected, awaiting checkout
+        ('credited', 'Credited'),   # Applied at checkout
+        ('forfeited', 'Forfeited'), # No-show/late-cancel
+    ]
+    deposit_status = models.CharField(max_length=15, choices=DEPOSIT_STATUS_CHOICES, default='held')
+    service_price = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Full service price for commission calculation")
+    
+    # Fidden Pay - Tips
+    TIP_OPTION_CHOICES = [
+        ('10', '10%'),
+        ('15', '15%'),
+        ('20', '20%'),
+        ('custom', 'Custom'),
+    ]
+    tip_percent = models.DecimalField(max_digits=5, decimal_places=4, null=True, blank=True)
+    tip_base = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Base amount for tip calculation (usually service_price)")
+    tip_option_selected = models.CharField(max_length=10, choices=TIP_OPTION_CHOICES, null=True, blank=True)
+    final_charge_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text="Final checkout amount (remaining + tip)")
+
+    # Checkout tracking
+    CHECKOUT_PAYMENT_METHOD_CHOICES = [
+        ('app', 'Pay via App'),
+        ('cash', 'Pay in Cash'),
+    ]
+    checkout_initiated_at = models.DateTimeField(null=True, blank=True)
+    checkout_completed_at = models.DateTimeField(null=True, blank=True)
+    checkout_payment_method = models.CharField(max_length=10, choices=CHECKOUT_PAYMENT_METHOD_CHOICES, null=True, blank=True, help_text="How final payment is made: app or cash")
+    final_payment_intent_id = models.CharField(max_length=255, blank=True, null=True, help_text="Stripe PaymentIntent for final checkout")
 
     coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, blank=True, null=True, related_name='payment_coupon',
         help_text="Coupon applied to this payment"
@@ -98,6 +138,7 @@ class Refund(models.Model):
 
     payment = models.OneToOneField(Payment, on_delete=models.CASCADE, related_name="refund")
     stripe_refund_id = models.CharField(max_length=255, blank=True, null=True)
+    paypal_refund_id = models.CharField(max_length=255, blank=True, null=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     reason = models.CharField(max_length=255, blank=True, null=True)
@@ -147,20 +188,45 @@ class Booking(models.Model):
             elif hours_before_booking > self.shop.no_refund_hours:
                 refund_amount = self.payment.amount * (100 - self.shop.cancellation_fee_percentage) / 100
 
-            # Refund via Stripe only if > 0
+            # Process refund based on payment method
+            refund_record = None
             if refund_amount > 0:
-                refund = stripe.Refund.create(
-                    payment_intent=self.stripe_payment_intent_id,
-                    amount=int(refund_amount * 100),
-                    reason=reason,  # must be one of Stripe's 3 reasons
-                )
-                Refund.objects.create(
-                    payment=self.payment,
-                    stripe_refund_id=refund.id,
-                    amount=refund_amount,
-                    status=refund.status,
-                    reason=reason,     # you can store a separate "local_reason" if desired
-                )
+                payment_method = self.payment.payment_method
+                
+                if payment_method == 'stripe':
+                    # Stripe refund
+                    refund = stripe.Refund.create(
+                        payment_intent=self.stripe_payment_intent_id,
+                        amount=int(refund_amount * 100),
+                        reason=reason,
+                    )
+                    refund_record = Refund.objects.create(
+                        payment=self.payment,
+                        stripe_refund_id=refund.id,
+                        amount=refund_amount,
+                        status=refund.status,
+                        reason=reason,
+                    )
+                    
+                elif payment_method == 'paypal':
+                    # PayPal refund
+                    from payments.utils.paypal_refund import process_paypal_refund
+                    paypal_result = process_paypal_refund(
+                        self.payment.paypal_capture_id,
+                        float(refund_amount),
+                        reason
+                    )
+                    if paypal_result.get('success'):
+                        refund_record = Refund.objects.create(
+                            payment=self.payment,
+                            paypal_refund_id=paypal_result.get('refund_id'),
+                            amount=refund_amount,
+                            status='succeeded',
+                            reason=reason,
+                        )
+                    else:
+                        # PayPal refund failed
+                        return False, f"PayPal refund failed: {paypal_result.get('error', 'Unknown error')}"
 
             # Update booking
             self.status = "cancelled"
@@ -168,7 +234,6 @@ class Booking(models.Model):
 
             # Update payment status
             self.payment.status = "refunded" if refund_amount > 0 else self.payment.status
-            # (keep 'succeeded' when no refund; do not flip to 'failed')
             self.payment.save(update_fields=["status", "updated_at"])
 
             # Cancel SlotBooking + restore capacity
@@ -184,8 +249,10 @@ class Booking(models.Model):
                 slot_booking.shop.capacity += 1
                 slot_booking.shop.save(update_fields=["capacity"])
 
-            return True, "Refund processed and booking cancelled successfully" if refund_amount > 0 \
-                else True, "Booking cancelled (no refund due per policy)"
+            if refund_amount > 0:
+                return True, "Refund processed and booking cancelled successfully"
+            else:
+                return True, "Booking cancelled (no refund due per policy)"
         except Exception as e:
             return False, str(e)
 
@@ -212,6 +279,47 @@ class TransactionLog(models.Model):
 
     def __str__(self):
         return f"{self.transaction_type.capitalize()} {self.id} - {self.status} - {self.amount} {self.currency}"
+
+# -----------------------------
+# Shop Payout Table (PayPal → Stripe Transfer)
+# -----------------------------
+class ShopPayout(models.Model):
+    """
+    Tracks payouts from Fidden to shops for PayPal bookings.
+    Commission is calculated from total service price, not deposit.
+    Foundation: Commission = 10% of service price (often equals deposit)
+    Momentum/Icon: Commission = 0%, full deposit transferred to shop
+    """
+    STATUS_PENDING = "pending"
+    STATUS_PROCESSING = "processing"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_PROCESSING, "Processing"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name="payouts")
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="payouts")
+    gross_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Deposit amount received")
+    commission_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Fidden's commission (from service price)")
+    net_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Amount transferred to shop")
+    commission_rate = models.DecimalField(max_digits=5, decimal_places=2, help_text="Commission rate applied (%)")
+    stripe_transfer_id = models.CharField(max_length=255, blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    error_message = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Shop Payout"
+        verbose_name_plural = "Shop Payouts"
+
+    def __str__(self):
+        return f"Payout #{self.pk} - {self.shop.name} - ${self.net_amount} ({self.status})"
 
 # -----------------------------
 # CouponUsage Table

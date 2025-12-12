@@ -39,6 +39,9 @@ from .views import (
     ThreadDetailsView,
     AIAutoFillSettingsView,
     HoldSlotAndBookView,
+    GalleryItemView,
+    GalleryItemDetailView,
+    PublicGalleryView,
 )
 from payments.views import ShopSlotsView
 
@@ -83,6 +86,11 @@ urlpatterns = [
     path("weekly-summary/latest/", LatestWeeklySummaryView.as_view(),name="weekly-summary-latest"),
     path("weekly-summary/generate_marketing_caption/", GenerateMarketingCaptionView.as_view()),
     path("weekly-summary/send_loyalty_email/", SendLoyaltyEmailView.as_view()),
+    
+    # 🆕 Gallery endpoints
+    path('gallery/', GalleryItemView.as_view(), name='gallery-list-create'),
+    path('gallery/<int:pk>/', GalleryItemDetailView.as_view(), name='gallery-detail'),
+    path('shops/<int:shop_id>/gallery/', PublicGalleryView.as_view(), name='public-gallery'),
 ]
 
 # ==========================================

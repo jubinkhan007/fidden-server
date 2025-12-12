@@ -65,7 +65,10 @@ INSTALLED_APPS = [
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-    )
+    ),
+    # Return datetimes in ISO 8601 format with UTC timezone
+    # This ensures the API returns UTC times so Flutter can convert to any timezone
+    'DATETIME_FORMAT': '%Y-%m-%dT%H:%M:%SZ',
 }
 
 SIMPLE_JWT = {
@@ -313,6 +316,8 @@ if google_ids_str:
 # CSRF Trusted Origins
 # ==============================
 CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if x]
+# Add localhost for local development
+CSRF_TRUSTED_ORIGINS += ['http://localhost:8000', 'http://127.0.0.1:8000']
 
 # ==============================
 # Celery Configuration

@@ -35,6 +35,7 @@ from .models import (
     IDVerificationRequest,
     Consultation,
     BookingAddOn,
+    GalleryItem,
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -260,7 +261,10 @@ class ShopSerializer(serializers.ModelSerializer):
             'shop_img', 'close_days', "business_hours", 'owner_id', 'is_verified', 'status', 
             'verification_files', 'uploaded_files', 'is_deposit_required',
             'default_deposit_percentage',
-            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
+            'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
+            'time_zone',
+            # 🆕 Social Links
+            'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
         ]
         read_only_fields = ('owner_id','is_verified', 'uploaded_files')
 
@@ -458,6 +462,18 @@ class SlotSerializer(serializers.ModelSerializer):
         local_tod = self._local_tod(obj.start_time)
         return local_tod in self._disabled_set(obj)
 
+    def to_representation(self, instance):
+        """Override to return times in UTC format for consistent API responses."""
+        import zoneinfo
+        data = super().to_representation(instance)
+        utc = zoneinfo.ZoneInfo("UTC")
+        # Convert to UTC and format as ISO 8601
+        if instance.start_time:
+            data['start_time'] = instance.start_time.astimezone(utc).isoformat().replace('+00:00', 'Z')
+        if instance.end_time:
+            data['end_time'] = instance.end_time.astimezone(utc).isoformat().replace('+00:00', 'Z')
+        return data
+
 
 class SlotBookingSerializer(serializers.ModelSerializer):
     slot_id = serializers.PrimaryKeyRelatedField(
@@ -624,6 +640,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
     distance = serializers.FloatField(read_only=True)  # in meters
     services = serializers.SerializerMethodField()
     reviews = serializers.SerializerMethodField()
+    gallery_preview = serializers.SerializerMethodField()  # 🆕 First 5 public gallery items
 
     class Meta:
         model = Shop
@@ -632,8 +649,25 @@ class ShopDetailSerializer(serializers.ModelSerializer):
             'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id',
             'avg_rating', 'review_count', 'distance', 'services', 'reviews',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
-            'is_deposit_required', 'default_deposit_percentage'
+            'is_deposit_required', 'default_deposit_percentage', 'time_zone',
+            # 🆕 Social Links
+            'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
+            'gallery_preview',
         ]
+
+    def get_gallery_preview(self, obj):
+        """Return first 5 public gallery items for horizontal scroll preview."""
+        request = self.context.get('request')
+        items = obj.gallery_items.filter(is_public=True)[:5]
+        result = []
+        for item in items:
+            result.append({
+                'id': item.id,
+                'thumbnail_url': request.build_absolute_uri(item.thumbnail.url) if item.thumbnail and request else None,
+                'image_url': request.build_absolute_uri(item.image.url) if item.image and request else None,
+                'caption': item.caption,
+            })
+        return result
 
 
     def get_services(self, obj):
@@ -1429,3 +1463,59 @@ class WeeklySummarySerializer(serializers.ModelSerializer):
 class WeeklySummaryActionSerializer(serializers.Serializer):
     summary_id = serializers.UUIDField()
     preview_only = serializers.BooleanField(required=False, default=False)
+
+
+# ==================== Gallery Serializers ====================
+
+class GalleryItemSerializer(serializers.ModelSerializer):
+    """Serializer for gallery items - used by shop owners for CRUD."""
+    service_name = serializers.CharField(source='service.title', read_only=True)
+    image_url = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GalleryItem
+        fields = [
+            'id', 'shop', 'image', 'image_url', 'thumbnail', 'thumbnail_url',
+            'caption', 'description', 'service', 'service_name',
+            'category_tag', 'tags', 'is_public', 'created_at'
+        ]
+        read_only_fields = ['id', 'shop', 'thumbnail', 'created_at']
+
+    def get_image_url(self, obj):
+        request = self.context.get('request')
+        if obj.image:
+            return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        return None
+
+    def get_thumbnail_url(self, obj):
+        request = self.context.get('request')
+        if obj.thumbnail:
+            return request.build_absolute_uri(obj.thumbnail.url) if request else obj.thumbnail.url
+        return None
+
+
+class PublicGalleryItemSerializer(serializers.ModelSerializer):
+    """Serializer for public gallery items - used by client app."""
+    service_name = serializers.CharField(source='service.title', read_only=True)
+    image_url = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GalleryItem
+        fields = [
+            'id', 'image_url', 'thumbnail_url', 'caption',
+            'service', 'service_name', 'category_tag', 'created_at'
+        ]
+
+    def get_image_url(self, obj):
+        request = self.context.get('request')
+        if obj.image:
+            return request.build_absolute_uri(obj.image.url) if request else obj.image.url
+        return None
+
+    def get_thumbnail_url(self, obj):
+        request = self.context.get('request')
+        if obj.thumbnail:
+            return request.build_absolute_uri(obj.thumbnail.url) if request else obj.thumbnail.url
+        return None

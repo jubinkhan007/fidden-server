@@ -13,16 +13,31 @@ services:
     volumes:
       - ./media:/app/media
       - staticfiles:/app/staticfiles
-      - ./:/app
+      # - ./:/app  <-- Commented out for production to use built image code
     ports:
       - "8090:8090"
     environment:
       - DJANGO_SETTINGS_MODULE=fidden.settings
+      - DATABASE_URL
+      - SECRET_KEY
+      - DEBUG
+      - ALLOWED_HOSTS
       - REDIS_URL=redis://redis:6379/0
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_STORAGE_BUCKET_NAME
+      - AWS_S3_REGION_NAME
+      - S3_REGION
+      - STRIPE_SECRET_KEY
+      - STRIPE_PUBLISHABLE_KEY
+      - STRIPE_WEBHOOK_SECRET
+      - PAYPAL_MODE
+      - PAYPAL_CLIENT_ID
+      - PAYPAL_CLIENT_SECRET
+      - PAYPAL_WEBHOOK_ID
+      - GOOGLE_APPLICATION_CREDENTIALS
     depends_on:
       - redis
-    env_file:
-      - .env
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://127.0.0.1:8090/health/ || exit 1"]
@@ -35,17 +50,27 @@ services:
     container_name: fidden_celery
     working_dir: /app
     command: sh -c "celery -A fidden worker --loglevel=info"
-    volumes:
-      - ./:/app
     depends_on:
       - redis
       - web
-    env_file:
-      - .env
     environment:
-      - REDIS_URL=${REDIS_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - DJANGO_SETTINGS_MODULE=fidden.settings
+      - DATABASE_URL
+      - SECRET_KEY
+      - DEBUG
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_STORAGE_BUCKET_NAME
+      - AWS_S3_REGION_NAME
+      - S3_REGION
+      - STRIPE_SECRET_KEY
+      - PAYPAL_MODE
+      - PAYPAL_CLIENT_ID
+      - PAYPAL_CLIENT_SECRET
+      - GOOGLE_APPLICATION_CREDENTIALS
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "celery -A fidden status || exit 1"]
@@ -58,17 +83,17 @@ services:
     container_name: fidden_celery_beat
     working_dir: /app
     command:  sh -c "until python manage.py migrate; do echo Waiting for DB; sleep 3; done; celery -A fidden beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
-    volumes:
-      - ./:/app
     depends_on:
       - redis
       - web
-    env_file:
-      - .env
     environment:
-      - REDIS_URL=${REDIS_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - DJANGO_SETTINGS_MODULE=fidden.settings
+      - DATABASE_URL
+      - SECRET_KEY
+      - DEBUG
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "ps aux | grep '[c]elery beat' || exit 1"]
@@ -79,8 +104,6 @@ services:
   redis:
     image: redis:8
     container_name: fidden_redis
-    # ports:
-    #   - "6379:6379"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

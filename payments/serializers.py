@@ -28,8 +28,16 @@ class userBookingSerializer(serializers.ModelSerializer):
 
     avg_rating = serializers.SerializerMethodField()
     total_reviews = serializers.SerializerMethodField()
-    refund = RefundSerializer(source="payment.refund", read_only=True)  # 👈 Added
+    refund = RefundSerializer(source="payment.refund", read_only=True)
     add_on_services = serializers.SerializerMethodField()
+    shop_timezone = serializers.SerializerMethodField()
+    
+    # Fidden Pay checkout fields
+    deposit_status = serializers.CharField(source='payment.deposit_status', read_only=True, allow_null=True)
+    deposit_amount = serializers.DecimalField(source='payment.deposit_amount', read_only=True, max_digits=10, decimal_places=2)
+    service_price = serializers.DecimalField(source='payment.service_price', read_only=True, max_digits=10, decimal_places=2, allow_null=True)
+    remaining_amount = serializers.DecimalField(source='payment.remaining_amount', read_only=True, max_digits=10, decimal_places=2)
+    checkout_initiated = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -51,8 +59,15 @@ class userBookingSerializer(serializers.ModelSerializer):
             'updated_at',
             'avg_rating',
             'total_reviews',
-            "refund",
+            'refund',
             'add_on_services',
+            'shop_timezone',
+            # Fidden Pay
+            'deposit_status',
+            'deposit_amount',
+            'service_price',
+            'remaining_amount',
+            'checkout_initiated',
         ]
         read_only_fields = fields
 
@@ -82,6 +97,27 @@ class userBookingSerializer(serializers.ModelSerializer):
             for add_on in add_ons
         ]
 
+    def get_shop_timezone(self, obj):
+        """Return shop's timezone for Flutter to convert UTC slot_time to local."""
+        if obj.shop:
+            return obj.shop.time_zone
+        return None
+
+    def get_checkout_initiated(self, obj):
+        """Return true if owner has initiated checkout."""
+        if hasattr(obj, 'payment') and obj.payment:
+            return obj.payment.checkout_initiated_at is not None
+        return False
+
+    def to_representation(self, instance):
+        """Override to ensure slot_time is returned in UTC, not Django's default timezone."""
+        from datetime import timezone as dt_tz
+        rep = super().to_representation(instance)
+        # Explicitly convert slot_time to UTC
+        if instance.slot and instance.slot.start_time:
+            rep['slot_time'] = instance.slot.start_time.astimezone(dt_tz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        return rep
+
 class ownerBookingSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     user_name = serializers.CharField(source='user.name', read_only=True)
@@ -90,8 +126,16 @@ class ownerBookingSerializer(serializers.ModelSerializer):
     slot_time = serializers.DateTimeField(source='slot.start_time', read_only=True)
     service_title = serializers.CharField(source='slot.service.title', read_only=True)
     service_duration = serializers.CharField(source='slot.service.duration', read_only=True) 
-    refund = RefundSerializer(source="payment.refund", read_only=True)  # 👈 Added
+    refund = RefundSerializer(source="payment.refund", read_only=True)
     add_on_services = serializers.SerializerMethodField()
+    shop_timezone = serializers.SerializerMethodField()
+    
+    # Fidden Pay checkout fields
+    deposit_status = serializers.CharField(source='payment.deposit_status', read_only=True, allow_null=True)
+    deposit_amount = serializers.DecimalField(source='payment.deposit_amount', read_only=True, max_digits=10, decimal_places=2)
+    service_price = serializers.DecimalField(source='payment.service_price', read_only=True, max_digits=10, decimal_places=2, allow_null=True)
+    remaining_amount = serializers.DecimalField(source='payment.remaining_amount', read_only=True, max_digits=10, decimal_places=2)
+    checkout_initiated = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -110,8 +154,15 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             'status',
             'refund',
             'add_on_services',
+            'shop_timezone',
             'created_at',
             'updated_at',
+            # Fidden Pay
+            'deposit_status',
+            'deposit_amount',
+            'service_price',
+            'remaining_amount',
+            'checkout_initiated',
         ]
         read_only_fields = fields
 
@@ -133,6 +184,27 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             }
             for add_on in add_ons
         ]
+
+    def get_shop_timezone(self, obj):
+        """Return shop's timezone for Flutter to convert UTC slot_time to local."""
+        if obj.shop:
+            return obj.shop.time_zone
+        return None
+
+    def get_checkout_initiated(self, obj):
+        """Return true if owner has initiated checkout."""
+        if hasattr(obj, 'payment') and obj.payment:
+            return obj.payment.checkout_initiated_at is not None
+        return False
+
+    def to_representation(self, instance):
+        """Override to ensure slot_time is returned in UTC, not Django's default timezone."""
+        from datetime import timezone as dt_tz
+        rep = super().to_representation(instance)
+        # Explicitly convert slot_time to UTC
+        if instance.slot and instance.slot.start_time:
+            rep['slot_time'] = instance.slot.start_time.astimezone(dt_tz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        return rep
     
 class TransactionLogSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.name', read_only=True)

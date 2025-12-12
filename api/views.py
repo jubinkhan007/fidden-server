@@ -3,8 +3,7 @@ import random
 from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, viewsets
-from rest_framework.decorators import action
+from rest_framework import status
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
@@ -36,7 +35,8 @@ from .models import (
     Notification,
     Revenue,
     Coupon,
-    WeeklySummary
+    WeeklySummary,
+    GalleryItem,
 )
 from payments.models import Booking
 from .serializers import (
@@ -65,6 +65,8 @@ from .serializers import (
     UserCouponRetrieveSerializer,
     WeeklySummaryActionSerializer,
     WeeklySummarySerializer,
+    GalleryItemSerializer,
+    PublicGalleryItemSerializer,
 )
 from .permissions import IsOwnerAndOwnerRole, IsOwnerRole
 from datetime import date, datetime, timedelta
@@ -956,7 +958,7 @@ class GlobalSearchView(APIView):
         results = []
 
         # --- Shops search ---
-        shops = Shop.objects.filter(is_verified=True).annotate(
+        shops = Shop.objects.annotate(
             avg_rating=Avg("ratings__rating"),
             review_count=Count("ratings")
         ).distinct()
@@ -1181,15 +1183,20 @@ class UserMessageView(APIView):
         thread, _ = ChatThread.objects.get_or_create(shop=shop, user=user)
         message = Message.objects.create(thread=thread, sender=user, content=content)
 
-        # Notify owner and get the created notification
-        from api.models import Notification
-        notification = Notification.objects.create(
-            recipient=shop.owner,
-            message=f"New message from {user.email}",
-            notification_type="chat",
-            data={"thread_id": thread.id}
+        # Notify owner via FCM (notify_user creates DB notification internally)
+        chat_notification_data = {
+            "thread_id": str(thread.id),
+            "shop_id": str(shop.id),
+            "shop_name": shop.name,
+            "sender_email": user.email,
+            "is_owner": "false",  # Customer is sending
+        }
+        notification = notify_user(
+            shop.owner, 
+            f"New message from {user.email}", 
+            notification_type="chat", 
+            data=chat_notification_data
         )
-        notify_user(shop.owner, f"New message from {user.email}", data={"thread_id": thread.id})
 
         # Broadcast notification over websockets to recipient
         channel_layer = get_channel_layer()
@@ -1231,15 +1238,20 @@ class OwnerMessageView(APIView):
             return Response({"error": "Not authorized"}, status=403)
 
         message = Message.objects.create(thread=thread, sender=owner, content=content)
-        # Notify user and get the created notification
-        from api.models import Notification
-        notification = Notification.objects.create(
-            recipient=thread.user,
-            message=f"Reply from {owner.email}",
-            notification_type="chat",
-            data={"thread_id": thread.id}
+        # Notify user via FCM (notify_user creates DB notification internally)
+        chat_notification_data = {
+            "thread_id": str(thread.id),
+            "shop_id": str(thread.shop.id),
+            "shop_name": thread.shop.name,
+            "sender_email": owner.email,
+            "is_owner": "true",  # Owner is sending
+        }
+        notification = notify_user(
+            thread.user, 
+            f"Reply from {owner.email}", 
+            notification_type="chat", 
+            data=chat_notification_data
         )
-        notify_user(thread.user, f"Reply from {owner.email}", data={"thread_id": thread.id})
 
         # Broadcast notification over websockets to recipient
         channel_layer = get_channel_layer()
@@ -2131,6 +2143,7 @@ class SendLoyaltyEmailView(APIView):
                 }
             )
 
+        # PREVIEW response (no delivery)
         return Response(
             {
                 "ok": True,
@@ -2144,171 +2157,84 @@ class SendLoyaltyEmailView(APIView):
             }
         )
 
-# ==========================================
-# PHASE 2: TATTOO ARTIST VIEWS 🖋️
-# ==========================================
-from rest_framework import viewsets
-from .models import (
-    PortfolioItem, DesignRequest, DesignRequestImage, 
-    ConsentFormTemplate, SignedConsentForm, IDVerificationRequest,
-    Consultation
-)
-from .serializers import (
-    PortfolioItemSerializer, DesignRequestSerializer, 
-    ConsentFormTemplateSerializer, SignedConsentFormSerializer, 
-    IDVerificationRequestSerializer, ConsultationSerializer
-)
 
-class PortfolioViewSet(viewsets.ModelViewSet):
-    """
-    Manage portfolio items.
-    """
-    serializer_class = PortfolioItemSerializer
-    permission_classes = [IsAuthenticated]
+# ==================== Gallery Views ====================
 
-    def get_queryset(self):
-        # Owners see their own shop's portfolio
-        # Public/Users might see specific shop's portfolio via filter
-        user = self.request.user
-        if hasattr(user, 'shop'):
-            return PortfolioItem.objects.filter(shop=user.shop).order_by('-created_at')
-        
-        # If just a user, allow filtering by shop_id
-        shop_id = self.request.query_params.get('shop_id')
-        if shop_id:
-            return PortfolioItem.objects.filter(shop_id=shop_id).order_by('-created_at')
-            
-        return PortfolioItem.objects.none()
-
-class DesignRequestViewSet(viewsets.ModelViewSet):
+class GalleryItemView(APIView):
     """
-    Manage design requests.
+    CRUD operations for shop owner's gallery items.
+    GET: List all gallery items for the owner's shop
+    POST: Create a new gallery item (with auto-thumbnail)
     """
-    serializer_class = DesignRequestSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        user = self.request.user
-        # If owner, see all requests for their shop
-        if hasattr(user, 'shop'):
-            return DesignRequest.objects.filter(shop=user.shop).order_by('-created_at')
-        # If user, see their own requests
-        return DesignRequest.objects.filter(user=user).order_by('-created_at')
-
-class ConsentFormViewSet(viewsets.ModelViewSet):
-    """
-    Manage templates (for owners) and signed forms (for everyone).
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        # This is tricky because it handles both templates and signed forms?
-        # No, this ViewSet should probably handle Templates, and SignedForms via a separate or nested route.
-        # Let's split or handle logically.
-        # For now, let's make this ViewSet for TEMPLATES.
-        user = self.request.user
-        if hasattr(user, 'shop'):
-            return ConsentFormTemplate.objects.filter(shop=user.shop)
-        return ConsentFormTemplate.objects.none()
-    
-    def get_serializer_class(self):
-        return ConsentFormTemplateSerializer
-
-class SignedConsentFormViewSet(viewsets.ModelViewSet):
-    """
-    Manage signed forms.
-    """
-    serializer_class = SignedConsentFormSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        user = self.request.user
-        if hasattr(user, 'shop'):
-            return SignedConsentForm.objects.filter(booking__shop=user.shop).order_by('-signed_at')
-        return SignedConsentForm.objects.filter(user=user).order_by('-signed_at')
-
-class IDVerificationViewSet(viewsets.ModelViewSet):
-    """
-    Manage ID verification requests.
-    """
-    serializer_class = IDVerificationRequestSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        user = self.request.user
-        if hasattr(user, 'shop'):
-            return IDVerificationRequest.objects.filter(shop=user.shop).order_by('-created_at')
-        return IDVerificationRequest.objects.filter(user=user).order_by('-created_at')
-
-
-class ConsultationViewSet(viewsets.ModelViewSet):
-    """
-    Consultation appointment management for tattoo artists
-    
-    Endpoints:
-    - GET /api/consultations/ - List consultations (filterable by date, status)
-    - POST /api/consultations/ - Create consultation
-    - GET /api/consultations/{id}/ - Get consultation details
-    - PATCH /api/consultations/{id}/ - Update consultation
-    - DELETE /api/consultations/{id}/ - Delete consultation
-    - POST /api/consultations/{id}/confirm/ - Confirm consultation
-    - POST /api/consultations/{id}/complete/ - Mark as completed
-    - POST /api/consultations/{id}/cancel/ - Cancel consultation
-    - POST /api/consultations/{id}/mark_no_show/ - Mark as no-show
-    """
-    serializer_class = ConsultationSerializer
     permission_classes = [IsAuthenticated, IsOwnerRole]
-    
-    def get_queryset(self):
-        queryset = Consultation.objects.filter(shop=self.request.user.shop)
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get(self, request):
+        shop = request.user.shop
+        items = GalleryItem.objects.filter(shop=shop).order_by('-created_at')
+        serializer = GalleryItemSerializer(items, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    def post(self, request):
+        shop = request.user.shop
+        serializer = GalleryItemSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save(shop=shop)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GalleryItemDetailView(APIView):
+    """
+    Update or delete a specific gallery item.
+    PATCH: Update gallery item
+    DELETE: Delete gallery item
+    """
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_object(self, pk, shop):
+        return get_object_or_404(GalleryItem, pk=pk, shop=shop)
+
+    def patch(self, request, pk):
+        shop = request.user.shop
+        item = self.get_object(pk, shop)
+        serializer = GalleryItemSerializer(item, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        shop = request.user.shop
+        item = self.get_object(pk, shop)
+        item.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PublicGalleryView(APIView):
+    """
+    Public gallery for client app - lists public gallery items for a shop.
+    Paginated with 20 items per page.
+    """
+    def get(self, request, shop_id):
+        shop = get_object_or_404(Shop, id=shop_id)
+        items = GalleryItem.objects.filter(shop=shop, is_public=True).order_by('-created_at')
         
-        # Filter by date range
-        date_from = self.request.query_params.get('date_from')
-        date_to = self.request.query_params.get('date_to')
-        if date_from:
-            queryset = queryset.filter(date__gte=date_from)
-        if date_to:
-            queryset = queryset.filter(date__lte=date_to)
+        # Pagination
+        page = request.query_params.get('page', 1)
+        paginator = Paginator(items, 20)  # 20 items per page
+        page_obj = paginator.get_page(page)
         
-        # Filter by status
-        status = self.request.query_params.get('status')
-        if status:
-            queryset = queryset.filter(status=status)
+        serializer = PublicGalleryItemSerializer(
+            page_obj.object_list, 
+            many=True, 
+            context={'request': request}
+        )
         
-        return queryset
-    
-    def perform_create(self, serializer):
-        serializer.save(shop=self.request.user.shop)
-    
-    @action(detail=True, methods=['post'])
-    def confirm(self, request, pk=None):
-        """Confirm a scheduled consultation"""
-        consultation = self.get_object()
-        consultation.status = 'confirmed'
-        consultation.save()
-        return Response(ConsultationSerializer(consultation).data)
-    
-    @action(detail=True, methods=['post'])
-    def complete(self, request, pk=None):
-        """Mark consultation as completed with optional notes"""
-        consultation = self.get_object()
-        consultation.status = 'completed'
-        consultation.notes = request.data.get('notes', consultation.notes)
-        consultation.save()
-        return Response(ConsultationSerializer(consultation).data)
-    
-    @action(detail=True, methods=['post'])
-    def cancel(self, request,pk=None):
-        """Cancel a consultation"""
-        consultation = self.get_object()
-        consultation.status = 'cancelled'
-        consultation.save()
-        return Response(ConsultationSerializer(consultation).data)
-    
-    @action(detail=True, methods=['post'])
-    def mark_no_show(self, request, pk=None):
-        """Mark customer as no-show"""
-        consultation = self.get_object()
-        consultation.status = 'no_show'
-        consultation.save()
-        return Response(ConsultationSerializer(consultation).data)
+        return Response({
+            'count': paginator.count,
+            'num_pages': paginator.num_pages,
+            'current_page': page_obj.number,
+            'results': serializer.data
+        })

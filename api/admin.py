@@ -1,5 +1,4 @@
 from django.contrib import admin
-from django import forms
 
 from .models import (
     PerformanceAnalytics,
@@ -22,14 +21,7 @@ from .models import (
     GlobalSettings,
     WaitlistEntry, 
     AutoFillLog,
-    # Tattoo Artist Models
-    PortfolioItem,
-    DesignRequest,
-    DesignRequestImage,
-    ConsentFormTemplate,
-    SignedConsentForm,
-    IDVerificationRequest,
-    Consultation,
+    GalleryItem,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -48,67 +40,21 @@ class VerificationFileInline(admin.TabularInline):
     model = VerificationFile
     extra = 1
 
-class ShopAdminForm(forms.ModelForm):
-    """Custom form for Shop admin with better niche selection"""
-    
-    NICHE_CHOICES = [
-        ('barber', 'Barber'),
-        ('hairstylist', 'Hairstylist/Loctician'),
-        ('nail_tech', 'Nail Tech'),
-        ('tattoo_artist', 'Tattoo Artist'),
-        ('makeup_artist', 'Makeup Artist (MUA)'),
-        ('esthetician', 'Esthetician/Massage Therapist'),
-        ('fitness_trainer', 'Fitness Trainer'),
-        ('other', 'Other'),
-    ]
-    
-    selected_niches = forms.MultipleChoiceField(
-        choices=NICHE_CHOICES,
-        widget=forms.CheckboxSelectMultiple,
-        required=False,
-        help_text='Select all service types this shop offers. First selection = Primary Niche, others = Capabilities.'
-    )
-    
-    class Meta:
-        model = Shop
-        fields = '__all__'
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Pre-populate from existing niches
-        if self.instance.pk and self.instance.niches:
-            self.fields['selected_niches'].initial = self.instance.niches
-    
-    def save(self, commit=True):
-        instance = super().save(commit=False)
-        # Update niches from selected checkboxes
-        selected = self.cleaned_data.get('selected_niches', [])
-        if selected:
-            instance.niches = list(selected)
-        elif not instance.niches:
-            instance.niches = ['other']
-        
-        if commit:
-            instance.save()
-        return instance
-
 @admin.register(Shop)
 class ShopAdmin(admin.ModelAdmin):
-    form = ShopAdminForm
     list_display = (
-        'name', 'owner', 'display_niches', 'address', 'location', 'capacity', 
+        'name', 'owner', 'address', 'location', 'capacity', 
         'status', 'is_deposit_required', 'get_subscription_plan'
     )
     list_filter = (
-        'niche', 'status', 'is_deposit_required', 'is_verified', 
+        'status', 'is_deposit_required', 'is_verified', 
         'subscription__plan__name'
     )
     search_fields = ('name', 'owner__email', 'owner__name', 'address')
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('owner', 'name', 'address', 'location', 'selected_niches', 'about_us'),
-            'description': 'Select niches: First = Primary Niche (drives dashboard), Rest = Capabilities'
+            'fields': ('owner', 'name', 'address', 'location', 'about_us', 'shop_img')
         }),
         ('Operational Settings', {
             'fields': (
@@ -132,14 +78,7 @@ class ShopAdmin(admin.ModelAdmin):
         }),
     )
     
-    # inlines = [ServiceInline, VerificationFileInline]  # Disabled due to S3 image field errors
-    
-    def display_niches(self, obj):
-        """Display niches as comma-separated list"""
-        if obj.niches and len(obj.niches) > 0:
-            return ', '.join(obj.niches)
-        return obj.niche if obj.niche else 'other'
-    display_niches.short_description = 'Niches'
+    inlines = [ServiceInline, VerificationFileInline]
     
     def get_subscription_plan(self, obj):
         """Display current subscription plan"""
@@ -424,151 +363,10 @@ class AutoFillLogAdmin(admin.ModelAdmin):
     readonly_fields = ('original_booking', 'filled_by_booking')
 
 
-# ==========================================
-# TATTOO ARTIST MODELS 🖋️
-# ==========================================
-
-class DesignRequestImageInline(admin.TabularInline):
-    model = DesignRequestImage
-    extra = 1
-    fields = ('image',)
-
-
-@admin.register(PortfolioItem)
-class PortfolioItemAdmin(admin.ModelAdmin):
-    list_display = ('id', 'shop', 'description_preview', 'tag_list', 'created_at')
-    list_filter = ('shop', 'created_at')
-    search_fields = ('shop__name', 'description', 'tags')
-    ordering = ('-created_at',)
-    readonly_fields = ('created_at',)
-    
-    fieldsets = (
-        ('Basic Information', {
-            'fields': ('shop', 'image', 'description')
-        }),
-        ('Tags & Metadata', {
-            'fields': ('tags', 'created_at')
-        }),
-    )
-    
-    def description_preview(self, obj):
-        return obj.description[:50] + '...' if len(obj.description) > 50 else obj.description
-    description_preview.short_description = 'Description'
-    
-    def tag_list(self, obj):
-        return ', '.join(obj.tags) if obj.tags else 'No tags'
-    tag_list.short_description = 'Tags'
-
-
-@admin.register(DesignRequest)
-class DesignRequestAdmin(admin.ModelAdmin):
-    list_display = ('id', 'shop', 'user', 'placement', 'size_approx', 'status', 'created_at')
-    list_filter = ('status', 'shop', 'created_at')
-    search_fields = ('shop__name', 'user__name', 'user__email', 'description', 'placement')
-    ordering = ('-created_at',)
-    readonly_fields = ('created_at',)
-    inlines = [DesignRequestImageInline]
-    
-    fieldsets = (
-        ('Client Information', {
-            'fields': ('shop', 'user', 'booking')
-        }),
-        ('Design Details', {
-            'fields': ('description', 'placement', 'size_approx')
-        }),
-        ('Status', {
-            'fields': ('status', 'created_at')
-        }),
-    )
-
-
-@admin.register(DesignRequestImage)
-class DesignRequestImageAdmin(admin.ModelAdmin):
-    list_display = ('id', 'request', 'created_at')
-    list_filter = ('created_at',)
-    search_fields = ('request__description',)
-    ordering = ('-created_at',)
-
-
-@admin.register(ConsentFormTemplate)
-class ConsentFormTemplateAdmin(admin.ModelAdmin):
-    list_display = ('id', 'shop', 'title', 'is_default', 'created_at')
-    list_filter = ('shop', 'is_default', 'created_at')
-    search_fields = ('shop__name', 'title', 'content')
-    ordering = ('-created_at',)
-    readonly_fields = ('created_at',)
-    
-    fieldsets = (
-        ('Template Information', {
-            'fields': ('shop', 'title', 'is_default')
-        }),
-        ('Content', {
-            'fields': ('content',)
-        }),
-        ('Timestamps', {
-            'fields': ('created_at',)
-        }),
-    )
-
-
-@admin.register(SignedConsentForm)
-class SignedConsentFormAdmin(admin.ModelAdmin):
-    list_display = ('id', 'template', 'user', 'booking', 'signed_at')
-    list_filter = ('template__shop', 'signed_at')
-    search_fields = ('user__name', 'user__email', 'template__title')
-    ordering = ('-signed_at',)
-    readonly_fields = ('signed_at',)
-    
-    fieldsets = (
-        ('Signing Information', {
-            'fields': ('template', 'user', 'booking')
-        }),
-        ('Signature', {
-            'fields': ('signature_image', 'signed_at')
-        }),
-    )
-
-
-@admin.register(IDVerificationRequest)
-class IDVerificationRequestAdmin(admin.ModelAdmin):
-    list_display = ('id', 'shop', 'user', 'status', 'created_at')
-    list_filter = ('status', 'created_at')
-    search_fields = ('user__email', 'user__name', 'shop__name')
-    ordering = ('-created_at',)
-    readonly_fields = ('created_at', 'updated_at')
-    
-    fieldsets = (
-        ('Verification Request', {
-            'fields': ('shop', 'user', 'booking', 'status')
-        }),
-        ('ID Images', {
-            'fields': ('front_image', 'back_image')
-        }),
-        ('Review', {
-            'fields': ('rejection_reason', 'created_at')
-        }),
-    )
-    
-    def get_readonly_fields(self, request, obj=None):
-        """Make status editable but creation time readonly"""
-        if obj:  # editing an existing object
-            return self.readonly_fields
-        return self.readonly_fields
-
-@admin.register(Consultation)
-class ConsultationAdmin(admin.ModelAdmin):
-    list_display = ('id', 'shop', 'customer_name', 'date', 'time', 'status', 'created_at')
-    list_filter = ('status', 'date')
-    search_fields = ('customer_name', 'customer_email', 'shop__name')
-    readonly_fields = ('created_at', 'updated_at')
-    fieldsets = (
-        ('Customer Information', {
-            'fields': ('customer_name', 'customer_email', 'customer_phone')
-        }),
-        ('Appointment Details', {
-            'fields': ('shop', 'date', 'time', 'duration_minutes', 'status', 'notes')
-        }),
-        ('Additional', {
-            'fields': ('design_reference_images', 'created_at', 'updated_at')
-        }),
-    )
+@admin.register(GalleryItem)
+class GalleryItemAdmin(admin.ModelAdmin):
+    list_display = ('shop', 'caption', 'service', 'category_tag', 'is_public', 'created_at')
+    list_filter = ('is_public', 'category_tag', 'shop')
+    search_fields = ('shop__name', 'caption', 'category_tag')
+    readonly_fields = ('thumbnail', 'created_at')
+    raw_id_fields = ('shop', 'service')
