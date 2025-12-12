@@ -111,3 +111,4 @@ django-storages
 paypalhttp>=1.0.0
 paypal-checkout-serversdk>=1.0.0
 daphne
+dj-database-url>=2.1.0
