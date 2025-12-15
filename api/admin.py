@@ -61,7 +61,8 @@ class DesignRequestInline(admin.StackedInline):
     extra = 0
     show_change_link = True
     fields = ['user', 'description', 'placement', 'size_approx', 'status', 'created_at']
-    readonly_fields = ['user', 'created_at']
+    readonly_fields = ['created_at']  # User is now editable
+    raw_id_fields = ['user']  # Use popup selector for user
 
 class ConsultationInline(admin.TabularInline):
     model = Consultation
