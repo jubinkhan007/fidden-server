@@ -149,11 +149,11 @@ class TipSummaryView(APIView):
         tips = Payment.objects.filter(
             booking__shop=shop,
             created_at__gte=cutoff,
-            tip__gt=0
+            tips_amount__gt=0
         ).aggregate(
-            total=Sum('tip'),
+            total=Sum('tips_amount'),
             count=Count('id'),
-            average=Avg('tip')
+            average=Avg('tips_amount')
         )
         
         return Response({
@@ -204,8 +204,8 @@ class NailTechDashboardView(APIView):
         weekly_tips = Payment.objects.filter(
             booking__shop=shop,
             created_at__gte=week_ago,
-            tip__gt=0
-        ).aggregate(total=Sum('tip'))['total'] or 0
+            tips_amount__gt=0
+        ).aggregate(total=Sum('tips_amount'))['total'] or 0
         
         # Lookbook count
         lookbook_count = GalleryItem.objects.filter(shop=shop).count()
