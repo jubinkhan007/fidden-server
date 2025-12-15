@@ -546,6 +546,30 @@ class Service(models.Model):
     description = models.TextField(blank=True, null=True)
     service_img = models.ImageField(upload_to='services/', blank=True, null=True)
     requires_age_18_plus = models.BooleanField(default=False)
+    
+    # Nail Tech specific fields
+    NAIL_STYLE_CHOICES = [
+        ('', 'Not Applicable'),
+        ('acrylic', 'Acrylic'),
+        ('gel', 'Gel'),
+        ('dip', 'Dip Powder'),
+        ('natural', 'Natural/Manicure'),
+        ('pedicure', 'Pedicure'),
+        ('nail_art', 'Nail Art'),
+    ]
+    NAIL_SHAPE_CHOICES = [
+        ('', 'Not Applicable'),
+        ('coffin', 'Coffin'),
+        ('almond', 'Almond'),
+        ('stiletto', 'Stiletto'),
+        ('square', 'Square'),
+        ('round', 'Round'),
+        ('oval', 'Oval'),
+        ('squoval', 'Squoval'),
+    ]
+    nail_style_type = models.CharField(max_length=20, choices=NAIL_STYLE_CHOICES, blank=True, default='')
+    nail_shape = models.CharField(max_length=20, choices=NAIL_SHAPE_CHOICES, blank=True, default='')
+    is_fill_in = models.BooleanField(default=False, help_text="True for fill-in, False for new set")
 
     ## adding new field for experimental
     # Deposit settings
@@ -1501,3 +1525,66 @@ class LoyaltyPoints(models.Model):
             self.save()
             return True, loyalty_program.reward_value
         return False, 0
+
+
+# ==========================================
+# NAIL TECH DASHBOARD MODELS 💅
+# ==========================================
+
+class StyleRequest(models.Model):
+    """
+    Client nail style requests for Nail Tech shops.
+    Similar to DesignRequest but for nail styles.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('declined', 'Declined'),
+        ('completed', 'Completed'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='style_requests')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='style_requests'
+    )
+    booking = models.ForeignKey(
+        'payments.Booking',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='style_requests'
+    )
+    
+    title = models.CharField(max_length=200, blank=True)
+    description = models.TextField(help_text="Client's style description")
+    nail_style_type = models.CharField(max_length=20, choices=Service.NAIL_STYLE_CHOICES, blank=True)
+    nail_shape = models.CharField(max_length=20, choices=Service.NAIL_SHAPE_CHOICES, blank=True)
+    color_preference = models.CharField(max_length=100, blank=True)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['shop', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"Style Request: {self.user.name} - {self.nail_style_type or 'General'}"
+
+
+class StyleRequestImage(models.Model):
+    """Reference images for nail style requests"""
+    style_request = models.ForeignKey(
+        StyleRequest,
+        on_delete=models.CASCADE,
+        related_name='images'
+    )
+    image = models.ImageField(upload_to='style_requests/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return f"Image for {self.style_request}"

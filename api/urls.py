@@ -142,3 +142,19 @@ urlpatterns += [
 ]
 
 
+# ==========================================
+# NAIL TECH DASHBOARD ROUTES 💅
+# ==========================================
+from .nailtech_views import (
+    StyleRequestViewSet, LookbookView, BookingsByStyleView,
+    TipSummaryView, NailTechDashboardView
+)
+
+urlpatterns += [
+    path('nailtech/dashboard/', NailTechDashboardView.as_view(), name='nailtech-dashboard'),
+    path('nailtech/style-requests/', StyleRequestViewSet.as_view({'get': 'list', 'post': 'create'}), name='nailtech-style-requests'),
+    path('nailtech/style-requests/<int:pk>/', StyleRequestViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='nailtech-style-request-detail'),
+    path('nailtech/lookbook/', LookbookView.as_view(), name='nailtech-lookbook'),
+    path('nailtech/bookings-by-style/', BookingsByStyleView.as_view(), name='nailtech-bookings-by-style'),
+    path('nailtech/tip-summary/', TipSummaryView.as_view(), name='nailtech-tip-summary'),
+]

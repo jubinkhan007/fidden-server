@@ -33,6 +33,9 @@ from .models import (
     WalkInEntry,
     LoyaltyProgram,
     LoyaltyPoints,
+    # Nail Tech Dashboard Models
+    StyleRequest,
+    StyleRequestImage,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -538,3 +541,40 @@ class LoyaltyPointsAdmin(admin.ModelAdmin):
     def get_user_name(self, obj):
         return obj.user.name if obj.user else '-'
     get_user_name.short_description = 'Customer'
+
+
+# ==========================================
+# NAIL TECH DASHBOARD ADMIN 💅
+# ==========================================
+
+class StyleRequestImageInline(admin.TabularInline):
+    model = StyleRequestImage
+    extra = 1
+    readonly_fields = ['uploaded_at']
+
+
+@admin.register(StyleRequest)
+class StyleRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_user_name', 'shop', 'nail_style_type', 'nail_shape', 'status', 'created_at')
+    list_filter = ('status', 'nail_style_type', 'nail_shape', 'shop')
+    search_fields = ('user__name', 'user__email', 'shop__name', 'title', 'description')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('shop', 'user', 'booking')
+    inlines = [StyleRequestImageInline]
+    
+    fieldsets = (
+        ('Client Info', {
+            'fields': ('shop', 'user', 'booking')
+        }),
+        ('Style Details', {
+            'fields': ('title', 'description', 'nail_style_type', 'nail_shape', 'color_preference', 'status')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_user_name(self, obj):
+        return obj.user.name if obj.user else '-'
+    get_user_name.short_description = 'Client'
