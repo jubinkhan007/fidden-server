@@ -326,7 +326,10 @@ class ShopSerializer(serializers.ModelSerializer):
         return shop
 
     def update(self, instance, validated_data):
-        plan_name = instance.subscription.plan.name
+        # Safely get plan name - handle shops without subscriptions
+        plan_name = None
+        if hasattr(instance, 'subscription') and instance.subscription and instance.subscription.plan:
+            plan_name = instance.subscription.plan.name
 
         policy_fields = {
             'is_deposit_required', 'deposit_amount', 'default_deposit_percentage',
@@ -346,7 +349,7 @@ class ShopSerializer(serializers.ModelSerializer):
                 if field in validated_data and field not in allowed:
                     validated_data.pop(field)
 
-        # Icon: Can change everything (no restrictions)
+        # Icon or no subscription: Can change everything (no restrictions)
 
         # Continue with update...
         instance.status = "pending"

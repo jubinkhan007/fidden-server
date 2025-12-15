@@ -22,6 +22,13 @@ from .models import (
     WaitlistEntry, 
     AutoFillLog,
     GalleryItem,
+    # Tattoo Artist Models
+    DesignRequest,
+    DesignRequestImage,
+    Consultation,
+    IDVerificationRequest,
+    ConsentFormTemplate,
+    SignedConsentForm,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -39,6 +46,33 @@ class ServiceInline(admin.TabularInline):
 class VerificationFileInline(admin.TabularInline):
     model = VerificationFile
     extra = 1
+
+# ==========================================
+# TATTOO ARTIST INLINES
+# ==========================================
+
+class DesignRequestImageInline(admin.TabularInline):
+    model = DesignRequestImage
+    extra = 1
+    readonly_fields = ['created_at']
+
+class DesignRequestInline(admin.StackedInline):
+    model = DesignRequest
+    extra = 0
+    show_change_link = True
+    fields = ['user', 'description', 'placement', 'size_approx', 'status', 'created_at']
+    readonly_fields = ['user', 'created_at']
+
+class ConsultationInline(admin.TabularInline):
+    model = Consultation
+    extra = 0
+    fields = ['customer_name', 'customer_email', 'date', 'time', 'status', 'notes']
+
+class IDVerificationInline(admin.TabularInline):
+    model = IDVerificationRequest
+    extra = 0
+    fields = ['user', 'status', 'front_image', 'back_image', 'created_at']
+    readonly_fields = ['user', 'created_at']
 
 @admin.register(Shop)
 class ShopAdmin(admin.ModelAdmin):
@@ -78,7 +112,11 @@ class ShopAdmin(admin.ModelAdmin):
         }),
     )
     
-    inlines = [ServiceInline, VerificationFileInline]
+    inlines = [
+        ServiceInline, VerificationFileInline,
+        # Tattoo Artist Inlines
+        DesignRequestInline, ConsultationInline, IDVerificationInline
+    ]
     
     def get_subscription_plan(self, obj):
         """Display current subscription plan"""
@@ -370,3 +408,93 @@ class GalleryItemAdmin(admin.ModelAdmin):
     search_fields = ('shop__name', 'caption', 'category_tag')
     readonly_fields = ('thumbnail', 'created_at')
     raw_id_fields = ('shop', 'service')
+
+
+# ==========================================
+# TATTOO ARTIST ADMIN VIEWS
+# ==========================================
+
+@admin.register(DesignRequest)
+class DesignRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_user_name', 'shop', 'placement', 'size_approx', 'status', 'created_at')
+    list_filter = ('status', 'shop', 'created_at')
+    search_fields = ('user__name', 'user__email', 'shop__name', 'description', 'placement')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('shop', 'user', 'booking')
+    inlines = [DesignRequestImageInline]
+    
+    fieldsets = (
+        ('Client Info', {
+            'fields': ('shop', 'user', 'booking')
+        }),
+        ('Design Details', {
+            'fields': ('description', 'placement', 'size_approx', 'status')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_user_name(self, obj):
+        return obj.user.name if obj.user else '-'
+    get_user_name.short_description = 'Client Name'
+
+
+@admin.register(Consultation)
+class ConsultationAdmin(admin.ModelAdmin):
+    list_display = ('id', 'customer_name', 'shop', 'date', 'time', 'duration_minutes', 'status')
+    list_filter = ('status', 'shop', 'date')
+    search_fields = ('customer_name', 'customer_email', 'shop__name', 'notes')
+    readonly_fields = ('created_at', 'updated_at')
+    
+    fieldsets = (
+        ('Shop', {
+            'fields': ('shop',)
+        }),
+        ('Customer Info', {
+            'fields': ('customer_name', 'customer_email', 'customer_phone')
+        }),
+        ('Appointment', {
+            'fields': ('date', 'time', 'duration_minutes', 'status')
+        }),
+        ('Notes', {
+            'fields': ('notes', 'design_reference_images')
+        }),
+    )
+
+
+@admin.register(IDVerificationRequest)
+class IDVerificationRequestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_user_name', 'shop', 'status', 'created_at')
+    list_filter = ('status', 'shop', 'created_at')
+    search_fields = ('user__name', 'user__email', 'shop__name')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('shop', 'user', 'booking')
+    
+    def get_user_name(self, obj):
+        return obj.user.name if obj.user else '-'
+    get_user_name.short_description = 'Client'
+
+
+@admin.register(ConsentFormTemplate)
+class ConsentFormTemplateAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'shop', 'is_default', 'created_at')
+    list_filter = ('is_default', 'shop')
+    search_fields = ('title', 'shop__name', 'content')
+
+
+@admin.register(SignedConsentForm)
+class SignedConsentFormAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_user_name', 'get_template_title', 'signed_at')
+    list_filter = ('template__shop', 'signed_at')
+    search_fields = ('user__name', 'user__email', 'template__title')
+    raw_id_fields = ('user', 'template', 'booking')
+    
+    def get_user_name(self, obj):
+        return obj.user.name if obj.user else '-'
+    get_user_name.short_description = 'Client'
+    
+    def get_template_title(self, obj):
+        return obj.template.title if obj.template else '-'
+    get_template_title.short_description = 'Form Template'
