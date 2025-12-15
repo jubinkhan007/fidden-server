@@ -32,8 +32,8 @@ class BarberNoShowSerializer(serializers.ModelSerializer):
     customer_email = serializers.EmailField(source='user.email', read_only=True)
     customer_phone = serializers.CharField(source='user.mobile_number', read_only=True)
     service_name = serializers.CharField(source='slot.service.title', read_only=True)
-    scheduled_date = serializers.DateField(source='slot.start_time', read_only=True)
-    scheduled_time = serializers.TimeField(source='slot.start_time', read_only=True)
+    scheduled_date = serializers.SerializerMethodField()
+    scheduled_time = serializers.SerializerMethodField()
     
     class Meta:
         model = Booking
@@ -47,6 +47,18 @@ class BarberNoShowSerializer(serializers.ModelSerializer):
             'scheduled_time',
             'created_at'
         ]
+    
+    def get_scheduled_date(self, obj):
+        """Extract date from slot start_time"""
+        if obj.slot and obj.slot.start_time:
+            return obj.slot.start_time.date().isoformat()
+        return None
+    
+    def get_scheduled_time(self, obj):
+        """Extract time from slot start_time"""
+        if obj.slot and obj.slot.start_time:
+            return obj.slot.start_time.strftime('%H:%M:%S')
+        return None
 
 
 # ==========================================
