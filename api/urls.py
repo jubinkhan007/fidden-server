@@ -96,12 +96,27 @@ urlpatterns = [
 # ==========================================
 # BARBER DASHBOARD ROUTES ✂️
 # ==========================================
-from .barber_views import TodayAppointmentsView, DailyRevenueView, NoShowAlertsView
+from .barber_views import (
+    TodayAppointmentsView, DailyRevenueView, NoShowAlertsView,
+    WalkInQueueView, WalkInEntryDetailView,
+    LoyaltyProgramView, LoyaltyCustomersView, LoyaltyPointsAddView, LoyaltyRedeemView
+)
 
 urlpatterns += [
+    # Core barber endpoints
     path('barber/today-appointments/', TodayAppointmentsView.as_view(), name='barber-today-appointments'),
     path('barber/daily-revenue/', DailyRevenueView.as_view(), name='barber-daily-revenue'),
     path('barber/no-show-alerts/', NoShowAlertsView.as_view(), name='barber-no-show-alerts'),
+    
+    # Walk-in Queue
+    path('barber/walk-ins/', WalkInQueueView.as_view(), name='barber-walk-in-queue'),
+    path('barber/walk-ins/<int:pk>/', WalkInEntryDetailView.as_view(), name='barber-walk-in-detail'),
+    
+    # Loyalty Program
+    path('barber/loyalty/program/', LoyaltyProgramView.as_view(), name='barber-loyalty-program'),
+    path('barber/loyalty/customers/', LoyaltyCustomersView.as_view(), name='barber-loyalty-customers'),
+    path('barber/loyalty/add-points/', LoyaltyPointsAddView.as_view(), name='barber-loyalty-add'),
+    path('barber/loyalty/redeem/', LoyaltyRedeemView.as_view(), name='barber-loyalty-redeem'),
 ]
 
 # ==========================================

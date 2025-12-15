@@ -47,3 +47,77 @@ class BarberNoShowSerializer(serializers.ModelSerializer):
             'scheduled_time',
             'created_at'
         ]
+
+
+# ==========================================
+# WALK-IN QUEUE SERIALIZERS
+# ==========================================
+from .models import WalkInEntry, LoyaltyProgram, LoyaltyPoints
+
+class WalkInEntrySerializer(serializers.ModelSerializer):
+    """Serializer for walk-in queue entries"""
+    service_name = serializers.CharField(source='service.title', read_only=True)
+    user_name = serializers.CharField(source='user.name', read_only=True)
+    wait_time_display = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = WalkInEntry
+        fields = [
+            'id', 'shop', 'customer_name', 'customer_phone', 'customer_email',
+            'user', 'user_name', 'service', 'service_name',
+            'position', 'estimated_wait_minutes', 'wait_time_display',
+            'status', 'notes',
+            'joined_at', 'called_at', 'completed_at'
+        ]
+        read_only_fields = ['id', 'shop', 'joined_at', 'called_at', 'completed_at']
+    
+    def get_wait_time_display(self, obj):
+        """Human readable wait time"""
+        mins = obj.estimated_wait_minutes
+        if mins < 60:
+            return f"{mins} min"
+        hours = mins // 60
+        remaining = mins % 60
+        return f"{hours}h {remaining}m"
+
+
+# ==========================================
+# LOYALTY PROGRAM SERIALIZERS
+# ==========================================
+
+class LoyaltyProgramSerializer(serializers.ModelSerializer):
+    """Serializer for shop loyalty program settings"""
+    
+    class Meta:
+        model = LoyaltyProgram
+        fields = [
+            'id', 'shop', 'is_active',
+            'points_per_dollar', 'points_for_redemption',
+            'reward_type', 'reward_value',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'shop', 'created_at', 'updated_at']
+
+
+class LoyaltyPointsSerializer(serializers.ModelSerializer):
+    """Serializer for customer loyalty points"""
+    user_name = serializers.CharField(source='user.name', read_only=True)
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    can_redeem = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = LoyaltyPoints
+        fields = [
+            'id', 'shop', 'user', 'user_name', 'user_email',
+            'points_balance', 'total_points_earned', 'total_points_redeemed',
+            'can_redeem', 'last_earned_at', 'last_redeemed_at'
+        ]
+        read_only_fields = ['id', 'shop', 'user', 'total_points_earned', 'total_points_redeemed']
+    
+    def get_can_redeem(self, obj):
+        """Check if customer can redeem points"""
+        try:
+            program = obj.shop.loyalty_program
+            return obj.points_balance >= program.points_for_redemption
+        except LoyaltyProgram.DoesNotExist:
+            return False

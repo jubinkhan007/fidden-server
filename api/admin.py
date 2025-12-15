@@ -29,6 +29,10 @@ from .models import (
     IDVerificationRequest,
     ConsentFormTemplate,
     SignedConsentForm,
+    # Barber Dashboard Models
+    WalkInEntry,
+    LoyaltyProgram,
+    LoyaltyPoints,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -499,3 +503,38 @@ class SignedConsentFormAdmin(admin.ModelAdmin):
     def get_template_title(self, obj):
         return obj.template.title if obj.template else '-'
     get_template_title.short_description = 'Form Template'
+
+
+# ==========================================
+# BARBER DASHBOARD ADMIN
+# ==========================================
+
+@admin.register(WalkInEntry)
+class WalkInEntryAdmin(admin.ModelAdmin):
+    list_display = ('id', 'customer_name', 'shop', 'service', 'position', 'status', 'joined_at')
+    list_filter = ('status', 'shop', 'joined_at')
+    search_fields = ('customer_name', 'customer_phone', 'customer_email', 'shop__name')
+    readonly_fields = ('joined_at', 'called_at', 'completed_at')
+    raw_id_fields = ('shop', 'user', 'service')
+    ordering = ['shop', 'position', '-joined_at']
+
+
+@admin.register(LoyaltyProgram)
+class LoyaltyProgramAdmin(admin.ModelAdmin):
+    list_display = ('id', 'shop', 'is_active', 'points_per_dollar', 'points_for_redemption', 'reward_type')
+    list_filter = ('is_active', 'reward_type')
+    search_fields = ('shop__name',)
+    raw_id_fields = ('shop',)
+
+
+@admin.register(LoyaltyPoints)
+class LoyaltyPointsAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_user_name', 'shop', 'points_balance', 'total_points_earned', 'total_points_redeemed')
+    list_filter = ('shop',)
+    search_fields = ('user__name', 'user__email', 'shop__name')
+    raw_id_fields = ('shop', 'user')
+    readonly_fields = ('total_points_earned', 'total_points_redeemed', 'last_earned_at', 'last_redeemed_at')
+    
+    def get_user_name(self, obj):
+        return obj.user.name if obj.user else '-'
+    get_user_name.short_description = 'Customer'

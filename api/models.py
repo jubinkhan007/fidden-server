@@ -1364,3 +1364,140 @@ class Consultation(models.Model):
     
     def __str__(self):
         return f"Consultation: {self.customer_name} on {self.date} at {self.time}"
+
+
+# ==========================================
+# BARBER DASHBOARD MODELS ✂️
+# ==========================================
+
+class WalkInEntry(models.Model):
+    """
+    Walk-in queue entry for barber shops.
+    Customers can join the queue without a pre-booked appointment.
+    """
+    STATUS_CHOICES = [
+        ('waiting', 'Waiting'),
+        ('in_service', 'In Service'),
+        ('completed', 'Completed'),
+        ('no_show', 'No Show'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='walk_ins')
+    customer_name = models.CharField(max_length=200)
+    customer_phone = models.CharField(max_length=20, blank=True)
+    customer_email = models.EmailField(blank=True)
+    # Optional: link to registered user
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True, blank=True, 
+        related_name='walk_ins'
+    )
+    service = models.ForeignKey(
+        'Service', 
+        on_delete=models.SET_NULL, 
+        null=True, blank=True,
+        related_name='walk_ins'
+    )
+    
+    position = models.PositiveIntegerField(default=0, help_text="Queue position")
+    estimated_wait_minutes = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='waiting')
+    notes = models.TextField(blank=True)
+    
+    joined_at = models.DateTimeField(auto_now_add=True)
+    called_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['position', 'joined_at']
+        verbose_name_plural = 'Walk-in entries'
+        indexes = [
+            models.Index(fields=['shop', 'status', 'joined_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.customer_name} - {self.status} (#{self.position})"
+
+
+class LoyaltyProgram(models.Model):
+    """
+    Shop's loyalty program settings.
+    One program per shop.
+    """
+    shop = models.OneToOneField(Shop, on_delete=models.CASCADE, related_name='loyalty_program')
+    
+    is_active = models.BooleanField(default=False)
+    points_per_dollar = models.DecimalField(
+        max_digits=5, decimal_places=2, default=1.00,
+        help_text="Points earned per dollar spent"
+    )
+    points_for_redemption = models.PositiveIntegerField(
+        default=100, 
+        help_text="Points needed to redeem a reward"
+    )
+    reward_type = models.CharField(
+        max_length=20,
+        choices=[
+            ('discount_percent', 'Discount (%)'),
+            ('discount_fixed', 'Discount ($)'),
+            ('free_service', 'Free Service'),
+        ],
+        default='discount_percent'
+    )
+    reward_value = models.DecimalField(
+        max_digits=10, decimal_places=2, default=10.00,
+        help_text="Discount percentage or fixed amount"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Loyalty Program for {self.shop.name}"
+
+
+class LoyaltyPoints(models.Model):
+    """
+    Customer's loyalty points for a specific shop.
+    """
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='loyalty_customers')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='loyalty_points'
+    )
+    
+    points_balance = models.PositiveIntegerField(default=0)
+    total_points_earned = models.PositiveIntegerField(default=0)
+    total_points_redeemed = models.PositiveIntegerField(default=0)
+    
+    last_earned_at = models.DateTimeField(null=True, blank=True)
+    last_redeemed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        unique_together = ['shop', 'user']
+        verbose_name_plural = 'Loyalty points'
+    
+    def __str__(self):
+        return f"{self.user.name} - {self.points_balance} pts @ {self.shop.name}"
+    
+    def add_points(self, amount_spent, loyalty_program):
+        """Add points based on amount spent"""
+        points_earned = int(amount_spent * loyalty_program.points_per_dollar)
+        self.points_balance += points_earned
+        self.total_points_earned += points_earned
+        self.last_earned_at = timezone.now()
+        self.save()
+        return points_earned
+    
+    def redeem_points(self, loyalty_program):
+        """Redeem points for a reward"""
+        if self.points_balance >= loyalty_program.points_for_redemption:
+            self.points_balance -= loyalty_program.points_for_redemption
+            self.total_points_redeemed += loyalty_program.points_for_redemption
+            self.last_redeemed_at = timezone.now()
+            self.save()
+            return True, loyalty_program.reward_value
+        return False, 0
