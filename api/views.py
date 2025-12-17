@@ -2164,14 +2164,57 @@ class GalleryItemView(APIView):
     """
     CRUD operations for shop owner's gallery items.
     GET: List all gallery items for the owner's shop
+         Query params:
+         - tags: comma-separated tags (e.g., ?tags=tattoo,design)
+         - category: category_tag filter (e.g., ?category=face_chart)
+         - niche: niche filter (tattoo, nail, makeup, hair) for quick filtering
     POST: Create a new gallery item (with auto-thumbnail)
     """
     permission_classes = [IsAuthenticated, IsOwnerRole]
     parser_classes = [MultiPartParser, FormParser]
+    
+    # Standard niche tags for filtering
+    NICHE_TAG_MAPPING = {
+        'tattoo': ['tattoo', 'ink', 'design', 'flash', 'custom'],
+        'nail': ['nail', 'manicure', 'pedicure', 'gel', 'acrylic', 'nail_art'],
+        'makeup': ['makeup', 'mua', 'face_chart', 'bridal', 'glam', 'natural'],
+        'hair': ['hair', 'hairstyle', 'color', 'cut', 'braids', 'locs'],
+        'barber': ['barber', 'fade', 'haircut', 'beard', 'lineup'],
+    }
 
     def get(self, request):
         shop = request.user.shop
-        items = GalleryItem.objects.filter(shop=shop).order_by('-created_at')
+        items = GalleryItem.objects.filter(shop=shop)
+        
+        # Filter by niche (uses predefined tag sets)
+        niche = request.query_params.get('niche')
+        if niche and niche in self.NICHE_TAG_MAPPING:
+            niche_tags = self.NICHE_TAG_MAPPING[niche]
+            # Filter by category_tag OR any tag in tags array
+            from django.db.models import Q
+            q_filter = Q()
+            for tag in niche_tags:
+                q_filter |= Q(category_tag__icontains=tag)
+                q_filter |= Q(tags__contains=[tag])
+            items = items.filter(q_filter)
+        
+        # Filter by specific tags (comma-separated)
+        tags_param = request.query_params.get('tags')
+        if tags_param:
+            from django.db.models import Q
+            tags_list = [t.strip() for t in tags_param.split(',')]
+            q_filter = Q()
+            for tag in tags_list:
+                q_filter |= Q(category_tag__icontains=tag)
+                q_filter |= Q(tags__contains=[tag])
+            items = items.filter(q_filter)
+        
+        # Filter by category_tag directly
+        category = request.query_params.get('category')
+        if category:
+            items = items.filter(category_tag__icontains=category)
+        
+        items = items.order_by('-created_at')
         serializer = GalleryItemSerializer(items, many=True, context={'request': request})
         return Response(serializer.data)
 
@@ -2216,10 +2259,52 @@ class PublicGalleryView(APIView):
     """
     Public gallery for client app - lists public gallery items for a shop.
     Paginated with 20 items per page.
+    Query params:
+    - niche: Filter by niche (tattoo, nail, makeup, hair, barber)
+    - tags: comma-separated tags
+    - category: category_tag filter
     """
+    # Standard niche tags for filtering
+    NICHE_TAG_MAPPING = {
+        'tattoo': ['tattoo', 'ink', 'design', 'flash', 'custom'],
+        'nail': ['nail', 'manicure', 'pedicure', 'gel', 'acrylic', 'nail_art'],
+        'makeup': ['makeup', 'mua', 'face_chart', 'bridal', 'glam', 'natural'],
+        'hair': ['hair', 'hairstyle', 'color', 'cut', 'braids', 'locs'],
+        'barber': ['barber', 'fade', 'haircut', 'beard', 'lineup'],
+    }
+    
     def get(self, request, shop_id):
         shop = get_object_or_404(Shop, id=shop_id)
-        items = GalleryItem.objects.filter(shop=shop, is_public=True).order_by('-created_at')
+        items = GalleryItem.objects.filter(shop=shop, is_public=True)
+        
+        # Filter by niche
+        niche = request.query_params.get('niche')
+        if niche and niche in self.NICHE_TAG_MAPPING:
+            from django.db.models import Q
+            niche_tags = self.NICHE_TAG_MAPPING[niche]
+            q_filter = Q()
+            for tag in niche_tags:
+                q_filter |= Q(category_tag__icontains=tag)
+                q_filter |= Q(tags__contains=[tag])
+            items = items.filter(q_filter)
+        
+        # Filter by specific tags
+        tags_param = request.query_params.get('tags')
+        if tags_param:
+            from django.db.models import Q
+            tags_list = [t.strip() for t in tags_param.split(',')]
+            q_filter = Q()
+            for tag in tags_list:
+                q_filter |= Q(category_tag__icontains=tag)
+                q_filter |= Q(tags__contains=[tag])
+            items = items.filter(q_filter)
+        
+        # Filter by category
+        category = request.query_params.get('category')
+        if category:
+            items = items.filter(category_tag__icontains=category)
+        
+        items = items.order_by('-created_at')
         
         # Pagination
         page = request.query_params.get('page', 1)
