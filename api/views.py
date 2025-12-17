@@ -2338,17 +2338,58 @@ from .serializers import (
 
 class PortfolioViewSet(viewsets.ModelViewSet):
     """
-    Portfolio management for tattoo artists.
+    Portfolio management for all niches.
     Uses GalleryItem model with niche-specific filtering.
+    Query params:
+    - niche: Filter by niche (tattoo, nail, makeup, hair, barber)
+    - tags: comma-separated tags
+    - category: category_tag filter
     """
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
     serializer_class = GalleryItemSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     
+    # Standard niche tags for filtering
+    NICHE_TAG_MAPPING = {
+        'tattoo': ['tattoo', 'ink', 'design', 'flash', 'custom'],
+        'nail': ['nail', 'manicure', 'pedicure', 'gel', 'acrylic', 'nail_art'],
+        'makeup': ['makeup', 'mua', 'face_chart', 'bridal', 'glam', 'natural'],
+        'hair': ['hair', 'hairstyle', 'color', 'cut', 'braids', 'locs'],
+        'barber': ['barber', 'fade', 'haircut', 'beard', 'lineup'],
+    }
+    
     def get_queryset(self):
         shop = self.request.user.shop
-        # Portfolio items are gallery items tagged for portfolio
-        return GalleryItem.objects.filter(shop=shop).order_by('-created_at')
+        items = GalleryItem.objects.filter(shop=shop)
+        
+        # Filter by niche (uses predefined tag sets)
+        niche = self.request.query_params.get('niche')
+        if niche and niche in self.NICHE_TAG_MAPPING:
+            from django.db.models import Q
+            niche_tags = self.NICHE_TAG_MAPPING[niche]
+            q_filter = Q()
+            for tag in niche_tags:
+                q_filter |= Q(category_tag__icontains=tag)
+                q_filter |= Q(tags__contains=[tag])
+            items = items.filter(q_filter)
+        
+        # Filter by specific tags (comma-separated)
+        tags_param = self.request.query_params.get('tags')
+        if tags_param:
+            from django.db.models import Q
+            tags_list = [t.strip() for t in tags_param.split(',')]
+            q_filter = Q()
+            for tag in tags_list:
+                q_filter |= Q(category_tag__icontains=tag)
+                q_filter |= Q(tags__contains=[tag])
+            items = items.filter(q_filter)
+        
+        # Filter by category_tag directly
+        category = self.request.query_params.get('category')
+        if category:
+            items = items.filter(category_tag__icontains=category)
+        
+        return items.order_by('-created_at')
     
     def perform_create(self, serializer):
         serializer.save(shop=self.request.user.shop)
