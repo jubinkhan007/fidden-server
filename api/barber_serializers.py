@@ -8,6 +8,7 @@ class BarberAppointmentSerializer(serializers.ModelSerializer):
     customer_email = serializers.EmailField(source='user.email', read_only=True)
     service_name = serializers.CharField(source='slot.service.title', read_only=True)
     service_duration = serializers.IntegerField(source='slot.service.duration', read_only=True)
+    service_niche = serializers.SerializerMethodField()
     start_time = serializers.DateTimeField(source='slot.start_time', read_only=True)
     end_time = serializers.DateTimeField(source='slot.end_time', read_only=True)
     
@@ -19,11 +20,32 @@ class BarberAppointmentSerializer(serializers.ModelSerializer):
             'customer_email',
             'service_name',
             'service_duration',
+            'service_niche',
             'start_time',
             'end_time',
             'status',
             'created_at'
         ]
+    
+    def get_service_niche(self, obj):
+        """Determine the niche based on service nail_style_type or category"""
+        if obj.slot and obj.slot.service:
+            service = obj.slot.service
+            # Check for nail-specific field
+            if service.nail_style_type:
+                return 'nail_tech'
+            # Check category for niche inference
+            if service.category:
+                cat_name = service.category.name.lower()
+                if any(k in cat_name for k in ['nail', 'manicure', 'pedicure', 'gel', 'acrylic']):
+                    return 'nail_tech'
+                if any(k in cat_name for k in ['barber', 'haircut', 'fade', 'beard']):
+                    return 'barber'
+                if any(k in cat_name for k in ['tattoo', 'piercing', 'ink']):
+                    return 'tattoo_artist'
+                if any(k in cat_name for k in ['hair', 'style', 'color', 'loc']):
+                    return 'hairstylist'
+        return 'general'
 
 
 class BarberNoShowSerializer(serializers.ModelSerializer):
