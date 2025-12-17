@@ -491,6 +491,17 @@ class GalleryItem(models.Model):
     category_tag = models.CharField(max_length=50, blank=True, null=True)
     tags = models.JSONField(default=list, blank=True)
     is_public = models.BooleanField(default=True)
+    
+    # MUA Face Charts support - link to client
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='gallery_items',
+        help_text="Link to client for Face Charts"
+    )
+    look_type = models.CharField(max_length=20, blank=True, help_text="For MUA face charts: natural, glam, bridal, etc.")
+    
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -570,6 +581,18 @@ class Service(models.Model):
     nail_style_type = models.CharField(max_length=20, choices=NAIL_STYLE_CHOICES, blank=True, default='')
     nail_shape = models.CharField(max_length=20, choices=NAIL_SHAPE_CHOICES, blank=True, default='')
     is_fill_in = models.BooleanField(default=False, help_text="True for fill-in, False for new set")
+    
+    # MUA (Makeup Artist) specific fields
+    LOOK_TYPE_CHOICES = [
+        ('', 'Not Applicable'),
+        ('natural', 'Natural'),
+        ('glam', 'Glam'),
+        ('bridal', 'Bridal'),
+        ('editorial', 'Editorial'),
+        ('sfx', 'Special Effects'),
+    ]
+    look_type = models.CharField(max_length=20, choices=LOOK_TYPE_CHOICES, blank=True, default='')
+    is_mobile_service = models.BooleanField(default=False, help_text="Can travel to client location")
 
     ## adding new field for experimental
     # Deposit settings
@@ -1588,3 +1611,96 @@ class StyleRequestImage(models.Model):
     
     def __str__(self):
         return f"Image for {self.style_request}"
+
+
+# ==========================================
+# MAKEUP ARTIST (MUA) DASHBOARD MODELS 💄
+# ==========================================
+
+class ClientBeautyProfile(models.Model):
+    """Client skin tone and beauty preferences for MUA"""
+    SKIN_TONE_CHOICES = [
+        ('fair', 'Fair'),
+        ('light', 'Light'),
+        ('medium', 'Medium'),
+        ('olive', 'Olive'),
+        ('tan', 'Tan'),
+        ('deep', 'Deep'),
+    ]
+    SKIN_TYPE_CHOICES = [
+        ('normal', 'Normal'),
+        ('oily', 'Oily'),
+        ('dry', 'Dry'),
+        ('combination', 'Combination'),
+        ('sensitive', 'Sensitive'),
+    ]
+    UNDERTONE_CHOICES = [
+        ('warm', 'Warm'),
+        ('cool', 'Cool'),
+        ('neutral', 'Neutral'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='beauty_profiles')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='beauty_profiles'
+    )
+    
+    skin_tone = models.CharField(max_length=20, choices=SKIN_TONE_CHOICES, blank=True)
+    skin_type = models.CharField(max_length=20, choices=SKIN_TYPE_CHOICES, blank=True)
+    undertone = models.CharField(max_length=20, choices=UNDERTONE_CHOICES, blank=True)
+    allergies = models.TextField(blank=True, help_text="Product allergies or sensitivities")
+    preferences = models.TextField(blank=True, help_text="General beauty preferences and notes")
+    foundation_shade = models.CharField(max_length=50, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['shop', 'client']
+        verbose_name_plural = 'Client beauty profiles'
+    
+    def __str__(self):
+        return f"{self.client.name} - {self.skin_tone or 'Profile'} @ {self.shop.name}"
+
+
+class ProductKitItem(models.Model):
+    """MUA product kit checklist items"""
+    CATEGORY_CHOICES = [
+        ('foundation', 'Foundation'),
+        ('concealer', 'Concealer'),
+        ('powder', 'Powder'),
+        ('blush', 'Blush'),
+        ('bronzer', 'Bronzer'),
+        ('highlighter', 'Highlighter'),
+        ('eyeshadow', 'Eyeshadow'),
+        ('eyeliner', 'Eyeliner'),
+        ('mascara', 'Mascara'),
+        ('brow', 'Brow Products'),
+        ('lipstick', 'Lipstick'),
+        ('lip_gloss', 'Lip Gloss'),
+        ('primer', 'Primer'),
+        ('setting_spray', 'Setting Spray'),
+        ('brush', 'Brush'),
+        ('sponge', 'Sponge/Applicator'),
+        ('skincare', 'Skincare'),
+        ('other', 'Other'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='product_kit')
+    
+    name = models.CharField(max_length=200)
+    brand = models.CharField(max_length=100, blank=True)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='other')
+    quantity = models.PositiveIntegerField(default=1)
+    is_packed = models.BooleanField(default=False, help_text="Checked off in kit")
+    notes = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['category', 'name']
+    
+    def __str__(self):
+        return f"{self.name} ({self.brand or 'No brand'}) - {self.shop.name}"

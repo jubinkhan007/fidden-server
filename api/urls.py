@@ -158,3 +158,21 @@ urlpatterns += [
     path('nailtech/bookings-by-style/', BookingsByStyleView.as_view(), name='nailtech-bookings-by-style'),
     path('nailtech/tip-summary/', TipSummaryView.as_view(), name='nailtech-tip-summary'),
 ]
+
+
+# ==========================================
+# MUA (MAKEUP ARTIST) DASHBOARD ROUTES 💄
+# ==========================================
+from .mua_views import (
+    MUADashboardView, FaceChartListView,
+    ClientBeautyProfileViewSet, ProductKitViewSet
+)
+
+urlpatterns += [
+    path('mua/dashboard/', MUADashboardView.as_view(), name='mua-dashboard'),
+    path('mua/face-charts/', FaceChartListView.as_view(), name='mua-face-charts'),
+    path('mua/client-profiles/', ClientBeautyProfileViewSet.as_view({'get': 'list', 'post': 'create'}), name='mua-client-profiles'),
+    path('mua/client-profiles/<int:pk>/', ClientBeautyProfileViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='mua-client-profile-detail'),
+    path('mua/product-kit/', ProductKitViewSet.as_view({'get': 'list', 'post': 'create'}), name='mua-product-kit'),
+    path('mua/product-kit/<int:pk>/', ProductKitViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='mua-product-kit-detail'),
+]

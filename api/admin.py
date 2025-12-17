@@ -36,6 +36,9 @@ from .models import (
     # Nail Tech Dashboard Models
     StyleRequest,
     StyleRequestImage,
+    # MUA Dashboard Models
+    ClientBeautyProfile,
+    ProductKitItem,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -578,3 +581,45 @@ class StyleRequestAdmin(admin.ModelAdmin):
     def get_user_name(self, obj):
         return obj.user.name if obj.user else '-'
     get_user_name.short_description = 'Client'
+
+
+# ==========================================
+# MUA DASHBOARD ADMIN 💄
+# ==========================================
+
+@admin.register(ClientBeautyProfile)
+class ClientBeautyProfileAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_client_name', 'shop', 'skin_tone', 'skin_type', 'undertone', 'created_at')
+    list_filter = ('skin_tone', 'skin_type', 'undertone', 'shop')
+    search_fields = ('client__name', 'client__email', 'shop__name', 'foundation_shade')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('shop', 'client')
+    
+    fieldsets = (
+        ('Client Info', {
+            'fields': ('shop', 'client')
+        }),
+        ('Skin Profile', {
+            'fields': ('skin_tone', 'skin_type', 'undertone', 'foundation_shade')
+        }),
+        ('Notes', {
+            'fields': ('allergies', 'preferences')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_client_name(self, obj):
+        return obj.client.name if obj.client else '-'
+    get_client_name.short_description = 'Client'
+
+
+@admin.register(ProductKitItem)
+class ProductKitItemAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'brand', 'category', 'quantity', 'is_packed', 'shop')
+    list_filter = ('category', 'is_packed', 'shop')
+    search_fields = ('name', 'brand', 'shop__name')
+    list_editable = ('is_packed', 'quantity')
+    readonly_fields = ('created_at',)
