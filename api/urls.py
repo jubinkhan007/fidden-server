@@ -176,3 +176,22 @@ urlpatterns += [
     path('mua/product-kit/', ProductKitViewSet.as_view({'get': 'list', 'post': 'create'}), name='mua-product-kit'),
     path('mua/product-kit/<int:pk>/', ProductKitViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='mua-product-kit-detail'),
 ]
+
+
+# ==========================================
+# HAIRSTYLIST/LOCTICIAN DASHBOARD ROUTES 💇‍♀️
+# ==========================================
+from .hairstylist_views import (
+    HairstylistDashboardView, WeeklyScheduleView, PrepNotesView,
+    ClientHairProfileViewSet, ProductRecommendationViewSet
+)
+
+urlpatterns += [
+    path('hairstylist/dashboard/', HairstylistDashboardView.as_view(), name='hairstylist-dashboard'),
+    path('hairstylist/weekly-schedule/', WeeklyScheduleView.as_view(), name='hairstylist-weekly-schedule'),
+    path('hairstylist/prep-notes/', PrepNotesView.as_view(), name='hairstylist-prep-notes'),
+    path('hairstylist/client-profiles/', ClientHairProfileViewSet.as_view({'get': 'list', 'post': 'create'}), name='hairstylist-client-profiles'),
+    path('hairstylist/client-profiles/<int:pk>/', ClientHairProfileViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='hairstylist-client-profile-detail'),
+    path('hairstylist/recommendations/', ProductRecommendationViewSet.as_view({'get': 'list', 'post': 'create'}), name='hairstylist-recommendations'),
+    path('hairstylist/recommendations/<int:pk>/', ProductRecommendationViewSet.as_view({'get': 'retrieve', 'delete': 'destroy'}), name='hairstylist-recommendation-detail'),
+]

@@ -39,6 +39,9 @@ from .models import (
     # MUA Dashboard Models
     ClientBeautyProfile,
     ProductKitItem,
+    # Hairstylist Dashboard Models
+    ClientHairProfile,
+    ProductRecommendation,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -623,3 +626,52 @@ class ProductKitItemAdmin(admin.ModelAdmin):
     search_fields = ('name', 'brand', 'shop__name')
     list_editable = ('is_packed', 'quantity')
     readonly_fields = ('created_at',)
+
+
+# ==========================================
+# HAIRSTYLIST DASHBOARD ADMIN 💇‍♀️
+# ==========================================
+
+@admin.register(ClientHairProfile)
+class ClientHairProfileAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_client_name', 'shop', 'hair_type', 'hair_texture', 'current_color', 'created_at')
+    list_filter = ('hair_type', 'hair_texture', 'hair_porosity', 'shop')
+    search_fields = ('client__name', 'client__email', 'shop__name', 'natural_color', 'current_color')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('shop', 'client')
+    
+    fieldsets = (
+        ('Client Info', {
+            'fields': ('shop', 'client')
+        }),
+        ('Hair Profile', {
+            'fields': ('hair_type', 'hair_texture', 'hair_porosity', 'natural_color', 'current_color', 'scalp_condition')
+        }),
+        ('History', {
+            'fields': ('color_history', 'chemical_history')
+        }),
+        ('Notes', {
+            'fields': ('allergies', 'preferences')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_client_name(self, obj):
+        return obj.client.name if obj.client else '-'
+    get_client_name.short_description = 'Client'
+
+
+@admin.register(ProductRecommendation)
+class ProductRecommendationAdmin(admin.ModelAdmin):
+    list_display = ('id', 'product_name', 'brand', 'category', 'get_client_name', 'shop', 'created_at')
+    list_filter = ('category', 'shop')
+    search_fields = ('product_name', 'brand', 'client__name', 'shop__name')
+    readonly_fields = ('created_at',)
+    raw_id_fields = ('shop', 'client', 'booking')
+    
+    def get_client_name(self, obj):
+        return obj.client.name if obj.client else '-'
+    get_client_name.short_description = 'Client'

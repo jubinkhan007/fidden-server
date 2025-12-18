@@ -172,6 +172,9 @@ class Booking(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # Hairstylist prep notes
+    prep_notes = models.TextField(blank=True, help_text="Stylist prep notes for appointment")
 
     def __str__(self):
         return f"Booking {self.id} - {self.status}"

@@ -593,6 +593,21 @@ class Service(models.Model):
     ]
     look_type = models.CharField(max_length=20, choices=LOOK_TYPE_CHOICES, blank=True, default='')
     is_mobile_service = models.BooleanField(default=False, help_text="Can travel to client location")
+    
+    # Hairstylist/Loctician specific fields
+    HAIR_SERVICE_TYPE_CHOICES = [
+        ('', 'Not Applicable'),
+        ('cut', 'Cut'),
+        ('color', 'Color'),
+        ('style', 'Style'),
+        ('treatment', 'Treatment'),
+        ('braids', 'Braids'),
+        ('locs', 'Locs'),
+        ('extensions', 'Extensions'),
+        ('wash', 'Wash & Style'),
+    ]
+    hair_service_type = models.CharField(max_length=20, choices=HAIR_SERVICE_TYPE_CHOICES, blank=True, default='')
+    includes_consultation = models.BooleanField(default=False, help_text="Service includes consultation")
 
     ## adding new field for experimental
     # Deposit settings
@@ -1704,3 +1719,107 @@ class ProductKitItem(models.Model):
     
     def __str__(self):
         return f"{self.name} ({self.brand or 'No brand'}) - {self.shop.name}"
+
+
+# ==========================================
+# HAIRSTYLIST/LOCTICIAN DASHBOARD MODELS 💇‍♀️
+# ==========================================
+
+class ClientHairProfile(models.Model):
+    """Client hair type, history, and preferences for hairstylists/locticians"""
+    HAIR_TYPE_CHOICES = [
+        ('1a', '1A - Fine Straight'),
+        ('1b', '1B - Medium Straight'),
+        ('1c', '1C - Coarse Straight'),
+        ('2a', '2A - Fine Wavy'),
+        ('2b', '2B - Medium Wavy'),
+        ('2c', '2C - Coarse Wavy'),
+        ('3a', '3A - Loose Curls'),
+        ('3b', '3B - Springy Curls'),
+        ('3c', '3C - Tight Curls'),
+        ('4a', '4A - Soft Coils'),
+        ('4b', '4B - Z-Pattern Coils'),
+        ('4c', '4C - Tight Coils'),
+    ]
+    HAIR_TEXTURE_CHOICES = [
+        ('fine', 'Fine'),
+        ('medium', 'Medium'),
+        ('coarse', 'Coarse'),
+    ]
+    HAIR_POROSITY_CHOICES = [
+        ('low', 'Low'),
+        ('normal', 'Normal'),
+        ('high', 'High'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='hair_profiles')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='hair_profiles'
+    )
+    
+    hair_type = models.CharField(max_length=10, choices=HAIR_TYPE_CHOICES, blank=True)
+    hair_texture = models.CharField(max_length=20, choices=HAIR_TEXTURE_CHOICES, blank=True)
+    hair_porosity = models.CharField(max_length=20, choices=HAIR_POROSITY_CHOICES, blank=True)
+    natural_color = models.CharField(max_length=50, blank=True)
+    current_color = models.CharField(max_length=50, blank=True)
+    color_history = models.TextField(blank=True, help_text="Previous color treatments")
+    chemical_history = models.TextField(blank=True, help_text="Relaxers, perms, keratin, etc.")
+    scalp_condition = models.CharField(max_length=100, blank=True, help_text="Dry, oily, sensitive, etc.")
+    allergies = models.TextField(blank=True, help_text="Product allergies or sensitivities")
+    preferences = models.TextField(blank=True, help_text="Style preferences and notes")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['shop', 'client']
+        verbose_name_plural = 'Client hair profiles'
+    
+    def __str__(self):
+        return f"{self.client.name} - {self.get_hair_type_display() or 'Profile'} @ {self.shop.name}"
+
+
+class ProductRecommendation(models.Model):
+    """Product recommendations for clients from service providers"""
+    CATEGORY_CHOICES = [
+        ('shampoo', 'Shampoo'),
+        ('conditioner', 'Conditioner'),
+        ('treatment', 'Treatment'),
+        ('oil', 'Oil'),
+        ('styling', 'Styling Product'),
+        ('protectant', 'Heat Protectant'),
+        ('leave_in', 'Leave-In'),
+        ('mask', 'Hair Mask'),
+        ('color', 'Color Product'),
+        ('tool', 'Tool/Accessory'),
+        ('other', 'Other'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='product_recommendations')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='product_recommendations'
+    )
+    booking = models.ForeignKey(
+        'payments.Booking',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='product_recommendations'
+    )
+    
+    product_name = models.CharField(max_length=200)
+    brand = models.CharField(max_length=100, blank=True)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='other')
+    notes = models.TextField(blank=True, help_text="Usage instructions or notes")
+    purchase_link = models.URLField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.product_name} for {self.client.name}"
