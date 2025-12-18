@@ -150,7 +150,10 @@ class PrepNotesView(APIView):
 
 
 class ClientHairProfileViewSet(viewsets.ModelViewSet):
-    """CRUD for client hair profiles"""
+    """
+    CRUD for client hair profiles - OWNER ONLY.
+    Owner can view/create/edit profiles for any client in their shop.
+    """
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
     serializer_class = ClientHairProfileSerializer
     
@@ -161,6 +164,65 @@ class ClientHairProfileViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         shop = get_object_or_404(Shop, owner=self.request.user)
         serializer.save(shop=shop)
+
+
+class MyHairProfileView(APIView):
+    """
+    Client's own hair profile - self-service.
+    Clients can view/create/edit their OWN profile for a specific shop.
+    
+    Query param: ?shop_id=5
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get client's own hair profile for a shop"""
+        shop_id = request.query_params.get('shop_id')
+        if not shop_id:
+            return Response({'error': 'shop_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        shop = get_object_or_404(Shop, id=shop_id)
+        profile = ClientHairProfile.objects.filter(shop=shop, client=request.user).first()
+        
+        if not profile:
+            return Response({'exists': False, 'profile': None})
+        
+        serializer = ClientHairProfileSerializer(profile)
+        return Response({'exists': True, 'profile': serializer.data})
+    
+    def post(self, request):
+        """Create client's own hair profile"""
+        shop_id = request.data.get('shop_id')
+        if not shop_id:
+            return Response({'error': 'shop_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        shop = get_object_or_404(Shop, id=shop_id)
+        
+        # Check if profile already exists
+        if ClientHairProfile.objects.filter(shop=shop, client=request.user).exists():
+            return Response({'error': 'Profile already exists. Use PATCH to update.'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        serializer = ClientHairProfileSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(shop=shop, client=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    def patch(self, request):
+        """Update client's own hair profile"""
+        shop_id = request.data.get('shop_id')
+        if not shop_id:
+            return Response({'error': 'shop_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        shop = get_object_or_404(Shop, id=shop_id)
+        profile = get_object_or_404(ClientHairProfile, shop=shop, client=request.user)
+        
+        serializer = ClientHairProfileSerializer(profile, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class ProductRecommendationViewSet(viewsets.ModelViewSet):

@@ -123,6 +123,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.name', read_only=True)
     profile_image = serializers.SerializerMethodField()   
     shop_name = serializers.CharField(source='shop.name', read_only=True)
+    shop_niche = serializers.SerializerMethodField()
     slot_time = serializers.DateTimeField(source='slot.start_time', read_only=True)
     service_title = serializers.CharField(source='slot.service.title', read_only=True)
     service_duration = serializers.CharField(source='slot.service.duration', read_only=True) 
@@ -147,6 +148,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             'profile_image',   
             'shop',
             'shop_name',
+            'shop_niche',
             'slot',
             'slot_time',
             'service_title',
@@ -163,6 +165,8 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             'service_price',
             'remaining_amount',
             'checkout_initiated',
+            # Hairstylist prep notes
+            'prep_notes',
         ]
         read_only_fields = fields
 
@@ -196,6 +200,12 @@ class ownerBookingSerializer(serializers.ModelSerializer):
         if hasattr(obj, 'payment') and obj.payment:
             return obj.payment.checkout_initiated_at is not None
         return False
+    
+    def get_shop_niche(self, obj):
+        """Return shop's primary niche for conditional UI rendering."""
+        if obj.shop:
+            return obj.shop.niche
+        return None
 
     def to_representation(self, instance):
         """Override to ensure slot_time is returned in UTC, not Django's default timezone."""

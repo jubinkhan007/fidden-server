@@ -183,7 +183,7 @@ urlpatterns += [
 # ==========================================
 from .hairstylist_views import (
     HairstylistDashboardView, WeeklyScheduleView, PrepNotesView,
-    ClientHairProfileViewSet, ProductRecommendationViewSet
+    ClientHairProfileViewSet, ProductRecommendationViewSet, MyHairProfileView
 )
 
 urlpatterns += [
@@ -194,4 +194,6 @@ urlpatterns += [
     path('hairstylist/client-profiles/<int:pk>/', ClientHairProfileViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='hairstylist-client-profile-detail'),
     path('hairstylist/recommendations/', ProductRecommendationViewSet.as_view({'get': 'list', 'post': 'create'}), name='hairstylist-recommendations'),
     path('hairstylist/recommendations/<int:pk>/', ProductRecommendationViewSet.as_view({'get': 'retrieve', 'delete': 'destroy'}), name='hairstylist-recommendation-detail'),
+    # Client self-service hair profile
+    path('my-hair-profile/', MyHairProfileView.as_view(), name='my-hair-profile'),
 ]
