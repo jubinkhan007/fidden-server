@@ -579,16 +579,98 @@ lib/features/business_owner/hairstylist/
 
 ---
 
+## Client Self-Service Hair Profile (NEW!)
+
+Allows **clients** to create/edit their **own** hair profile before appointments.
+
+### API Constant
+```dart
+static const String myHairProfile = '$_baseUrl/api/my-hair-profile/';
+```
+
+### Endpoints
+
+**GET** `/api/my-hair-profile/?shop_id=5`
+```json
+{
+  "exists": true,
+  "profile": {
+    "id": 1,
+    "shop": 5,
+    "client": 42,
+    "hair_type": "3c",
+    "hair_type_display": "3C - Tight Curls",
+    ...
+  }
+}
+// or if no profile: {"exists": false, "profile": null}
+```
+
+**POST** `/api/my-hair-profile/` (Create)
+```json
+{
+  "shop_id": 5,
+  "hair_type": "3c",
+  "hair_texture": "medium",
+  "hair_porosity": "high",
+  "natural_color": "Black",
+  "allergies": "PPD sensitivity"
+}
+```
+
+**PATCH** `/api/my-hair-profile/` (Update)
+```json
+{
+  "shop_id": 5,
+  "current_color": "Auburn",
+  "preferences": "No sulfates"
+}
+```
+
+---
+
+## Booking Response Enhancements
+
+The booking response now includes:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prep_notes` | string | Stylist's preparation notes for this appointment |
+| `shop_niche` | string | Shop's primary niche (hairstylist, barber, etc.) |
+
+```json
+{
+  "id": 123,
+  "user_name": "Sarah Johnson",
+  "shop_name": "Style Studio",
+  "shop_niche": "hairstylist",
+  "slot_time": "2025-12-18T10:00:00Z",
+  "prep_notes": "Client wants balayage",
+  ...
+}
+```
+
+**Flutter Usage:**
+```dart
+// Conditionally show prep notes input based on niche
+if (booking.shopNiche == 'hairstylist') {
+  // Show prep notes section
+}
+```
+
+---
+
 ## Summary
 
-| Feature | Backend Status | Flutter Action |
-|---------|----------------|----------------|
-| Dashboard metrics | ✅ Ready | Build `HairstylistDashboardContent` |
-| Weekly schedule | ✅ Ready | Build calendar/list view |
-| Prep notes | ✅ Ready | Build editable card |
-| Client hair profiles | ✅ Ready | Build profile list/detail |
-| Product recommendations | ✅ Ready | Build recommendation list |
-| Appointments | ✅ Reuse barber | No changes |
-| Revenue | ✅ Reuse barber | No changes |
-| Portfolio | ✅ Use `?niche=hair` | No changes |
-| Reviews | ✅ Reuse existing | No changes |
+| Feature | Endpoint | Who Can Use |
+|---------|----------|-------------|
+| Dashboard metrics | `/api/hairstylist/dashboard/` | Owner |
+| Weekly schedule | `/api/hairstylist/weekly-schedule/` | Owner |
+| Prep notes | `/api/hairstylist/prep-notes/` | Owner |
+| Client profiles (manage all) | `/api/hairstylist/client-profiles/` | Owner |
+| Product recommendations | `/api/hairstylist/recommendations/` | Owner |
+| **My Hair Profile (self-service)** | `/api/my-hair-profile/` | **Client** |
+| Appointments | `/api/barber/today-appointments/` | Owner |
+| Revenue | `/api/barber/daily-revenue/` | Owner |
+| Portfolio | `/api/portfolio/?niche=hair` | Owner |
+| Reviews | `/api/ratings/shop/{id}/` | Public |
