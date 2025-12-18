@@ -2050,3 +2050,97 @@ class RetailProduct(models.Model):
     
     def __str__(self):
         return f"{self.name} ({self.brand or 'No brand'}) - ${self.price}"
+
+
+# ==========================================
+# MASSAGE THERAPIST DASHBOARD 💆
+# ==========================================
+
+class ClientMassageProfile(models.Model):
+    """Client massage preferences and session history for massage therapists"""
+    PRESSURE_CHOICES = [
+        ('light', 'Light'),
+        ('medium', 'Medium'),
+        ('firm', 'Firm'),
+        ('deep', 'Deep Tissue'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='massage_profiles')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='massage_profiles'
+    )
+    
+    # Massage preferences
+    pressure_preference = models.CharField(max_length=20, choices=PRESSURE_CHOICES, blank=True)
+    areas_to_focus = models.TextField(blank=True, help_text="Shoulders, neck, lower back, etc.")
+    areas_to_avoid = models.TextField(blank=True, help_text="Injured areas, sensitive spots")
+    
+    # Physical considerations
+    has_injuries = models.BooleanField(default=False)
+    injury_details = models.TextField(blank=True)
+    has_chronic_conditions = models.BooleanField(default=False)
+    chronic_conditions = models.TextField(blank=True, help_text="Arthritis, fibromyalgia, etc.")
+    
+    # Session preferences
+    preferred_techniques = models.JSONField(default=list, help_text="['swedish', 'deep_tissue', 'hot_stone']")
+    temperature_preference = models.CharField(max_length=20, blank=True, help_text="warm, cool, no preference")
+    music_preference = models.CharField(max_length=50, blank=True)
+    aromatherapy_preference = models.CharField(max_length=100, blank=True)
+    
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['shop', 'client']
+        verbose_name_plural = 'Client massage profiles'
+    
+    def __str__(self):
+        return f"{self.client.name} - {self.get_pressure_preference_display() or 'Profile'} @ {self.shop.name}"
+
+
+class SessionNote(models.Model):
+    """Session notes per booking for massage therapists"""
+    TECHNIQUE_CHOICES = [
+        ('swedish', 'Swedish'),
+        ('deep_tissue', 'Deep Tissue'),
+        ('hot_stone', 'Hot Stone'),
+        ('sports', 'Sports Massage'),
+        ('prenatal', 'Prenatal'),
+        ('reflexology', 'Reflexology'),
+        ('trigger_point', 'Trigger Point'),
+        ('lymphatic', 'Lymphatic Drainage'),
+        ('thai', 'Thai Massage'),
+        ('other', 'Other'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='session_notes')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='session_notes'
+    )
+    booking = models.OneToOneField(
+        'payments.Booking',
+        on_delete=models.CASCADE,
+        related_name='session_note'
+    )
+    
+    technique_used = models.CharField(max_length=20, choices=TECHNIQUE_CHOICES)
+    pressure_applied = models.CharField(max_length=20, blank=True)
+    areas_worked = models.TextField(blank=True)
+    tension_observations = models.TextField(blank=True)
+    recommendations = models.TextField(blank=True, help_text="Stretches, home care, etc.")
+    next_session_notes = models.TextField(blank=True)
+    duration_minutes = models.PositiveIntegerField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.get_technique_used_display()} - {self.client.name} ({self.booking.id})"

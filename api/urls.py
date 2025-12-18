@@ -222,3 +222,24 @@ urlpatterns += [
     path('my-skin-profile/', MySkinProfileView.as_view(), name='my-skin-profile'),
     path('my-health-disclosure/', MyHealthDisclosureView.as_view(), name='my-health-disclosure'),
 ]
+
+
+# ==========================================
+# MASSAGE THERAPIST ROUTES 💆
+# ==========================================
+from .massage_views import (
+    MassageDashboardView, ClientMassageProfileViewSet, MyMassageProfileView,
+    MassageHealthDisclosureViewSet, SessionNoteViewSet
+)
+
+urlpatterns += [
+    path('massage/dashboard/', MassageDashboardView.as_view(), name='massage-dashboard'),
+    path('massage/client-profiles/', ClientMassageProfileViewSet.as_view({'get': 'list', 'post': 'create'}), name='massage-client-profiles'),
+    path('massage/client-profiles/<int:pk>/', ClientMassageProfileViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='massage-client-profile-detail'),
+    path('massage/health-disclosures/', MassageHealthDisclosureViewSet.as_view({'get': 'list', 'post': 'create'}), name='massage-health-disclosures'),
+    path('massage/health-disclosures/<int:pk>/', MassageHealthDisclosureViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='massage-health-disclosure-detail'),
+    path('massage/session-notes/', SessionNoteViewSet.as_view({'get': 'list', 'post': 'create'}), name='massage-session-notes'),
+    path('massage/session-notes/<int:pk>/', SessionNoteViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='massage-session-note-detail'),
+    # Client self-service
+    path('my-massage-profile/', MyMassageProfileView.as_view(), name='my-massage-profile'),
+]

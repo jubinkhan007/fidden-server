@@ -47,6 +47,9 @@ from .models import (
     HealthDisclosure,
     TreatmentNote,
     RetailProduct,
+    # Massage Therapist Dashboard Models
+    ClientMassageProfile,
+    SessionNote,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -732,3 +735,33 @@ class RetailProductAdmin(admin.ModelAdmin):
     search_fields = ('name', 'brand', 'shop__name')
     readonly_fields = ('created_at',)
     list_editable = ('in_stock', 'is_active', 'price')
+
+
+# ==========================================
+# MASSAGE THERAPIST DASHBOARD ADMIN 💆
+# ==========================================
+
+@admin.register(ClientMassageProfile)
+class ClientMassageProfileAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_client_name', 'shop', 'pressure_preference', 'has_injuries', 'has_chronic_conditions', 'created_at')
+    list_filter = ('pressure_preference', 'has_injuries', 'has_chronic_conditions', 'shop')
+    search_fields = ('client__name', 'client__email', 'shop__name')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('shop', 'client')
+    
+    def get_client_name(self, obj):
+        return obj.client.name if obj.client else '-'
+    get_client_name.short_description = 'Client'
+
+
+@admin.register(SessionNote)
+class SessionNoteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_client_name', 'technique_used', 'booking', 'duration_minutes', 'shop', 'created_at')
+    list_filter = ('technique_used', 'shop')
+    search_fields = ('client__name', 'shop__name', 'tension_observations', 'recommendations')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('shop', 'client', 'booking')
+    
+    def get_client_name(self, obj):
+        return obj.client.name if obj.client else '-'
+    get_client_name.short_description = 'Client'
