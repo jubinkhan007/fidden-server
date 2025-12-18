@@ -161,6 +161,19 @@ class ClientHairProfileViewSet(viewsets.ModelViewSet):
         shop = get_object_or_404(Shop, owner=self.request.user)
         return ClientHairProfile.objects.filter(shop=shop).select_related('client')
     
+    def create(self, request, *args, **kwargs):
+        """Override to check for existing profile before creating"""
+        shop = get_object_or_404(Shop, owner=request.user)
+        client_id = request.data.get('client')
+        
+        if client_id and ClientHairProfile.objects.filter(shop=shop, client_id=client_id).exists():
+            return Response(
+                {'error': 'Profile already exists for this client. Use PATCH to update.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return super().create(request, *args, **kwargs)
+    
     def perform_create(self, serializer):
         shop = get_object_or_404(Shop, owner=self.request.user)
         serializer.save(shop=shop)
