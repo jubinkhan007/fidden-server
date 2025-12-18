@@ -608,6 +608,22 @@ class Service(models.Model):
     ]
     hair_service_type = models.CharField(max_length=20, choices=HAIR_SERVICE_TYPE_CHOICES, blank=True, default='')
     includes_consultation = models.BooleanField(default=False, help_text="Service includes consultation")
+    
+    # Esthetician/Massage Therapist specific fields
+    ESTHETICIAN_SERVICE_TYPE_CHOICES = [
+        ('', 'Not Applicable'),
+        ('facial', 'Facial'),
+        ('massage', 'Massage'),
+        ('body', 'Body Treatment'),
+        ('wax', 'Waxing'),
+        ('lash', 'Lash/Brow'),
+        ('peel', 'Chemical Peel'),
+        ('microderm', 'Microdermabrasion'),
+        ('wrap', 'Body Wrap'),
+        ('scrub', 'Body Scrub'),
+    ]
+    esthetician_service_type = models.CharField(max_length=20, choices=ESTHETICIAN_SERVICE_TYPE_CHOICES, blank=True, default='')
+    requires_health_disclosure = models.BooleanField(default=False, help_text="Requires health disclosure form")
 
     ## adding new field for experimental
     # Deposit settings
@@ -1782,8 +1798,9 @@ class ClientHairProfile(models.Model):
 
 
 class ProductRecommendation(models.Model):
-    """Product recommendations for clients from service providers"""
+    """Product recommendations for clients from service providers (shared across niches)"""
     CATEGORY_CHOICES = [
+        # Hair
         ('shampoo', 'Shampoo'),
         ('conditioner', 'Conditioner'),
         ('treatment', 'Treatment'),
@@ -1793,8 +1810,23 @@ class ProductRecommendation(models.Model):
         ('leave_in', 'Leave-In'),
         ('mask', 'Hair Mask'),
         ('color', 'Color Product'),
+        # Esthetician/Skincare
+        ('cleanser', 'Cleanser'),
+        ('serum', 'Serum'),
+        ('moisturizer', 'Moisturizer'),
+        ('sunscreen', 'Sunscreen'),
+        ('exfoliant', 'Exfoliant'),
+        ('toner', 'Toner'),
+        ('eye_cream', 'Eye Cream'),
+        # General
         ('tool', 'Tool/Accessory'),
         ('other', 'Other'),
+    ]
+    NICHE_CHOICES = [
+        ('general', 'General'),
+        ('hair', 'Hair'),
+        ('esthetician', 'Esthetician'),
+        ('massage', 'Massage'),
     ]
     
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='product_recommendations')
@@ -1816,6 +1848,16 @@ class ProductRecommendation(models.Model):
     notes = models.TextField(blank=True, help_text="Usage instructions or notes")
     purchase_link = models.URLField(blank=True)
     
+    # New fields for multi-niche support
+    niche = models.CharField(max_length=20, choices=NICHE_CHOICES, default='general')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_recommendations'
+    )
+    is_active = models.BooleanField(default=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -1823,3 +1865,188 @@ class ProductRecommendation(models.Model):
     
     def __str__(self):
         return f"{self.product_name} for {self.client.name}"
+
+
+# ==========================================
+# ESTHETICIAN/MASSAGE THERAPIST DASHBOARD 🧖
+# ==========================================
+
+class ClientSkinProfile(models.Model):
+    """Client skin profile with skincare regimen (merged) for estheticians"""
+    SKIN_TYPE_CHOICES = [
+        ('normal', 'Normal'),
+        ('dry', 'Dry'),
+        ('oily', 'Oily'),
+        ('combination', 'Combination'),
+        ('sensitive', 'Sensitive'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='skin_profiles')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='skin_profiles'
+    )
+    
+    # Skin assessment
+    skin_type = models.CharField(max_length=20, choices=SKIN_TYPE_CHOICES, blank=True)
+    primary_concerns = models.JSONField(default=list, help_text="['acne', 'aging', 'pigmentation']")
+    allergies = models.TextField(blank=True)
+    sensitivities = models.TextField(blank=True)
+    current_products = models.TextField(blank=True, help_text="Products client currently uses")
+    
+    # Regimen (merged from SkincareRegimen)
+    morning_routine = models.JSONField(default=list, help_text="[{step, product, notes}]")
+    evening_routine = models.JSONField(default=list)
+    weekly_treatments = models.JSONField(default=list)
+    regimen_notes = models.TextField(blank=True)
+    
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['shop', 'client']
+        verbose_name_plural = 'Client skin profiles'
+    
+    def __str__(self):
+        return f"{self.client.name} - {self.get_skin_type_display() or 'Profile'} @ {self.shop.name}"
+
+
+class HealthDisclosure(models.Model):
+    """Health disclosure form for esthetician/massage services"""
+    PRESSURE_CHOICES = [
+        ('light', 'Light'),
+        ('medium', 'Medium'),
+        ('firm', 'Firm'),
+        ('deep', 'Deep Tissue'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='health_disclosures')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='health_disclosures'
+    )
+    booking = models.ForeignKey(
+        'payments.Booking',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='health_disclosures'
+    )
+    
+    # Medical information
+    has_medical_conditions = models.BooleanField(default=False)
+    conditions_detail = models.TextField(blank=True)
+    current_medications = models.TextField(blank=True)
+    allergies = models.TextField(blank=True)
+    pregnant_or_nursing = models.BooleanField(default=False)
+    recent_surgeries = models.TextField(blank=True)
+    
+    # Massage-specific
+    pressure_preference = models.CharField(max_length=20, choices=PRESSURE_CHOICES, blank=True)
+    areas_to_avoid = models.TextField(blank=True)
+    areas_to_focus = models.TextField(blank=True)
+    
+    # Acknowledgment
+    acknowledged = models.BooleanField(default=False)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_disclosures'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name_plural = 'Health disclosures'
+    
+    def __str__(self):
+        return f"Disclosure: {self.client.name} @ {self.shop.name}"
+
+
+class TreatmentNote(models.Model):
+    """Treatment notes per booking for esthetician/massage services"""
+    TREATMENT_TYPE_CHOICES = [
+        ('facial', 'Facial'),
+        ('massage', 'Massage'),
+        ('body', 'Body Treatment'),
+        ('wax', 'Waxing'),
+        ('lash', 'Lash/Brow'),
+        ('peel', 'Chemical Peel'),
+        ('microderm', 'Microdermabrasion'),
+        ('wrap', 'Body Wrap'),
+        ('scrub', 'Body Scrub'),
+        ('other', 'Other'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='treatment_notes')
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='treatment_notes'
+    )
+    booking = models.OneToOneField(
+        'payments.Booking',
+        on_delete=models.CASCADE,
+        related_name='treatment_note'
+    )
+    
+    treatment_type = models.CharField(max_length=20, choices=TREATMENT_TYPE_CHOICES)
+    products_used = models.TextField(blank=True)
+    observations = models.TextField(blank=True)
+    recommendations = models.TextField(blank=True)
+    next_appointment_notes = models.TextField(blank=True)
+    before_photo_url = models.URLField(blank=True)
+    after_photo_url = models.URLField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.get_treatment_type_display()} - {self.client.name} ({self.booking.id})"
+
+
+class RetailProduct(models.Model):
+    """Retail products offered by shop for sale"""
+    CATEGORY_CHOICES = [
+        ('cleanser', 'Cleanser'),
+        ('serum', 'Serum'),
+        ('moisturizer', 'Moisturizer'),
+        ('sunscreen', 'Sunscreen'),
+        ('mask', 'Mask'),
+        ('exfoliant', 'Exfoliant'),
+        ('toner', 'Toner'),
+        ('eye_cream', 'Eye Cream'),
+        ('oil', 'Oil'),
+        ('body_care', 'Body Care'),
+        ('tool', 'Tool/Accessory'),
+        ('other', 'Other'),
+    ]
+    
+    shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='retail_products')
+    
+    name = models.CharField(max_length=200)
+    brand = models.CharField(max_length=100, blank=True)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='other')
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.TextField(blank=True)
+    image_url = models.URLField(blank=True)
+    in_stock = models.BooleanField(default=True)
+    purchase_link = models.URLField(blank=True)
+    is_active = models.BooleanField(default=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['category', 'name']
+    
+    def __str__(self):
+        return f"{self.name} ({self.brand or 'No brand'}) - ${self.price}"

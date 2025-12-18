@@ -42,6 +42,11 @@ from .models import (
     # Hairstylist Dashboard Models
     ClientHairProfile,
     ProductRecommendation,
+    # Esthetician Dashboard Models
+    ClientSkinProfile,
+    HealthDisclosure,
+    TreatmentNote,
+    RetailProduct,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -666,12 +671,64 @@ class ClientHairProfileAdmin(admin.ModelAdmin):
 
 @admin.register(ProductRecommendation)
 class ProductRecommendationAdmin(admin.ModelAdmin):
-    list_display = ('id', 'product_name', 'brand', 'category', 'get_client_name', 'shop', 'created_at')
-    list_filter = ('category', 'shop')
+    list_display = ('id', 'product_name', 'brand', 'category', 'niche', 'get_client_name', 'shop', 'is_active', 'created_at')
+    list_filter = ('category', 'niche', 'is_active', 'shop')
     search_fields = ('product_name', 'brand', 'client__name', 'shop__name')
     readonly_fields = ('created_at',)
+    raw_id_fields = ('shop', 'client', 'booking', 'created_by')
+    
+    def get_client_name(self, obj):
+        return obj.client.name if obj.client else '-'
+    get_client_name.short_description = 'Client'
+
+
+# ==========================================
+# ESTHETICIAN DASHBOARD ADMIN 🧖
+# ==========================================
+
+@admin.register(ClientSkinProfile)
+class ClientSkinProfileAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_client_name', 'shop', 'skin_type', 'created_at')
+    list_filter = ('skin_type', 'shop')
+    search_fields = ('client__name', 'client__email', 'shop__name')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('shop', 'client')
+    
+    def get_client_name(self, obj):
+        return obj.client.name if obj.client else '-'
+    get_client_name.short_description = 'Client'
+
+
+@admin.register(HealthDisclosure)
+class HealthDisclosureAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_client_name', 'shop', 'has_medical_conditions', 'pregnant_or_nursing', 'acknowledged', 'created_at')
+    list_filter = ('has_medical_conditions', 'pregnant_or_nursing', 'acknowledged', 'shop')
+    search_fields = ('client__name', 'client__email', 'shop__name')
+    readonly_fields = ('created_at', 'updated_at', 'acknowledged_at')
+    raw_id_fields = ('shop', 'client', 'booking', 'created_by')
+    
+    def get_client_name(self, obj):
+        return obj.client.name if obj.client else '-'
+    get_client_name.short_description = 'Client'
+
+
+@admin.register(TreatmentNote)
+class TreatmentNoteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'get_client_name', 'treatment_type', 'booking', 'shop', 'created_at')
+    list_filter = ('treatment_type', 'shop')
+    search_fields = ('client__name', 'shop__name', 'observations', 'recommendations')
+    readonly_fields = ('created_at', 'updated_at')
     raw_id_fields = ('shop', 'client', 'booking')
     
     def get_client_name(self, obj):
         return obj.client.name if obj.client else '-'
     get_client_name.short_description = 'Client'
+
+
+@admin.register(RetailProduct)
+class RetailProductAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'brand', 'category', 'price', 'in_stock', 'is_active', 'shop')
+    list_filter = ('category', 'in_stock', 'is_active', 'shop')
+    search_fields = ('name', 'brand', 'shop__name')
+    readonly_fields = ('created_at',)
+    list_editable = ('in_stock', 'is_active', 'price')

@@ -197,3 +197,28 @@ urlpatterns += [
     # Client self-service hair profile
     path('my-hair-profile/', MyHairProfileView.as_view(), name='my-hair-profile'),
 ]
+
+
+# ==========================================
+# ESTHETICIAN/MASSAGE THERAPIST ROUTES 🧖
+# ==========================================
+from .esthetician_views import (
+    EstheticianDashboardView, ClientSkinProfileViewSet, MySkinProfileView,
+    HealthDisclosureViewSet, MyHealthDisclosureView,
+    TreatmentNoteViewSet, RetailProductViewSet
+)
+
+urlpatterns += [
+    path('esthetician/dashboard/', EstheticianDashboardView.as_view(), name='esthetician-dashboard'),
+    path('esthetician/client-profiles/', ClientSkinProfileViewSet.as_view({'get': 'list', 'post': 'create'}), name='esthetician-client-profiles'),
+    path('esthetician/client-profiles/<int:pk>/', ClientSkinProfileViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='esthetician-client-profile-detail'),
+    path('esthetician/health-disclosures/', HealthDisclosureViewSet.as_view({'get': 'list', 'post': 'create'}), name='esthetician-health-disclosures'),
+    path('esthetician/health-disclosures/<int:pk>/', HealthDisclosureViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='esthetician-health-disclosure-detail'),
+    path('esthetician/treatment-notes/', TreatmentNoteViewSet.as_view({'get': 'list', 'post': 'create'}), name='esthetician-treatment-notes'),
+    path('esthetician/treatment-notes/<int:pk>/', TreatmentNoteViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='esthetician-treatment-note-detail'),
+    path('esthetician/retail-products/', RetailProductViewSet.as_view({'get': 'list', 'post': 'create'}), name='esthetician-retail-products'),
+    path('esthetician/retail-products/<int:pk>/', RetailProductViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='esthetician-retail-product-detail'),
+    # Client self-service
+    path('my-skin-profile/', MySkinProfileView.as_view(), name='my-skin-profile'),
+    path('my-health-disclosure/', MyHealthDisclosureView.as_view(), name='my-health-disclosure'),
+]
