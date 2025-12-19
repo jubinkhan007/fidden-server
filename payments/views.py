@@ -2473,14 +2473,36 @@ class CapturePayPalOrderView(APIView):
                 payment.paypal_capture_id = capture_id  # Store for refunds
                 payment.save(update_fields=["status", "paypal_capture_id", "updated_at"])
                 
+                slot_booking = payment.booking  # This is SlotBooking
+                
+                # Update SlotBooking payment status
+                slot_booking.payment_status = 'success'
+                slot_booking.save(update_fields=['payment_status'])
+                
+                # Create Booking record if doesn't exist
+                booking_record = None
+                if not hasattr(payment, 'booking_record'):
+                    booking_record = Booking.objects.create(
+                        payment=payment,
+                        user=payment.user,
+                        shop=slot_booking.shop,
+                        slot=slot_booking,
+                        stripe_payment_intent_id=order_id,  # PayPal order ID
+                        status="active"
+                    )
+                else:
+                    booking_record = payment.booking_record
+                    booking_record.status = 'active'
+                    booking_record.save(update_fields=['status'])
+                
                 # Create Transaction Log
                 TransactionLog.objects.create(
                     transaction_type="payment",
                     payment=payment,
                     user=payment.user,
-                    shop=payment.booking.shop,
-                    slot=payment.booking,
-                    service=payment.booking.service,
+                    shop=slot_booking.shop,
+                    slot=slot_booking,
+                    service=slot_booking.service,
                     amount=payment.amount,
                     currency="usd",
                     status="succeeded",
@@ -2492,7 +2514,7 @@ class CapturePayPalOrderView(APIView):
 
                 return Response({
                     "status": "success", 
-                    "booking_id": payment.booking.id,
+                    "booking_id": booking_record.id,
                     "payout_status": payout.status,
                     "payout_amount": float(payout.net_amount),
                 })
