@@ -65,9 +65,24 @@ class TodayAppointmentsView(APIView):
 
 class DailyRevenueView(APIView):
     """
-    Get daily revenue with optional date filter
+    Get daily revenue with optional date and service_type filter.
+    
+    Query params:
+    - date: YYYY-MM-DD (default: today)
+    - service_type: Filter by service type (e.g., facial, massage, tattoo)
+    - niche: Filter by niche (esthetician, massage, hair, barber, tattoo, nail)
     """
     permission_classes = [IsAuthenticated, IsOwnerRole]
+    
+    # Niche to service type field mapping
+    NICHE_FIELD_MAPPING = {
+        'esthetician': 'esthetician_service_type',
+        'massage': 'esthetician_service_type',  # massage is under esthetician_service_type
+        'hair': 'hair_service_type',
+        'barber': None,  # barber uses shop niche, not service type
+        'tattoo': None,
+        'nail': 'nail_style_type',
+    }
     
     def get(self, request):
         shop = get_object_or_404(Shop, owner=request.user)
@@ -82,28 +97,62 @@ class DailyRevenueView(APIView):
         else:
             target_date = timezone.now().date()
         
-        # Get revenue for the target date
-        from .models import Revenue
-        daily_revenue = Revenue.objects.filter(
-            shop=shop,
-            timestamp=target_date
-        ).aggregate(total=Sum('revenue'))['total'] or 0
+        # Get filter params
+        service_type = request.query_params.get('service_type')
+        niche = request.query_params.get('niche')
         
-        # Get booking count for the day
-        booking_count = Booking.objects.filter(
+        # Base booking queryset for the day
+        bookings = Booking.objects.filter(
             shop=shop,
             slot__start_time__date=target_date,
             status__in=['active', 'completed']
-        ).count()
+        ).select_related('slot__service')
+        
+        # Apply service_type filter if provided
+        if service_type:
+            bookings = bookings.filter(
+                Q(slot__service__esthetician_service_type=service_type) |
+                Q(slot__service__hair_service_type=service_type) |
+                Q(slot__service__nail_style_type=service_type)
+            )
+        
+        # Apply niche filter if provided
+        if niche and niche in self.NICHE_FIELD_MAPPING:
+            field = self.NICHE_FIELD_MAPPING[niche]
+            if field:
+                # Filter by service type field
+                filter_kwargs = {f'slot__service__{field}__isnull': False}
+                exclude_kwargs = {f'slot__service__{field}': ''}
+                bookings = bookings.filter(**filter_kwargs).exclude(**exclude_kwargs)
+        
+        # Calculate revenue from bookings (service price)
+        booking_count = bookings.count()
+        calculated_revenue = bookings.aggregate(
+            total=Sum('slot__service__price')
+        )['total'] or 0
+        
+        # If no filters applied, also get from Revenue model for comparison
+        if not service_type and not niche:
+            from .models import Revenue
+            daily_revenue = Revenue.objects.filter(
+                shop=shop,
+                timestamp=target_date
+            ).aggregate(total=Sum('revenue'))['total'] or 0
+        else:
+            daily_revenue = calculated_revenue
         
         # Calculate average booking value
-        avg_booking_value = (daily_revenue / booking_count) if booking_count > 0 else 0
+        avg_booking_value = (float(daily_revenue) / booking_count) if booking_count > 0 else 0
         
         return Response({
             'date': target_date.isoformat(),
             'total_revenue': float(daily_revenue),
             'booking_count': booking_count,
-            'average_booking_value': float(avg_booking_value)
+            'average_booking_value': float(avg_booking_value),
+            'filters_applied': {
+                'service_type': service_type,
+                'niche': niche
+            }
         }, status=status.HTTP_200_OK)
 
 
