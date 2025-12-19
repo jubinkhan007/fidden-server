@@ -380,7 +380,7 @@ class CreatePaymentIntentView(APIView):
 
             # 10) Persist Payment row (small atomic to keep consistency)
             with transaction.atomic():
-                payment, _ = Payment.objects.update_or_create(
+                Payment.objects.update_or_create(
                     booking=booking,
                     defaults={
                         "user": user,
@@ -402,18 +402,6 @@ class CreatePaymentIntentView(APIView):
                         "service_price": full_service_amount,
                         "deposit_status": "held" if shop.is_deposit_required else "credited",
                         "tip_base": full_service_amount,  # Tip calculated on full service price
-                    },
-                )
-                
-                # 10b) Create Booking record (the main booking table)
-                Booking.objects.update_or_create(
-                    payment=payment,
-                    defaults={
-                        "user": user,
-                        "shop": shop,
-                        "slot": booking,  # SlotBooking reference
-                        "stripe_payment_intent_id": intent.id,
-                        "status": "active",
                     },
                 )
 
@@ -462,9 +450,11 @@ class ConfirmStripeBookingView(APIView):
         except Payment.DoesNotExist:
             return Response({'error': 'Payment record not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        booking = payment.booking
-        if booking.status == 'active':
-            return Response({'status': 'already_active'}, status=status.HTTP_200_OK)
+        slot_booking = payment.booking  # This is SlotBooking
+        
+        # Check if Booking record already exists
+        if hasattr(payment, 'booking_record') and payment.booking_record.status == 'active':
+            return Response({'status': 'already_active', 'booking_id': payment.booking_record.id}, status=status.HTTP_200_OK)
 
         # Verify with Stripe
         try:
@@ -475,8 +465,24 @@ class ConfirmStripeBookingView(APIView):
                     payment.status = 'succeeded'
                     payment.save(update_fields=['status'])
                     
-                    booking.status = 'active'
-                    booking.save(update_fields=['status'])
+                    # Update SlotBooking payment status
+                    slot_booking.payment_status = 'success'
+                    slot_booking.save(update_fields=['payment_status'])
+                    
+                    # Create or update Booking record
+                    if not hasattr(payment, 'booking_record'):
+                        booking = Booking.objects.create(
+                            payment=payment,
+                            user=payment.user,
+                            shop=slot_booking.shop,
+                            slot=slot_booking,
+                            stripe_payment_intent_id=payment_intent_id,
+                            status="active"
+                        )
+                    else:
+                        booking = payment.booking_record
+                        booking.status = 'active'
+                        booking.save(update_fields=['status'])
                     
                     # Update deposit status if applicable
                     if payment.deposit_amount > 0 and payment.deposit_paid == 0:
@@ -1841,13 +1847,34 @@ class StripeWebhookView(APIView):
             payment.save(update_fields=["status"])
 
             logger.info(
-                " Payment #%s updated: %s → %s (intent: %s)",
+                "✅ Payment #%s updated: %s → %s (intent: %s)",
                 payment.id, old_status, new_status, intent_id
             )
-            logger.info(
-                "   - Booking ID: %s",
-                getattr(getattr(payment, "booking", None), "id", "N/A"),
-            )
+            
+            # Create Booking record if payment succeeded and doesn't exist yet
+            if new_status == "succeeded":
+                slot_booking = payment.booking  # This is SlotBooking from Payment.booking FK
+                
+                # Check if a Booking already exists for this payment
+                if not hasattr(payment, 'booking_record'):
+                    # Create the Booking record
+                    Booking.objects.create(
+                        payment=payment,
+                        user=payment.user,
+                        shop=slot_booking.shop,
+                        slot=slot_booking,
+                        stripe_payment_intent_id=intent_id,
+                        status="active"
+                    )
+                    logger.info("📋 Booking record created for Payment #%s", payment.id)
+                else:
+                    # Update existing booking status
+                    booking = payment.booking_record
+                    if booking.status != "active":
+                        booking.status = "active"
+                        booking.save(update_fields=["status"])
+                        logger.info("📋 Booking #%s status updated to active", booking.id)
+            
             logger.info("   - User: %s", payment.user.email)
             logger.info("   - Amount: %s", payment.amount)
 
