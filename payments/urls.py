@@ -4,6 +4,7 @@ from .views import (
     CreatePayPalOrderView,
     CreatePayPalAIAddonOrderView,
     CreatePaymentIntentView,
+    ConfirmStripeBookingView,
     PayPalWebhookView,
     MarkBookingNoShowView,
     ShopOnboardingLinkView,
@@ -24,6 +25,7 @@ from .views import (
 
 urlpatterns = [
     path("payment-intent/<int:slot_id>/", CreatePaymentIntentView.as_view(), name="payment-intent"),
+    path("confirm-booking/", ConfirmStripeBookingView.as_view(), name="confirm-booking"),
     path("shop-onboarding/<int:shop_id>/", ShopOnboardingLinkView.as_view(), name="shop-onboarding"),
     path("save-card/", SaveCardView.as_view(), name="save-card"),
     path("shops/verify-onboarding/<int:shop_id>/", VerifyShopOnboardingView.as_view(), name="verify-shop-onboarding"),

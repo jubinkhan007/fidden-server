@@ -380,7 +380,7 @@ class CreatePaymentIntentView(APIView):
 
             # 10) Persist Payment row (small atomic to keep consistency)
             with transaction.atomic():
-                Payment.objects.update_or_create(
+                payment, _ = Payment.objects.update_or_create(
                     booking=booking,
                     defaults={
                         "user": user,
@@ -402,6 +402,18 @@ class CreatePaymentIntentView(APIView):
                         "service_price": full_service_amount,
                         "deposit_status": "held" if shop.is_deposit_required else "credited",
                         "tip_base": full_service_amount,  # Tip calculated on full service price
+                    },
+                )
+                
+                # 10b) Create Booking record (the main booking table)
+                Booking.objects.update_or_create(
+                    payment=payment,
+                    defaults={
+                        "user": user,
+                        "shop": shop,
+                        "slot": booking,  # SlotBooking reference
+                        "stripe_payment_intent_id": intent.id,
+                        "status": "active",
                     },
                 )
 
@@ -431,6 +443,51 @@ class CreatePaymentIntentView(APIView):
             logger.error(f"Traceback: {traceback.format_exc()}")
             return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+class ConfirmStripeBookingView(APIView):
+    """
+    Manually confirm a booking after successful client-side payment.
+    Useful for mobile apps to ensure immediate feedback instead of waiting for webhooks.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        payment_intent_id = request.data.get('payment_intent_id')
+        if not payment_intent_id:
+            return Response({'error': 'payment_intent_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Find payment by intent ID
+        try:
+            payment = Payment.objects.get(stripe_payment_intent_id=payment_intent_id)
+        except Payment.DoesNotExist:
+            return Response({'error': 'Payment record not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        booking = payment.booking
+        if booking.status == 'active':
+            return Response({'status': 'already_active'}, status=status.HTTP_200_OK)
+
+        # Verify with Stripe
+        try:
+            intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            if intent.status == 'succeeded':
+                # Update statuses inside atomic block
+                with transaction.atomic():
+                    payment.status = 'succeeded'
+                    payment.save(update_fields=['status'])
+                    
+                    booking.status = 'active'
+                    booking.save(update_fields=['status'])
+                    
+                    # Update deposit status if applicable
+                    if payment.deposit_amount > 0 and payment.deposit_paid == 0:
+                        payment.deposit_paid = payment.deposit_amount
+                        payment.save(update_fields=['deposit_paid'])
+                
+                return Response({'status': 'confirmed', 'booking_id': booking.id}, status=status.HTTP_200_OK)
+            else:
+                return Response({'error': f'PaymentIntent status is {intent.status}, expected succeeded'}, status=status.HTTP_400_BAD_REQUEST)
+        except stripe.error.StripeError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 # ===========================
 # Fidden Pay - Checkout Views
