@@ -1295,7 +1295,7 @@ class DesignRequestSerializer(serializers.ModelSerializer):
             'description', 'placement', 'size_approx', 'status', 
             'images', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['shop', 'user', 'created_at', 'updated_at']
+        read_only_fields = ['user', 'created_at', 'updated_at']
 
     def create(self, validated_data):
         request = self.context.get('request')
