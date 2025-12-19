@@ -90,6 +90,7 @@ from .serializers import PerformanceAnalyticsSerializer, AIAutoFillSettingsSeria
 from .models import AIAutoFillSettings
 from django.db.models import IntegerField, Case, When, Value, F
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.decorators import action
 
 
 logger = logging.getLogger(__name__)
@@ -2413,6 +2414,30 @@ class DesignRequestViewSet(viewsets.ModelViewSet):
     
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    def images(self, request, pk=None):
+        """Upload an image for this design request"""
+        design_request = self.get_object()
+        
+        # Check if file is in request
+        if 'image' not in request.FILES:
+            return Response({'error': 'No image provided'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        image_file = request.FILES['image']
+        
+        # Create image object
+        from .models import DesignRequestImage
+        image = DesignRequestImage.objects.create(
+            request=design_request,
+            image=image_file
+        )
+        
+        return Response({
+            'id': image.id,
+            'image_url': request.build_absolute_uri(image.image.url),
+            'created_at': image.created_at
+        }, status=status.HTTP_201_CREATED)
 
 
 class ConsentFormViewSet(viewsets.ModelViewSet):
