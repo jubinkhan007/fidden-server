@@ -706,6 +706,10 @@ class CompleteCheckoutView(APIView):
                 payment.checkout_completed_at = timezone.now()
                 payment.save()
                 
+                # V1 Fix: Ensure checkout transaction is logged idempotently
+                from payments.utils.transaction_helpers import ensure_checkout_transaction_logged
+                ensure_checkout_transaction_logged(payment)
+                
                 return Response({
                     "message": "Checkout complete - no additional payment needed",
                     "final_amount": 0,
@@ -1837,6 +1841,10 @@ class StripeWebhookView(APIView):
                             logger.info("   - Push notification sent to owner (user %s)", owner.id)
                         except Exception as notif_err:
                             logger.error("   - Failed to send owner notification: %s", notif_err)
+                        
+                    # V1 Fix: Ensure checkout transaction is logged idempotently
+                    from payments.utils.transaction_helpers import ensure_checkout_transaction_logged
+                    ensure_checkout_transaction_logged(payment)
                 
             except Payment.DoesNotExist:
                 # Only warn for non-subscription PIs (we already early-returned if it was invoice-backed)

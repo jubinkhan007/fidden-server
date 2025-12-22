@@ -394,12 +394,13 @@ class RatingReviewSerializer(serializers.ModelSerializer):
 class SlotSerializer(serializers.ModelSerializer):
     available = serializers.SerializerMethodField()
     disabled_by_service = serializers.SerializerMethodField()
+    shop_timezone = serializers.SerializerMethodField()  # V1 Fix: Always include shop timezone
 
     class Meta:
         model = Slot
         fields = [
             'id', 'shop', 'service', 'start_time', 'end_time',
-            'capacity_left', 'available', 'disabled_by_service'
+            'capacity_left', 'available', 'disabled_by_service', 'shop_timezone'
         ]
 
     def _local_tod(self, dt):
@@ -421,16 +422,26 @@ class SlotSerializer(serializers.ModelSerializer):
         local_tod = self._local_tod(obj.start_time)
         return local_tod in self._disabled_set(obj)
 
+    def get_shop_timezone(self, obj):
+        """Return shop's IANA timezone for client-side conversion."""
+        from api.utils.timezone_helpers import get_valid_iana_timezone
+        if obj.shop:
+            return get_valid_iana_timezone(obj.shop.time_zone)
+        return "America/New_York"
+
     def to_representation(self, instance):
-        """Override to return times in UTC format for consistent API responses."""
-        import zoneinfo
+        """
+        V1 Fix: Ensure all times are in UTC with Z suffix.
+        Client should use shop_timezone to convert for display.
+        """
+        from api.utils.timezone_helpers import to_utc_iso
         data = super().to_representation(instance)
-        utc = zoneinfo.ZoneInfo("UTC")
-        # Convert to UTC and format as ISO 8601
+        
+        # Convert times to consistent UTC format
         if instance.start_time:
-            data['start_time'] = instance.start_time.astimezone(utc).isoformat().replace('+00:00', 'Z')
+            data['start_time'] = to_utc_iso(instance.start_time)
         if instance.end_time:
-            data['end_time'] = instance.end_time.astimezone(utc).isoformat().replace('+00:00', 'Z')
+            data['end_time'] = to_utc_iso(instance.end_time)
         return data
 
 
@@ -445,11 +456,33 @@ class SlotBookingSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
+    shop_timezone = serializers.SerializerMethodField()  # V1 Fix
 
     class Meta:
         model = SlotBooking
-        fields = ['id', 'slot_id', 'user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at', 'add_on_ids']
-        read_only_fields = ['user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at']
+        fields = ['id', 'slot_id', 'user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at', 'add_on_ids', 'shop_timezone']
+        read_only_fields = ['user', 'shop', 'service', 'start_time', 'end_time', 'status', 'created_at', 'shop_timezone']
+
+    def get_shop_timezone(self, obj):
+        """Return shop's IANA timezone for client-side conversion."""
+        from api.utils.timezone_helpers import get_valid_iana_timezone
+        if obj.shop:
+            return get_valid_iana_timezone(obj.shop.time_zone)
+        return "America/New_York"
+
+    def to_representation(self, instance):
+        """V1 Fix: Ensure all times are in UTC with Z suffix."""
+        from api.utils.timezone_helpers import to_utc_iso
+        rep = super().to_representation(instance)
+        
+        if instance.start_time:
+            rep['start_time'] = to_utc_iso(instance.start_time)
+        if instance.end_time:
+            rep['end_time'] = to_utc_iso(instance.end_time)
+        if instance.created_at:
+            rep['created_at'] = to_utc_iso(instance.created_at)
+        
+        return rep
 
     def validate(self, attrs):
         """Additional validation before creation"""

@@ -98,10 +98,11 @@ class userBookingSerializer(serializers.ModelSerializer):
         ]
 
     def get_shop_timezone(self, obj):
-        """Return shop's timezone for Flutter to convert UTC slot_time to local."""
+        """Return shop's IANA timezone for client-side conversion."""
+        from api.utils.timezone_helpers import get_valid_iana_timezone
         if obj.shop:
-            return obj.shop.time_zone
-        return None
+            return get_valid_iana_timezone(obj.shop.time_zone)
+        return "America/New_York"
 
     def get_checkout_initiated(self, obj):
         """Return true if owner has initiated checkout."""
@@ -110,12 +111,25 @@ class userBookingSerializer(serializers.ModelSerializer):
         return False
 
     def to_representation(self, instance):
-        """Override to ensure slot_time is returned in UTC, not Django's default timezone."""
-        from datetime import timezone as dt_tz
+        """
+        V1 Fix: Ensure all times are in UTC with Z suffix.
+        - slot_time: UTC with Z suffix
+        - created_at/updated_at: UTC with Z suffix
+        - shop_timezone: IANA timezone for client display conversion
+        """
+        from api.utils.timezone_helpers import to_utc_iso
         rep = super().to_representation(instance)
-        # Explicitly convert slot_time to UTC
+        
+        # Slot time in UTC
         if instance.slot and instance.slot.start_time:
-            rep['slot_time'] = instance.slot.start_time.astimezone(dt_tz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            rep['slot_time'] = to_utc_iso(instance.slot.start_time)
+        
+        # Created/Updated times in UTC
+        if instance.created_at:
+            rep['created_at'] = to_utc_iso(instance.created_at)
+        if instance.updated_at:
+            rep['updated_at'] = to_utc_iso(instance.updated_at)
+        
         return rep
 
 class ownerBookingSerializer(serializers.ModelSerializer):
@@ -186,10 +200,11 @@ class ownerBookingSerializer(serializers.ModelSerializer):
         ]
 
     def get_shop_timezone(self, obj):
-        """Return shop's timezone for Flutter to convert UTC slot_time to local."""
+        """Return shop's IANA timezone for client-side conversion."""
+        from api.utils.timezone_helpers import get_valid_iana_timezone
         if obj.shop:
-            return obj.shop.time_zone
-        return None
+            return get_valid_iana_timezone(obj.shop.time_zone)
+        return "America/New_York"
 
     def get_checkout_initiated(self, obj):
         """Return true if owner has initiated checkout."""
@@ -198,12 +213,25 @@ class ownerBookingSerializer(serializers.ModelSerializer):
         return False
 
     def to_representation(self, instance):
-        """Override to ensure slot_time is returned in UTC, not Django's default timezone."""
-        from datetime import timezone as dt_tz
+        """
+        V1 Fix: Ensure all times are in UTC with Z suffix.
+        - slot_time: UTC with Z suffix
+        - created_at/updated_at: UTC with Z suffix
+        - shop_timezone: IANA timezone for client display conversion
+        """
+        from api.utils.timezone_helpers import to_utc_iso
         rep = super().to_representation(instance)
-        # Explicitly convert slot_time to UTC
+        
+        # Slot time in UTC
         if instance.slot and instance.slot.start_time:
-            rep['slot_time'] = instance.slot.start_time.astimezone(dt_tz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            rep['slot_time'] = to_utc_iso(instance.slot.start_time)
+        
+        # Created/Updated times in UTC
+        if instance.created_at:
+            rep['created_at'] = to_utc_iso(instance.created_at)
+        if instance.updated_at:
+            rep['updated_at'] = to_utc_iso(instance.updated_at)
+        
         return rep
     
 class TransactionLogSerializer(serializers.ModelSerializer):
@@ -212,19 +240,39 @@ class TransactionLogSerializer(serializers.ModelSerializer):
     shop_name = serializers.CharField(source='shop.name', read_only=True)
     slot_time = serializers.SerializerMethodField()
     service_title = serializers.CharField(source='service.title', read_only=True)
+    shop_timezone = serializers.SerializerMethodField()  # V1 Fix
 
     class Meta:
         model = TransactionLog
         fields = [
             'id', 'transaction_type', 'payment', 'refund', 'user', 'user_name', 'user_email',
             'shop', 'shop_name', 'slot', 'slot_time', 'service', 'service_title',
-            'amount', 'currency', 'status', 'created_at'
+            'amount', 'currency', 'status', 'created_at', 'shop_timezone'
         ]
 
     def get_slot_time(self, obj):
+        """V1 Fix: Return slot times in UTC format."""
+        from api.utils.timezone_helpers import to_utc_iso
         if obj.slot:
-            return f"{obj.slot.start_time} - {obj.slot.end_time}"
+            start = to_utc_iso(obj.slot.start_time) or ""
+            end = to_utc_iso(obj.slot.end_time) or ""
+            return {"start_time": start, "end_time": end}
         return None
+
+    def get_shop_timezone(self, obj):
+        """Return shop's IANA timezone for client-side conversion."""
+        from api.utils.timezone_helpers import get_valid_iana_timezone
+        if obj.shop:
+            return get_valid_iana_timezone(obj.shop.time_zone)
+        return "America/New_York"
+
+    def to_representation(self, instance):
+        """V1 Fix: Ensure created_at is in UTC format."""
+        from api.utils.timezone_helpers import to_utc_iso
+        rep = super().to_representation(instance)
+        if instance.created_at:
+            rep['created_at'] = to_utc_iso(instance.created_at)
+        return rep
 
 class ApplyCouponSerializer(serializers.Serializer):
     coupon_id = serializers.IntegerField()

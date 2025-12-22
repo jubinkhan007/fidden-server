@@ -17,10 +17,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 class Shop(models.Model):
+    # V1 Fix: Added 'unverified' for scalable onboarding
+    # Shops can operate immediately, no manual approval bottleneck
     STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("rejected", "Rejected"),
-        ("verified", "Verified"),
+        ("unverified", "Unverified"),  # Can operate, not yet reviewed
+        ("pending", "Pending"),         # Awaiting admin review
+        ("rejected", "Rejected"),       # Failed verification
+        ("verified", "Verified"),       # Fully approved
     ]
 
     owner = models.OneToOneField(
@@ -86,11 +89,11 @@ class Shop(models.Model):
         help_text="Default percentage deposit for new services"
     )
 
-    #  new field
+    # V1 Fix: Default to 'unverified' so shops can operate immediately
     status = models.CharField(
         max_length=10,
         choices=STATUS_CHOICES,
-        default="pending"
+        default="unverified"
     )
     free_cancellation_hours = models.PositiveIntegerField(default=24)
     cancellation_fee_percentage = models.PositiveIntegerField(default=50)
@@ -101,6 +104,23 @@ class Shop(models.Model):
     # deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
 
     is_verified = models.BooleanField(default=False)  # renamed (typo fix)
+    
+    # V1 Fix: Notification cadence tracking (prevents over-triggering)
+    last_weekly_wrap_sent_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="When weekly wrap-up notification was last sent (stored in UTC)"
+    )
+    last_week_ahead_sent_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="When week-ahead forecast was last sent (stored in UTC)"
+    )
+    last_daily_snapshot_sent_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="When daily snapshot was last sent (stored in UTC)"
+    )
 
     @property
     def ranking_power(self):
@@ -959,6 +979,21 @@ class WeeklySummary(models.Model):
     # Core performance metrics
     total_appointments = models.PositiveIntegerField(default=0)
     revenue_generated = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    
+    # V1 Fix: Revenue breakdown for data credibility
+    revenue_deposits = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Total deposits collected this week"
+    )
+    revenue_checkout = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Total checkout payments (remaining + tips) this week"
+    )
+    revenue_tips = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text="Total tips collected this week"
+    )
+    
     rebooking_rate = models.FloatField(default=0.0)         # percent (0-100)
     growth_rate = models.FloatField(default=0.0)            # WoW % revenue delta
     no_shows_filled = models.PositiveIntegerField(default=0)
