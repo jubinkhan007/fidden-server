@@ -48,7 +48,7 @@ app.conf.beat_schedule = {
     },
     'generate-weekly-ai-reports': {
         'task': 'api.tasks.generate_weekly_ai_reports',
-        'schedule': crontab(day_of_week='friday', hour=18, minute=0),  # Every Friday at 6 PM
+        'schedule': crontab(day_of_week='sunday', hour=22, minute=0),  # Every Sunday at 10 PM (end of week recap)
     },
     'send-smart-rebooking-prompts': {
         'task': 'api.tasks.send_smart_rebooking_prompts',
