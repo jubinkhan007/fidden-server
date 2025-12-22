@@ -438,6 +438,27 @@ class ConfirmStripeBookingView(APIView):
     Useful for mobile apps to ensure immediate feedback instead of waiting for webhooks.
     """
     permission_classes = [IsAuthenticated]
+    
+    def _award_loyalty_points(self, user, shop, amount_spent):
+        """Award loyalty points after payment"""
+        try:
+            from api.models import LoyaltyProgram, LoyaltyPoints
+            
+            program = LoyaltyProgram.objects.filter(shop=shop, is_active=True).first()
+            if not program:
+                return
+            
+            loyalty_points, created = LoyaltyPoints.objects.get_or_create(
+                shop=shop, user=user
+            )
+            
+            points_earned = loyalty_points.add_points(amount_spent, program)
+            logger.info(
+                "🎁 Confirm: Awarded %d loyalty points to user %s",
+                points_earned, user.email
+            )
+        except Exception as e:
+            logger.error("Error awarding loyalty points: %s", e)
 
     def post(self, request):
         payment_intent_id = request.data.get('payment_intent_id')
@@ -488,6 +509,9 @@ class ConfirmStripeBookingView(APIView):
                     if payment.deposit_amount > 0 and payment.deposit_paid == 0:
                         payment.deposit_paid = payment.deposit_amount
                         payment.save(update_fields=['deposit_paid'])
+                    
+                    # Award loyalty points
+                    self._award_loyalty_points(payment.user, slot_booking.shop, float(payment.amount))
                 
                 return Response({'status': 'confirmed', 'booking_id': booking.id}, status=status.HTTP_200_OK)
             else:
@@ -1815,9 +1839,32 @@ class StripeWebhookView(APIView):
             logger.error("[klaviyo] purchase sync failed for shop %s: %s", target_shop.id if target_shop else "N/A", e, exc_info=True)
 
 
+
     # ---------------------------------
     # helper on the view (unchanged)
     # ---------------------------------
+    def _award_loyalty_points(self, user, shop, amount_spent):
+        """Award loyalty points to user after payment if shop has active program"""
+        try:
+            from api.models import LoyaltyProgram, LoyaltyPoints
+            
+            program = LoyaltyProgram.objects.filter(shop=shop, is_active=True).first()
+            if not program:
+                logger.info("🎁 No active loyalty program for shop %s", shop.id)
+                return
+            
+            loyalty_points, created = LoyaltyPoints.objects.get_or_create(
+                shop=shop, user=user
+            )
+            
+            points_earned = loyalty_points.add_points(amount_spent, program)
+            logger.info(
+                "🎁 Awarded %d loyalty points to user %s at shop %s (new balance: %d)",
+                points_earned, user.email, shop.name, loyalty_points.points_balance
+            )
+        except Exception as e:
+            logger.error("Error awarding loyalty points: %s", e)
+
     def _update_payment_status(self, stripe_obj, new_status):
         intent_id = stripe_obj.get("id")
         object_type = stripe_obj.get("object")
@@ -1874,6 +1921,9 @@ class StripeWebhookView(APIView):
                         booking.status = "active"
                         booking.save(update_fields=["status"])
                         logger.info("📋 Booking #%s status updated to active", booking.id)
+                
+                # Award loyalty points automatically
+                self._award_loyalty_points(payment.user, slot_booking.shop, float(payment.amount))
             
             logger.info("   - User: %s", payment.user.email)
             logger.info("   - Amount: %s", payment.amount)
@@ -2438,6 +2488,27 @@ class CreatePayPalOrderView(APIView):
 
 class CapturePayPalOrderView(APIView):
     permission_classes = [IsAuthenticated]
+    
+    def _award_loyalty_points_paypal(self, user, shop, amount_spent):
+        """Award loyalty points after PayPal payment"""
+        try:
+            from api.models import LoyaltyProgram, LoyaltyPoints
+            
+            program = LoyaltyProgram.objects.filter(shop=shop, is_active=True).first()
+            if not program:
+                return
+            
+            loyalty_points, created = LoyaltyPoints.objects.get_or_create(
+                shop=shop, user=user
+            )
+            
+            points_earned = loyalty_points.add_points(amount_spent, program)
+            logger.info(
+                "🎁 PayPal: Awarded %d loyalty points to user %s at shop %s",
+                points_earned, user.email, shop.name
+            )
+        except Exception as e:
+            logger.error("Error awarding loyalty points (PayPal): %s", e)
 
     def post(self, request):
         order_id = request.data.get("order_id")
@@ -2511,6 +2582,9 @@ class CapturePayPalOrderView(APIView):
                 # Process payout to shop via Stripe Transfer
                 from payments.utils.payouts import process_shop_payout
                 payout = process_shop_payout(payment)
+                
+                # Award loyalty points
+                self._award_loyalty_points_paypal(payment.user, slot_booking.shop, float(payment.amount))
 
                 return Response({
                     "status": "success", 

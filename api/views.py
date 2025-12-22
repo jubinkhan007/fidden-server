@@ -2523,3 +2523,253 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                 from .models import Shop
                 shop = get_object_or_404(Shop, id=shop_id)
                 serializer.save(shop=shop, customer_email=self.request.user.email)
+
+
+# ==========================================
+# LOYALTY PROGRAM ENDPOINTS 🎁
+# ==========================================
+from .models import LoyaltyProgram, LoyaltyPoints
+
+
+class MyLoyaltyPointsView(APIView):
+    """
+    CLIENT endpoint - View loyalty points at all shops or a specific shop.
+    
+    GET /api/user/loyalty/ - All shops
+    GET /api/user/loyalty/?shop_id=5 - Specific shop
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        shop_id = request.query_params.get('shop_id')
+        
+        if shop_id:
+            # Get points for specific shop
+            try:
+                loyalty = LoyaltyPoints.objects.select_related('shop').get(
+                    user=user, shop_id=shop_id
+                )
+                program = LoyaltyProgram.objects.filter(shop_id=shop_id).first()
+                
+                return Response({
+                    'shop_id': loyalty.shop.id,
+                    'shop_name': loyalty.shop.name,
+                    'points_balance': loyalty.points_balance,
+                    'total_earned': loyalty.total_points_earned,
+                    'total_redeemed': loyalty.total_points_redeemed,
+                    'last_earned_at': loyalty.last_earned_at,
+                    'can_redeem': program and loyalty.points_balance >= program.points_for_redemption,
+                    'points_needed_for_reward': program.points_for_redemption if program else None,
+                    'reward_type': program.reward_type if program else None,
+                    'reward_value': float(program.reward_value) if program else None,
+                })
+            except LoyaltyPoints.DoesNotExist:
+                return Response({'points_balance': 0, 'message': 'No loyalty points at this shop'})
+        else:
+            # Get points for all shops
+            loyalties = LoyaltyPoints.objects.filter(user=user).select_related('shop')
+            
+            data = []
+            for loyalty in loyalties:
+                program = LoyaltyProgram.objects.filter(shop=loyalty.shop).first()
+                data.append({
+                    'shop_id': loyalty.shop.id,
+                    'shop_name': loyalty.shop.name,
+                    'points_balance': loyalty.points_balance,
+                    'total_earned': loyalty.total_points_earned,
+                    'can_redeem': program and loyalty.points_balance >= program.points_for_redemption,
+                    'reward_type': program.reward_type if program else None,
+                })
+            
+            return Response({
+                'count': len(data),
+                'loyalty_points': data
+            })
+
+
+class ShopLoyaltyProgramView(APIView):
+    """
+    PUBLIC endpoint - Get a shop's loyalty program info.
+    
+    GET /api/shops/{shop_id}/loyalty-program/
+    """
+    permission_classes = []
+    
+    def get(self, request, shop_id):
+        shop = get_object_or_404(Shop, id=shop_id)
+        
+        try:
+            program = shop.loyalty_program
+            return Response({
+                'is_active': program.is_active,
+                'points_per_dollar': float(program.points_per_dollar),
+                'points_for_redemption': program.points_for_redemption,
+                'reward_type': program.reward_type,
+                'reward_value': float(program.reward_value),
+            })
+        except LoyaltyProgram.DoesNotExist:
+            return Response({
+                'is_active': False,
+                'message': 'Loyalty program not available'
+            })
+
+
+class OwnerLoyaltyProgramView(APIView):
+    """
+    OWNER endpoint - Manage shop's loyalty program (all niches).
+    
+    GET/PATCH /api/loyalty/program/
+    """
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+    
+    def get(self, request):
+        shop = get_object_or_404(Shop, owner=request.user)
+        program, created = LoyaltyProgram.objects.get_or_create(shop=shop)
+        
+        return Response({
+            'is_active': program.is_active,
+            'points_per_dollar': float(program.points_per_dollar),
+            'points_for_redemption': program.points_for_redemption,
+            'reward_type': program.reward_type,
+            'reward_value': float(program.reward_value),
+        })
+    
+    def patch(self, request):
+        shop = get_object_or_404(Shop, owner=request.user)
+        program, created = LoyaltyProgram.objects.get_or_create(shop=shop)
+        
+        # Update fields
+        if 'is_active' in request.data:
+            program.is_active = request.data['is_active']
+        if 'points_per_dollar' in request.data:
+            program.points_per_dollar = request.data['points_per_dollar']
+        if 'points_for_redemption' in request.data:
+            program.points_for_redemption = request.data['points_for_redemption']
+        if 'reward_type' in request.data:
+            program.reward_type = request.data['reward_type']
+        if 'reward_value' in request.data:
+            program.reward_value = request.data['reward_value']
+        
+        program.save()
+        
+        return Response({
+            'is_active': program.is_active,
+            'points_per_dollar': float(program.points_per_dollar),
+            'points_for_redemption': program.points_for_redemption,
+            'reward_type': program.reward_type,
+            'reward_value': float(program.reward_value),
+        })
+
+
+class OwnerLoyaltyCustomersView(APIView):
+    """
+    OWNER endpoint - List customers with loyalty points (all niches).
+    
+    GET /api/loyalty/customers/
+    """
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+    
+    def get(self, request):
+        shop = get_object_or_404(Shop, owner=request.user)
+        customers = LoyaltyPoints.objects.filter(
+            shop=shop
+        ).select_related('user').order_by('-points_balance')
+        
+        data = [{
+            'user_id': lp.user.id,
+            'user_name': lp.user.name,
+            'user_email': lp.user.email,
+            'points_balance': lp.points_balance,
+            'total_earned': lp.total_points_earned,
+            'total_redeemed': lp.total_points_redeemed,
+            'last_earned_at': lp.last_earned_at,
+        } for lp in customers]
+        
+        return Response({
+            'count': len(data),
+            'customers': data
+        })
+
+
+class OwnerLoyaltyAddPointsView(APIView):
+    """
+    OWNER endpoint - Manually add points to a customer (all niches).
+    
+    POST /api/loyalty/add-points/
+    """
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+    
+    def post(self, request):
+        shop = get_object_or_404(Shop, owner=request.user)
+        
+        user_id = request.data.get('user_id')
+        amount_spent = float(request.data.get('amount_spent', 0))
+        
+        if not user_id or amount_spent <= 0:
+            return Response(
+                {'error': 'user_id and amount_spent required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from accounts.models import User
+        user = get_object_or_404(User, id=user_id)
+        
+        loyalty_points, created = LoyaltyPoints.objects.get_or_create(
+            shop=shop, user=user
+        )
+        
+        try:
+            program = shop.loyalty_program
+            if not program.is_active:
+                return Response({'error': 'Loyalty program is not active'}, status=400)
+        except LoyaltyProgram.DoesNotExist:
+            return Response({'error': 'Loyalty program not configured'}, status=400)
+        
+        points_earned = loyalty_points.add_points(amount_spent, program)
+        
+        return Response({
+            'points_earned': points_earned,
+            'new_balance': loyalty_points.points_balance,
+            'can_redeem': loyalty_points.points_balance >= program.points_for_redemption
+        })
+
+
+class OwnerLoyaltyRedeemView(APIView):
+    """
+    OWNER endpoint - Redeem points for a customer (all niches).
+    
+    POST /api/loyalty/redeem/
+    """
+    permission_classes = [IsAuthenticated, IsOwnerRole]
+    
+    def post(self, request):
+        shop = get_object_or_404(Shop, owner=request.user)
+        
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id required'}, status=400)
+        
+        from accounts.models import User
+        user = get_object_or_404(User, id=user_id)
+        loyalty_points = get_object_or_404(LoyaltyPoints, shop=shop, user=user)
+        
+        try:
+            program = shop.loyalty_program
+        except LoyaltyProgram.DoesNotExist:
+            return Response({'error': 'Loyalty program not configured'}, status=400)
+        
+        success, reward_value = loyalty_points.redeem_points(program)
+        
+        if success:
+            return Response({
+                'success': True,
+                'reward_type': program.reward_type,
+                'reward_value': float(reward_value),
+                'points_remaining': loyalty_points.points_balance
+            })
+        else:
+            return Response({
+                'success': False,
+                'error': f'Need {program.points_for_redemption} points, have {loyalty_points.points_balance}'
+            }, status=400)

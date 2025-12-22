@@ -42,6 +42,13 @@ from .views import (
     GalleryItemView,
     GalleryItemDetailView,
     PublicGalleryView,
+    # Loyalty (generic)
+    MyLoyaltyPointsView,
+    ShopLoyaltyProgramView,
+    OwnerLoyaltyProgramView,
+    OwnerLoyaltyCustomersView,
+    OwnerLoyaltyAddPointsView,
+    OwnerLoyaltyRedeemView,
 )
 from payments.views import ShopSlotsView
 
@@ -112,11 +119,19 @@ urlpatterns += [
     path('barber/walk-ins/', WalkInQueueView.as_view(), name='barber-walk-in-queue'),
     path('barber/walk-ins/<int:pk>/', WalkInEntryDetailView.as_view(), name='barber-walk-in-detail'),
     
-    # Loyalty Program
+    # Loyalty Program (Barber-specific - legacy)
     path('barber/loyalty/program/', LoyaltyProgramView.as_view(), name='barber-loyalty-program'),
     path('barber/loyalty/customers/', LoyaltyCustomersView.as_view(), name='barber-loyalty-customers'),
     path('barber/loyalty/add-points/', LoyaltyPointsAddView.as_view(), name='barber-loyalty-add'),
     path('barber/loyalty/redeem/', LoyaltyRedeemView.as_view(), name='barber-loyalty-redeem'),
+    
+    # Loyalty Program (Generic - all niches)
+    path('user/loyalty/', MyLoyaltyPointsView.as_view(), name='user-loyalty'),
+    path('shops/<int:shop_id>/loyalty-program/', ShopLoyaltyProgramView.as_view(), name='shop-loyalty-program'),
+    path('loyalty/program/', OwnerLoyaltyProgramView.as_view(), name='owner-loyalty-program'),
+    path('loyalty/customers/', OwnerLoyaltyCustomersView.as_view(), name='owner-loyalty-customers'),
+    path('loyalty/add-points/', OwnerLoyaltyAddPointsView.as_view(), name='owner-loyalty-add'),
+    path('loyalty/redeem/', OwnerLoyaltyRedeemView.as_view(), name='owner-loyalty-redeem'),
 ]
 
 # ==========================================
