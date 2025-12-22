@@ -493,6 +493,10 @@ class InitiateCheckoutView(APIView):
                 payment.deposit_status = 'credited'
                 payment.checkout_completed_at = timezone.now()
                 payment.save(update_fields=['deposit_status', 'checkout_completed_at'])
+                
+                # V1 Fix: Log transaction for cash payment so it appears in revenue
+                from payments.utils.transaction_helpers import ensure_checkout_transaction_logged
+                ensure_checkout_transaction_logged(payment)
             
             # Send push notification to client (only for app payments)
             if checkout_method == 'app':
