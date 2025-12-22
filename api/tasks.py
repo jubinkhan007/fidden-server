@@ -46,12 +46,6 @@ def generate_weekly_ai_reports(self):
     
     logger.info("Starting weekly AI report generation...")
 
-    end_dt = timezone.now()
-    start_dt = end_dt - timedelta(days=7)
-
-    prev_start = start_dt - timedelta(days=7)
-    prev_end = start_dt
-
     eligible_shops = Shop.objects.select_related(
         "owner", "subscription", "subscription__plan"
     ).filter(
@@ -60,11 +54,31 @@ def generate_weekly_ai_reports(self):
         # OR the user has purchased the AI add-on
         Q(subscription__has_ai_addon=True)
     ).distinct()
+    
     if not eligible_shops.exists():
         logger.info("No shops eligible for AI reports this week.")
         return "No shops"
 
     for shop in eligible_shops.iterator():
+        from zoneinfo import ZoneInfo
+        
+        # Get shop's timezone
+        try:
+            shop_tz = ZoneInfo(shop.time_zone)
+        except Exception:
+            shop_tz = ZoneInfo("UTC")
+            
+        # Calculate window based on Shop's Local Time
+        # We want the last 7 days ending NOW (shop time)
+        now_loc = timezone.now().astimezone(shop_tz)
+        
+        end_dt = now_loc
+        start_dt = end_dt - timedelta(days=7)
+        
+        # Comparison window (previous week)
+        prev_start = start_dt - timedelta(days=7)
+        prev_end = start_dt
+
         # V1 IDEMPOTENCY CHECK: Skip if already sent this week (using shop timezone)
         if was_sent_this_week(shop, shop.last_weekly_wrap_sent_at):
             logger.info(f"Skipping shop {shop.id} - weekly wrap already sent this week (shop tz: {shop.time_zone})")
