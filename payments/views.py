@@ -1118,13 +1118,15 @@ class StripeWebhookView(APIView):
         event_id = event.get("id")
         data = event["data"]["object"]
 
-        # ✅ 2️⃣ Global dedupe: suppress duplicate event processing
-        burst_key = f"stripe_evt:{event_id}"
-        if cache.get(burst_key):
-            logger.info("⚠️ Duplicate Stripe event %s suppressed (already processed)", event_id)
-            return Response(status=200)
-
-        cache.set(burst_key, True, timeout=60)
+        # ⚠️ TEMPORARILY DISABLED: Cache-based dedupe is blocking all events
+        # TODO: Investigate why cache.get() returns True for new events
+        # burst_key = f"stripe_evt:{event_id}"
+        # if cache.get(burst_key):
+        #     logger.info("⚠️ Duplicate Stripe event %s suppressed (already processed)", event_id)
+        #     return Response(status=200)
+        # cache.set(burst_key, True, timeout=60)
+        
+        logger.info("📨 Processing event: %s (id=%s)", event_type, event_id)
 
         logger.info(
             "📨 Event: %s (livemode=%s, id=%s)",
