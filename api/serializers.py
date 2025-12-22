@@ -767,6 +767,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
 
 class ServiceListSerializer(serializers.ModelSerializer):
     shop_id = serializers.IntegerField(source="shop.id", read_only=True)
+    shop_name = serializers.CharField(source="shop.name", read_only=True)  # Added for service list
     shop_address = serializers.CharField(source="shop.address", read_only=True)
     avg_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
@@ -782,6 +783,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "discount_price",
             "category",
             "shop_id",
+            "shop_name",  # Added
             "shop_address",
             "avg_rating",
             "review_count",
