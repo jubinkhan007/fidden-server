@@ -67,10 +67,16 @@ class TodayAppointmentsView(APIView):
         # Get niche filter
         niche = request.query_params.get('niche')
         
-        # Get all bookings for the target date
+        # Create UTC date range for proper timezone-independent filtering
+        from datetime import datetime, time
+        start_of_day_utc = timezone.make_aware(datetime.combine(target_date, time.min), timezone.utc)
+        end_of_day_utc = timezone.make_aware(datetime.combine(target_date, time.max), timezone.utc)
+        
+        # Get all bookings for the target date (using UTC range)
         bookings = Booking.objects.filter(
             shop=shop,
-            slot__start_time__date=target_date
+            slot__start_time__gte=start_of_day_utc,
+            slot__start_time__lte=end_of_day_utc
         ).select_related('user', 'slot', 'slot__service', 'slot__service__category').order_by('slot__start_time')
         
         # Apply niche filter if provided
@@ -181,10 +187,17 @@ class DailyRevenueView(APIView):
         service_type = request.query_params.get('service_type')
         niche = request.query_params.get('niche')
         
-        # Base booking queryset for the day
+        # Create UTC date range for proper timezone-independent filtering
+        # We want all bookings where start_time falls on target_date in UTC
+        from datetime import datetime, time
+        start_of_day_utc = timezone.make_aware(datetime.combine(target_date, time.min), timezone.utc)
+        end_of_day_utc = timezone.make_aware(datetime.combine(target_date, time.max), timezone.utc)
+        
+        # Base booking queryset for the day (using UTC range)
         bookings = Booking.objects.filter(
             shop=shop,
-            slot__start_time__date=target_date,
+            slot__start_time__gte=start_of_day_utc,
+            slot__start_time__lte=end_of_day_utc,
             status__in=['active', 'completed']
         ).select_related('slot__service', 'slot__service__category')
         
@@ -192,17 +205,7 @@ class DailyRevenueView(APIView):
         import logging
         logger = logging.getLogger(__name__)
         initial_count = bookings.count()
-        logger.info(f"DailyRevenueView: shop={shop.id}, date={target_date}, niche={niche}, initial_count={initial_count}")
-        
-        # Debug: check ALL bookings for shop (ignoring date filter) to find missing ones
-        all_shop_bookings = Booking.objects.filter(shop=shop).select_related('slot__service')
-        logger.info(f"DEBUG: Total bookings for shop (all dates): {all_shop_bookings.count()}")
-        for b in all_shop_bookings.order_by('-id')[:10]:  # Last 10 bookings
-            slot_dt = b.slot.start_time if b.slot and b.slot.start_time else None
-            slot_date_py = slot_dt.date() if slot_dt else 'N/A'
-            svc_title = b.slot.service.title if b.slot and b.slot.service else 'N/A'
-            matches_today = slot_date_py == target_date if slot_dt else False
-            logger.info(f"  - Booking {b.id}: datetime={slot_dt}, date_py={slot_date_py}, matches_today={matches_today}, status={b.status}, service='{svc_title}'")
+        logger.info(f"DailyRevenueView: shop={shop.id}, date={target_date}, utc_range=[{start_of_day_utc}, {end_of_day_utc}], niche={niche}, initial_count={initial_count}")
         
         # Log all service titles for today's bookings
         for b in bookings:
