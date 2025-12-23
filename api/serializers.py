@@ -770,6 +770,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
 class ServiceListSerializer(serializers.ModelSerializer):
     shop_id = serializers.IntegerField(source="shop.id", read_only=True)
     shop_name = serializers.CharField(source="shop.name", read_only=True)  # Added for service list
+    shop_img = serializers.SerializerMethodField()  # V1 Fix: for storefront icon
     shop_address = serializers.CharField(source="shop.address", read_only=True)
     avg_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
@@ -785,14 +786,14 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "discount_price",
             "category",
             "shop_id",
-            "shop_name",  # Added
-            "shop_img",   # V1 Fix: for storefront icon
+            "shop_name",
+            "shop_img",
             "shop_address",
             "avg_rating",
             "review_count",
             "service_img",
             "badge",
-            "distance",  # <-- added distance
+            "distance",
             "duration",
             "is_active",
             "requires_age_18_plus" 
@@ -805,6 +806,16 @@ class ServiceListSerializer(serializers.ModelSerializer):
         user_location = self.context.get("user_location")
         return get_distance(user_location, obj.shop.location if obj.shop else None)
 
+    def get_shop_img(self, obj):
+        """V1 Fix: Return shop image URL for storefront icon."""
+        request = self.context.get("request")
+        if obj.shop and obj.shop.shop_img:
+            return (
+                request.build_absolute_uri(obj.shop.shop_img.url)
+                if request else obj.shop.shop_img.url
+            )
+        return None
+
     def to_representation(self, instance):
         rep = super().to_representation(instance)
         request = self.context.get("request")
@@ -813,14 +824,6 @@ class ServiceListSerializer(serializers.ModelSerializer):
             if instance.service_img and request
             else instance.service_img.url if instance.service_img else None
         )
-        # V1 Fix: Add shop_img for storefront icon
-        if instance.shop and instance.shop.shop_img:
-            rep["shop_img"] = (
-                request.build_absolute_uri(instance.shop.shop_img.url)
-                if request else instance.shop.shop_img.url
-            )
-        else:
-            rep["shop_img"] = None
         if rep.get("avg_rating") is not None:
             rep["avg_rating"] = round(rep["avg_rating"], 1)
         return rep
@@ -829,6 +832,7 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
     shop_id = serializers.IntegerField(source="shop.id", read_only=True)
     shop_name = serializers.CharField(source="shop.name", read_only=True)
     shop_address = serializers.CharField(source="shop.address", read_only=True)
+    shop_img = serializers.SerializerMethodField()  # V1 Fix: declared as method field
     avg_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     reviews = serializers.SerializerMethodField()
@@ -863,6 +867,16 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
         )
         return RatingReviewSerializer(reviews, many=True, context={"request": request}).data
 
+    def get_shop_img(self, obj):
+        """V1 Fix: Return shop image URL for storefront icon."""
+        request = self.context.get("request")
+        if obj.shop and obj.shop.shop_img:
+            return (
+                request.build_absolute_uri(obj.shop.shop_img.url)
+                if request else obj.shop.shop_img.url
+            )
+        return None
+
     def to_representation(self, instance):
         rep = super().to_representation(instance)
         request = self.context.get("request")
@@ -870,14 +884,6 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
             request.build_absolute_uri(instance.service_img.url)
             if instance.service_img and request else instance.service_img.url if instance.service_img else None
         )
-        # V1 Fix: Add shop_img for storefront icon
-        if instance.shop and instance.shop.shop_img:
-            rep["shop_img"] = (
-                request.build_absolute_uri(instance.shop.shop_img.url)
-                if request else instance.shop.shop_img.url
-            )
-        else:
-            rep["shop_img"] = None
         if rep.get("avg_rating") is not None:
             rep["avg_rating"] = round(rep["avg_rating"], 1)
         return rep
