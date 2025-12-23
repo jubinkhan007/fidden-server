@@ -786,6 +786,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
             "category",
             "shop_id",
             "shop_name",  # Added
+            "shop_img",   # V1 Fix: for storefront icon
             "shop_address",
             "avg_rating",
             "review_count",
@@ -812,6 +813,14 @@ class ServiceListSerializer(serializers.ModelSerializer):
             if instance.service_img and request
             else instance.service_img.url if instance.service_img else None
         )
+        # V1 Fix: Add shop_img for storefront icon
+        if instance.shop and instance.shop.shop_img:
+            rep["shop_img"] = (
+                request.build_absolute_uri(instance.shop.shop_img.url)
+                if request else instance.shop.shop_img.url
+            )
+        else:
+            rep["shop_img"] = None
         if rep.get("avg_rating") is not None:
             rep["avg_rating"] = round(rep["avg_rating"], 1)
         return rep
@@ -836,6 +845,7 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
             "duration",
             "shop_id",
             "shop_name",
+            "shop_img",   # V1 Fix: for storefront icon
             "shop_address",
             "avg_rating",
             "review_count",
@@ -860,6 +870,14 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
             request.build_absolute_uri(instance.service_img.url)
             if instance.service_img and request else instance.service_img.url if instance.service_img else None
         )
+        # V1 Fix: Add shop_img for storefront icon
+        if instance.shop and instance.shop.shop_img:
+            rep["shop_img"] = (
+                request.build_absolute_uri(instance.shop.shop_img.url)
+                if request else instance.shop.shop_img.url
+            )
+        else:
+            rep["shop_img"] = None
         if rep.get("avg_rating") is not None:
             rep["avg_rating"] = round(rep["avg_rating"], 1)
         return rep
