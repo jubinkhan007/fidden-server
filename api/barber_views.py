@@ -198,9 +198,11 @@ class DailyRevenueView(APIView):
         all_shop_bookings = Booking.objects.filter(shop=shop).select_related('slot__service')
         logger.info(f"DEBUG: Total bookings for shop (all dates): {all_shop_bookings.count()}")
         for b in all_shop_bookings.order_by('-id')[:10]:  # Last 10 bookings
-            slot_date = b.slot.start_time.date() if b.slot and b.slot.start_time else 'N/A'
+            slot_dt = b.slot.start_time if b.slot and b.slot.start_time else None
+            slot_date_py = slot_dt.date() if slot_dt else 'N/A'
             svc_title = b.slot.service.title if b.slot and b.slot.service else 'N/A'
-            logger.info(f"  - Booking {b.id}: date={slot_date}, status={b.status}, service='{svc_title}'")
+            matches_today = slot_date_py == target_date if slot_dt else False
+            logger.info(f"  - Booking {b.id}: datetime={slot_dt}, date_py={slot_date_py}, matches_today={matches_today}, status={b.status}, service='{svc_title}'")
         
         # Log all service titles for today's bookings
         for b in bookings:
