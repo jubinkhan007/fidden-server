@@ -573,9 +573,10 @@ class AllShopsListView(APIView):
             cursor = 0
 
         # Pull subscription+plan in one go to avoid N+1 when serializer asks for is_priority
+        # V1 Fix: Include both 'verified' and 'unverified' shops (allow immediate operation)
         shops_qs = (
             Shop.objects
-            .filter(is_verified=True)
+            .filter(status__in=['verified', 'unverified'])
             .select_related("subscription__plan")
         )
         if search_query:
@@ -713,7 +714,7 @@ class AllServicesListView(APIView):
         services_qs = (
             Service.objects.filter(
                 is_active=True,
-                shop__is_verified=True
+                shop__status__in=['verified', 'unverified']  # V1 Fix: include unverified
             )
             .select_related("shop")
             .annotate(
@@ -846,7 +847,8 @@ class FavoriteShopView(APIView):
             return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
 
         user_location = request.data.get("location")  # optional: "lon,lat"
-        favorites = FavoriteShop.objects.filter(user=request.user, shop__is_verified=True).select_related('shop')
+        # V1 Fix: Include unverified shops in favorites
+        favorites = FavoriteShop.objects.filter(user=request.user, shop__status__in=['verified', 'unverified']).select_related('shop')
         serializer = FavoriteShopSerializer(favorites, many=True, context={'request': request, 'user_location': user_location})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -910,7 +912,7 @@ class ServiceWishlistView(APIView):
         wishlists = ServiceWishlist.objects.filter(
             user=request.user,
             service__is_active=True,
-            service__shop__is_verified=True
+            service__shop__status__in=['verified', 'unverified']  # V1 Fix
         ).select_related('service__shop', 'service__category')
 
         serializer = ServiceWishlistSerializer(wishlists, many=True, context={'request': request})

@@ -242,51 +242,64 @@ def send_smart_rebooking_prompts():
 def send_auto_followups():
     """
     Sends follow-up notifications (review prompts) approx. 24 hours
-    after a booking is marked as completed, if no review exists yet,
-    AND the shop is on the Momentum or Icon plan.
+    after a booking is marked as completed.
+    
+    V1 SPAM FIX:
+    - Only sends if review_request_sent_at is NULL
+    - Checks if review already exists using booking.review (OneToOne)
+    - Sets review_request_sent_at after sending
+    - Hard limit: 1 initial request per booking
     """
     logger.info("Running auto-followups task...")
     now = timezone.now()
     yesterday = (now - timedelta(days=1)).date()
 
-    # --- 👇 MODIFIED QUERY ---
-    # Find bookings completed within the target window for eligible shops
+    # Find bookings:
+    # - Completed yesterday
+    # - On Momentum/Icon plan
+    # - review_request_sent_at is NULL (NOT SENT YET)
+    # - No review linked to this booking (using OneToOne 'review' relation)
     completed_bookings = Booking.objects.select_related(
         'user',
         'shop',
-        'shop__subscription__plan', # Include plan for filtering
+        'shop__subscription__plan',
         'slot__service'
     ).filter(
         status='completed',
         updated_at__date=yesterday,
-        # Ensure shop has an active subscription on Momentum or Icon
         shop__subscription__status=ShopSubscription.STATUS_ACTIVE,
-        shop__subscription__plan__name__in=[SubscriptionPlan.MOMENTUM, SubscriptionPlan.ICON]
-    ).exclude(
-        review__isnull=False # Exclude bookings that already have a review
+        shop__subscription__plan__name__in=[SubscriptionPlan.MOMENTUM, SubscriptionPlan.ICON],
+        review_request_sent_at__isnull=True,  # <-- IDEMPOTENCY CHECK
+        review__isnull=True,  # <-- CORRECT: No RatingReview linked to this booking
     )
-    # --- END MODIFIED QUERY ---
 
     sent_count = 0
-    sms_sent_count = 0
-    email_sent_count = 0
 
     if not completed_bookings.exists():
-        logger.info("No bookings found needing a follow-up for Momentum/Icon shops.")
+        logger.info("No bookings found needing a follow-up.")
         return "No eligible bookings found for follow-up."
 
-    logger.info(f"Found {completed_bookings.count()} completed bookings for Momentum/Icon shops needing follow-up.")
+    logger.info(f"Found {completed_bookings.count()} completed bookings needing follow-up.")
 
     for booking in completed_bookings:
         user = booking.user
         shop = booking.shop
-        service = booking.slot.service # Access service via slot relationship
+        service = booking.slot.service if booking.slot else None
 
         if not user or not shop or not service:
             logger.warning(f"Skipping follow-up for booking {booking.id} due to missing related data.")
             continue
+        
+        # DOUBLE CHECK: Skip if review already exists (belt and suspenders)
+        if hasattr(booking, 'review') and booking.review is not None:
+            logger.info(f"Skipping booking {booking.id} - review already exists")
+            continue
+        
+        # SKIP if already sent (safety check)
+        if booking.review_request_sent_at is not None:
+            logger.info(f"Skipping booking {booking.id} - review request already sent")
+            continue
 
-        # --- Construct Messages (No changes needed here) ---
         title = f"How was your {service.title} at {shop.name}?"
         message_body = (
             f"Hi {user.name or 'there'},\n\n"
@@ -295,32 +308,127 @@ def send_auto_followups():
         )
         push_body = f"Enjoyed your {service.title} at {shop.name}? Tap to leave a review!"
         push_data = {
-            "type": "review_request", "booking_id": str(booking.id),
-            "shop_id": str(shop.id), "service_id": str(service.id),
+            "type": "review_request",
+            "booking_id": str(booking.id),
+            "shop_id": str(shop.id),
+            "service_id": str(service.id),
             "title": title,
         }
 
-        # --- Send Email (No changes needed here) ---
-        email = getattr(user, "email", None)
-        # ... (email sending logic) ...
-
-        # --- Send SMS (No changes needed here) ---
-        phone_number = getattr(user, 'mobile_number', None)
-        # ... (SMS sending logic) ...
-
-        # --- Save to DB Notification & Send Push (No changes needed here) ---
         try:
             notify_user(
-                user=user, message=message_body,
+                user=user,
+                message=message_body,
                 notification_type="review_request",
                 data={**push_data, "body_override": push_body}
             )
+            
+            # MARK AS SENT - prevents duplicate sends
+            booking.review_request_sent_at = now
+            booking.save(update_fields=['review_request_sent_at'])
+            
             sent_count += 1
+            logger.info(f"[Followup] Sent review request for booking {booking.id}")
+            
         except Exception as e:
-            logger.error(f"[Followup] Failed to save/send push for booking {booking.id} to user {user.id}: {e}", exc_info=True)
+            logger.error(f"[Followup] Failed for booking {booking.id}: {e}", exc_info=True)
 
-    logger.info(f"Finished auto-followups task. Sent {sent_count} push/DB notifications, {email_sent_count} emails, {sms_sent_count} SMS.")
-    return f"Sent {sent_count} push/DB, {email_sent_count} emails, {sms_sent_count} SMS."
+    logger.info(f"Finished auto-followups task. Sent {sent_count} notifications.")
+    return f"Sent {sent_count} review requests."
+
+
+@shared_task(name="api.tasks.send_review_reminders")
+def send_review_reminders():
+    """
+    Sends ONE reminder 48-72 hours after the initial review request,
+    if no review has been submitted.
+    
+    V1 Rule: Maximum 2 notifications per booking (initial + reminder)
+    
+    RUNS EVERY 2 HOURS to catch the 48-72h window accurately.
+    """
+    logger.info("Running review reminders task...")
+    now = timezone.now()
+    
+    # Window: 48-72 hours after initial request was sent
+    reminder_window_start = now - timedelta(hours=72)
+    reminder_window_end = now - timedelta(hours=48)
+
+    # Find bookings:
+    # - Initial review request was sent (within 48-72 hour window)
+    # - Reminder NOT sent yet
+    # - No review submitted (using OneToOne 'review' relation)
+    eligible_bookings = Booking.objects.select_related(
+        'user',
+        'shop',
+        'slot__service'
+    ).filter(
+        status='completed',
+        review_request_sent_at__gte=reminder_window_start,
+        review_request_sent_at__lte=reminder_window_end,
+        review_reminder_sent_at__isnull=True,  # Reminder not sent yet
+        review__isnull=True,  # <-- CORRECT: No review linked to this booking
+    )
+
+    sent_count = 0
+
+    if not eligible_bookings.exists():
+        logger.info("No bookings found needing a review reminder.")
+        return "No eligible bookings found for reminder."
+
+    logger.info(f"Found {eligible_bookings.count()} bookings eligible for review reminder.")
+
+    for booking in eligible_bookings:
+        user = booking.user
+        shop = booking.shop
+        service = booking.slot.service if booking.slot else None
+
+        if not user or not shop or not service:
+            continue
+        
+        # DOUBLE CHECK: Skip if review already exists
+        if hasattr(booking, 'review') and booking.review is not None:
+            logger.info(f"Skipping reminder for booking {booking.id} - review already exists")
+            continue
+        
+        # SKIP if reminder already sent
+        if booking.review_reminder_sent_at is not None:
+            continue
+
+        title = f"Last chance to review {shop.name}!"
+        message_body = (
+            f"Hi {user.name or 'there'},\n\n"
+            f"Just a friendly reminder - we'd love to hear about your {service.title} experience at {shop.name}. "
+            f"Your review helps other customers and supports {shop.name}!"
+        )
+        push_data = {
+            "type": "review_reminder",
+            "booking_id": str(booking.id),
+            "shop_id": str(shop.id),
+            "service_id": str(service.id),
+            "title": title,
+        }
+
+        try:
+            notify_user(
+                user=user,
+                message=message_body,
+                notification_type="review_reminder",
+                data=push_data
+            )
+            
+            # MARK REMINDER AS SENT - this is the final notification
+            booking.review_reminder_sent_at = now
+            booking.save(update_fields=['review_reminder_sent_at'])
+            
+            sent_count += 1
+            logger.info(f"[Reminder] Sent review reminder for booking {booking.id}")
+            
+        except Exception as e:
+            logger.error(f"[Reminder] Failed for booking {booking.id}: {e}", exc_info=True)
+
+    logger.info(f"Finished review reminders task. Sent {sent_count} reminders.")
+    return f"Sent {sent_count} review reminders."
 
 
 @shared_task

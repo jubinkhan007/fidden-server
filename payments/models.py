@@ -160,7 +160,6 @@ class Booking(models.Model):
         # --- NEW STATUSES ---
         ("no-show", "No-Show"),
         ("late-cancel", "Late Cancel"),
-        ('no-show', 'No-Show'),
     ]
 
     payment = models.OneToOneField(Payment, on_delete=models.CASCADE, related_name="booking_record")
@@ -173,8 +172,21 @@ class Booking(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
-    # Hairstylist prep notes
+
+    # Hairstylist prep notes (phase2)
     prep_notes = models.TextField(blank=True, help_text="Stylist prep notes for appointment")
+    
+    # V1 Fix: Review notification tracking (prevents spam - max 2 notifications)
+    review_request_sent_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="Timestamp when initial review request was sent"
+    )
+    review_reminder_sent_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="Timestamp when review reminder was sent (max 1 per booking)"
+    )
 
     def __str__(self):
         return f"Booking {self.id} - {self.status}"

@@ -48,7 +48,7 @@ app.conf.beat_schedule = {
     },
     'generate-weekly-ai-reports': {
         'task': 'api.tasks.generate_weekly_ai_reports',
-        'schedule': crontab(day_of_week='friday', hour=18, minute=0),  # Every Friday at 6 PM
+        'schedule': crontab(day_of_week='sunday', hour=22, minute=0),  # Every Sunday at 10 PM (end of week recap)
     },
     'send-smart-rebooking-prompts': {
         'task': 'api.tasks.send_smart_rebooking_prompts',
@@ -61,5 +61,10 @@ app.conf.beat_schedule = {
     'reengage-ghost-clients': {
         'task': 'api.tasks.reengage_ghost_clients',
         'schedule': crontab(day_of_week='monday', hour=11, minute=0),  # Every Monday at 11 AM
+    },
+    # V1 Fix: Send review reminders every 2 hours to catch the 48-72h window
+    'send-review-reminders': {
+        'task': 'api.tasks.send_review_reminders',
+        'schedule': crontab(minute=0, hour='*/2'),  # Every 2 hours
     },
 }

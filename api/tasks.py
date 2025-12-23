@@ -37,13 +37,14 @@ from subscriptions.models import SubscriptionPlan, ShopSubscription
 # in api/tasks.py
 @shared_task(name="api.tasks.generate_weekly_ai_reports", bind=True, max_retries=2, default_retry_delay=60)
 def generate_weekly_ai_reports(self):
+    """
+    Generates weekly AI reports for eligible shops.
+    
+    V1 Fix: Added idempotency check using shop timezone to prevent duplicate sends.
+    """
+    from api.utils.timezone_helpers import was_sent_this_week
+    
     logger.info("Starting weekly AI report generation...")
-
-    end_dt = timezone.now()
-    start_dt = end_dt - timedelta(days=7)
-
-    prev_start = start_dt - timedelta(days=7)
-    prev_end = start_dt
 
     eligible_shops = Shop.objects.select_related(
         "owner", "subscription", "subscription__plan"
@@ -53,11 +54,36 @@ def generate_weekly_ai_reports(self):
         # OR the user has purchased the AI add-on
         Q(subscription__has_ai_addon=True)
     ).distinct()
+    
     if not eligible_shops.exists():
         logger.info("No shops eligible for AI reports this week.")
         return "No shops"
 
     for shop in eligible_shops.iterator():
+        from zoneinfo import ZoneInfo
+        
+        # Get shop's timezone
+        try:
+            shop_tz = ZoneInfo(shop.time_zone)
+        except Exception:
+            shop_tz = ZoneInfo("UTC")
+            
+        # Calculate window based on Shop's Local Time
+        # We want the last 7 days ending NOW (shop time)
+        now_loc = timezone.now().astimezone(shop_tz)
+        
+        end_dt = now_loc
+        start_dt = end_dt - timedelta(days=7)
+        
+        # Comparison window (previous week)
+        prev_start = start_dt - timedelta(days=7)
+        prev_end = start_dt
+
+        # V1 IDEMPOTENCY CHECK: Skip if already sent this week (using shop timezone)
+        if was_sent_this_week(shop, shop.last_weekly_wrap_sent_at):
+            logger.info(f"Skipping shop {shop.id} - weekly wrap already sent this week (shop tz: {shop.time_zone})")
+            continue
+        
         owner = shop.owner
         if not owner:
             continue
@@ -112,6 +138,39 @@ def generate_weekly_ai_reports(self):
             growth_rate = float(((total_revenue - prev_revenue) / prev_revenue) * 100)
         else:
             growth_rate = 0.0
+
+        #
+        # V1 FIX: REVENUE BREAKDOWN (deposits, checkout, tips)
+        # For better dashboard data credibility
+        #
+        from payments.models import Payment
+        
+        # Get all completed payments for this shop in the time window
+        completed_payments = Payment.objects.filter(
+            booking__shop=shop,
+            status="succeeded",
+            created_at__gte=start_dt,
+            created_at__lte=end_dt,
+        )
+        
+        # Deposits: Sum of deposit_paid where is_deposit=True
+        revenue_deposits = completed_payments.filter(
+            is_deposit=True
+        ).aggregate(
+            total=Sum("deposit_paid")
+        )["total"] or Decimal("0.00")
+        
+        # Tips: Sum of tips_amount from all payments
+        revenue_tips = completed_payments.aggregate(
+            total=Sum("tips_amount")
+        )["total"] or Decimal("0.00")
+        
+        # Checkout: Sum of balance_paid (remaining amount paid at checkout)
+        revenue_checkout = completed_payments.aggregate(
+            total=Sum("balance_paid")
+        )["total"] or Decimal("0.00")
+        # Add tips to checkout since tips are collected at checkout
+        revenue_checkout = revenue_checkout + revenue_tips
 
         #
         # 4. REBOOKING RATE
@@ -240,6 +299,10 @@ def generate_weekly_ai_reports(self):
             week_end_date=end_dt.date(),
             total_appointments=total_appointments,
             revenue_generated=total_revenue,
+            # V1 Fix: Revenue breakdown for data credibility
+            revenue_deposits=revenue_deposits,
+            revenue_checkout=revenue_checkout,
+            revenue_tips=revenue_tips,
             rebooking_rate=rebooking_rate,
             growth_rate=growth_rate,
             no_shows_filled=no_shows_filled,
@@ -332,6 +395,10 @@ def generate_weekly_ai_reports(self):
 
         summary.delivered_channels = delivered_channels
         summary.save(update_fields=["delivered_channels"])
+        
+        # V1 Fix: Mark weekly wrap as sent (stored in UTC) to prevent duplicates
+        shop.last_weekly_wrap_sent_at = timezone.now()
+        shop.save(update_fields=['last_weekly_wrap_sent_at'])
 
         #
         # 12. PERFORMANCE ANALYTICS SNAPSHOT

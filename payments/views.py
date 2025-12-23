@@ -580,6 +580,10 @@ class InitiateCheckoutView(APIView):
                 payment.deposit_status = 'credited'
                 payment.checkout_completed_at = timezone.now()
                 payment.save(update_fields=['deposit_status', 'checkout_completed_at'])
+                
+                # V1 Fix: Log transaction for cash payment so it appears in revenue
+                from payments.utils.transaction_helpers import ensure_checkout_transaction_logged
+                ensure_checkout_transaction_logged(payment)
             
             # Send push notification to client (only for app payments)
             if checkout_method == 'app':
@@ -792,6 +796,10 @@ class CompleteCheckoutView(APIView):
                 payment.deposit_status = 'credited'
                 payment.checkout_completed_at = timezone.now()
                 payment.save()
+                
+                # V1 Fix: Ensure checkout transaction is logged idempotently
+                from payments.utils.transaction_helpers import ensure_checkout_transaction_logged
+                ensure_checkout_transaction_logged(payment)
                 
                 return Response({
                     "message": "Checkout complete - no additional payment needed",
@@ -1201,13 +1209,15 @@ class StripeWebhookView(APIView):
         event_id = event.get("id")
         data = event["data"]["object"]
 
-        # ✅ 2️⃣ Global dedupe: suppress duplicate event processing
-        burst_key = f"stripe_evt:{event_id}"
-        if cache.get(burst_key):
-            logger.info("⚠️ Duplicate Stripe event %s suppressed (already processed)", event_id)
-            return Response(status=200)
-
-        cache.set(burst_key, True, timeout=60)
+        # ⚠️ TEMPORARILY DISABLED: Cache-based dedupe is blocking all events
+        # TODO: Investigate why cache.get() returns True for new events
+        # burst_key = f"stripe_evt:{event_id}"
+        # if cache.get(burst_key):
+        #     logger.info("⚠️ Duplicate Stripe event %s suppressed (already processed)", event_id)
+        #     return Response(status=200)
+        # cache.set(burst_key, True, timeout=60)
+        
+        logger.info("📨 Processing event: %s (id=%s)", event_type, event_id)
 
         logger.info(
             "📨 Event: %s (livemode=%s, id=%s)",
@@ -1971,6 +1981,10 @@ class StripeWebhookView(APIView):
                             logger.info("   - Push notification sent to owner (user %s)", owner.id)
                         except Exception as notif_err:
                             logger.error("   - Failed to send owner notification: %s", notif_err)
+                        
+                    # V1 Fix: Ensure checkout transaction is logged idempotently
+                    from payments.utils.transaction_helpers import ensure_checkout_transaction_logged
+                    ensure_checkout_transaction_logged(payment)
                 
             except Payment.DoesNotExist:
                 # Only warn for non-subscription PIs (we already early-returned if it was invoice-backed)
