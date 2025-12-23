@@ -68,9 +68,10 @@ class TodayAppointmentsView(APIView):
         niche = request.query_params.get('niche')
         
         # Create UTC date range for proper timezone-independent filtering
-        from datetime import datetime, time
-        start_of_day_utc = timezone.make_aware(datetime.combine(target_date, time.min), timezone.utc)
-        end_of_day_utc = timezone.make_aware(datetime.combine(target_date, time.max), timezone.utc)
+        from datetime import datetime, time, timezone as dt_tz
+        import pytz
+        start_of_day_utc = datetime.combine(target_date, time.min, tzinfo=pytz.UTC)
+        end_of_day_utc = datetime.combine(target_date, time.max, tzinfo=pytz.UTC)
         
         # Get all bookings for the target date (using UTC range)
         bookings = Booking.objects.filter(
@@ -189,9 +190,10 @@ class DailyRevenueView(APIView):
         
         # Create UTC date range for proper timezone-independent filtering
         # We want all bookings where start_time falls on target_date in UTC
-        from datetime import datetime, time
-        start_of_day_utc = timezone.make_aware(datetime.combine(target_date, time.min), timezone.utc)
-        end_of_day_utc = timezone.make_aware(datetime.combine(target_date, time.max), timezone.utc)
+        from datetime import datetime, time, timezone as dt_tz
+        import pytz
+        start_of_day_utc = datetime.combine(target_date, time.min, tzinfo=pytz.UTC)
+        end_of_day_utc = datetime.combine(target_date, time.max, tzinfo=pytz.UTC)
         
         # Base booking queryset for the day (using UTC range)
         bookings = Booking.objects.filter(
