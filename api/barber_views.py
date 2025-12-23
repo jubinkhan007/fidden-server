@@ -188,6 +188,17 @@ class DailyRevenueView(APIView):
             status__in=['active', 'completed']
         ).select_related('slot__service', 'slot__service__category')
         
+        # Debug: log initial count
+        import logging
+        logger = logging.getLogger(__name__)
+        initial_count = bookings.count()
+        logger.info(f"DailyRevenueView: shop={shop.id}, date={target_date}, niche={niche}, initial_count={initial_count}")
+        
+        # Log all service titles for debugging
+        for b in bookings:
+            svc_title = b.slot.service.title if b.slot and b.slot.service else 'N/A'
+            logger.info(f"  - Booking {b.id}: service='{svc_title}'")
+        
         # Apply service_type filter if provided
         if service_type:
             bookings = bookings.filter(
@@ -200,20 +211,24 @@ class DailyRevenueView(APIView):
         if niche:
             field = self.NICHE_FIELD_MAPPING.get(niche)
             keywords = self.NICHE_KEYWORDS.get(niche, [])
+            logger.info(f"DailyRevenueView: niche={niche}, field={field}, keywords={keywords}")
             
             if field:
                 # Filter by service type field (non-empty value)
                 filter_kwargs = {f'slot__service__{field}__isnull': False}
                 exclude_kwargs = {f'slot__service__{field}': ''}
                 field_bookings = bookings.filter(**filter_kwargs).exclude(**exclude_kwargs)
+                field_count = field_bookings.count()
+                logger.info(f"DailyRevenueView: field_bookings count={field_count}")
                 
                 # Also include keyword matches (fallback)
                 if keywords:
                     q = Q()
                     for kw in keywords:
                         q |= Q(slot__service__title__icontains=kw)
-                        q |= Q(slot__service__category__name__icontains=kw)
                     keyword_bookings = bookings.filter(q)
+                    keyword_count = keyword_bookings.count()
+                    logger.info(f"DailyRevenueView: keyword_bookings count={keyword_count}")
                     # Combine both (field match OR keyword match)
                     bookings = (field_bookings | keyword_bookings).distinct()
                 else:
@@ -223,11 +238,12 @@ class DailyRevenueView(APIView):
                 q = Q()
                 for kw in keywords:
                     q |= Q(slot__service__title__icontains=kw)
-                    q |= Q(slot__service__category__name__icontains=kw)
                 bookings = bookings.filter(q)
+                logger.info(f"DailyRevenueView: after keyword filter, count={bookings.count()}")
         
         # Calculate revenue from bookings (service price)
         booking_count = bookings.count()
+        logger.info(f"DailyRevenueView: final booking_count={booking_count}")
         calculated_revenue = bookings.aggregate(
             total=Sum('slot__service__price')
         )['total'] or 0
