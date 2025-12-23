@@ -194,7 +194,15 @@ class DailyRevenueView(APIView):
         initial_count = bookings.count()
         logger.info(f"DailyRevenueView: shop={shop.id}, date={target_date}, niche={niche}, initial_count={initial_count}")
         
-        # Log all service titles for debugging
+        # Debug: check ALL bookings for shop (ignoring date filter) to find missing ones
+        all_shop_bookings = Booking.objects.filter(shop=shop).select_related('slot__service')
+        logger.info(f"DEBUG: Total bookings for shop (all dates): {all_shop_bookings.count()}")
+        for b in all_shop_bookings.order_by('-id')[:10]:  # Last 10 bookings
+            slot_date = b.slot.start_time.date() if b.slot and b.slot.start_time else 'N/A'
+            svc_title = b.slot.service.title if b.slot and b.slot.service else 'N/A'
+            logger.info(f"  - Booking {b.id}: date={slot_date}, status={b.status}, service='{svc_title}'")
+        
+        # Log all service titles for today's bookings
         for b in bookings:
             svc_title = b.slot.service.title if b.slot and b.slot.service else 'N/A'
             logger.info(f"  - Booking {b.id}: service='{svc_title}'")
