@@ -19,8 +19,37 @@ class TodayAppointmentsView(APIView):
     """
     Get today's appointments for shop owner
     Supports date query param for other days
+    Supports niche query param for filtering by service niche
     """
     permission_classes = [IsAuthenticated, IsOwnerRole]
+    
+    # Keywords for niches
+    NICHE_KEYWORDS = {
+        'barber': ['barber', 'haircut', 'hair cut', 'fade', 'beard', 'shave', 'trim', 'lineup', 'taper'],
+        'tattoo': ['tattoo', 'ink', 'piercing', 'body art', 'tat'],
+        'tattoo_artist': ['tattoo', 'ink', 'piercing', 'body art', 'tat'],
+        'esthetician': ['facial', 'skin', 'peel', 'microderm', 'wax', 'lash', 'brow', 'spa'],
+        'massage': ['massage', 'deep tissue', 'swedish', 'hot stone', 'body work', 'reflexology'],
+        'massage_therapist': ['massage', 'deep tissue', 'swedish', 'hot stone', 'body work', 'reflexology'],
+        'hair': ['hair', 'color', 'highlight', 'loc', 'braid', 'weave', 'style', 'blow'],
+        'hairstylist': ['hair', 'color', 'highlight', 'loc', 'braid', 'weave', 'style', 'blow'],
+        'nail': ['nail', 'manicure', 'pedicure', 'gel', 'acrylic', 'polish'],
+        'nail_tech': ['nail', 'manicure', 'pedicure', 'gel', 'acrylic', 'polish'],
+        'makeup': ['makeup', 'make up', 'bridal', 'glam', 'mua', 'look'],
+        'makeup_artist': ['makeup', 'make up', 'bridal', 'glam', 'mua', 'look'],
+    }
+    
+    # Niche to service type field mapping
+    NICHE_FIELD_MAPPING = {
+        'esthetician': 'esthetician_service_type',
+        'massage': 'esthetician_service_type',
+        'hair': 'hair_service_type',
+        'hairstylist': 'hair_service_type',
+        'nail': 'nail_style_type',
+        'nail_tech': 'nail_style_type',
+        'makeup': 'look_type',
+        'makeup_artist': 'look_type',
+    }
     
     def get(self, request):
         shop = get_object_or_404(Shop, owner=request.user)
@@ -35,11 +64,43 @@ class TodayAppointmentsView(APIView):
         else:
             target_date = timezone.now().date()
         
+        # Get niche filter
+        niche = request.query_params.get('niche')
+        
         # Get all bookings for the target date
         bookings = Booking.objects.filter(
             shop=shop,
             slot__start_time__date=target_date
-        ).select_related('user', 'slot', 'slot__service').order_by('slot__start_time')
+        ).select_related('user', 'slot', 'slot__service', 'slot__service__category').order_by('slot__start_time')
+        
+        # Apply niche filter if provided
+        if niche:
+            field = self.NICHE_FIELD_MAPPING.get(niche)
+            keywords = self.NICHE_KEYWORDS.get(niche, [])
+            
+            if field:
+                # Filter by service type field (non-empty value)
+                filter_kwargs = {f'slot__service__{field}__isnull': False}
+                exclude_kwargs = {f'slot__service__{field}': ''}
+                field_bookings = bookings.filter(**filter_kwargs).exclude(**exclude_kwargs)
+                
+                # Also include keyword matches (fallback)
+                if keywords:
+                    q = Q()
+                    for kw in keywords:
+                        q |= Q(slot__service__title__icontains=kw)
+                        q |= Q(slot__service__category__name__icontains=kw)
+                    keyword_bookings = bookings.filter(q)
+                    bookings = (field_bookings | keyword_bookings).distinct()
+                else:
+                    bookings = field_bookings
+            elif keywords:
+                # Keyword-only filtering (for barber, tattoo)
+                q = Q()
+                for kw in keywords:
+                    q |= Q(slot__service__title__icontains=kw)
+                    q |= Q(slot__service__category__name__icontains=kw)
+                bookings = bookings.filter(q)
         
         serializer = BarberAppointmentSerializer(bookings, many=True)
         
@@ -53,6 +114,7 @@ class TodayAppointmentsView(APIView):
         return Response({
             'date': target_date.isoformat(),
             'count': total_count,
+            'niche': niche,
             'stats': {
                 'confirmed': confirmed_count,
                 'completed': completed_count,
@@ -70,18 +132,36 @@ class DailyRevenueView(APIView):
     Query params:
     - date: YYYY-MM-DD (default: today)
     - service_type: Filter by service type (e.g., facial, massage, tattoo)
-    - niche: Filter by niche (esthetician, massage, hair, barber, tattoo, nail)
+    - niche: Filter by niche (esthetician, massage, hair, barber, tattoo, nail, makeup)
     """
     permission_classes = [IsAuthenticated, IsOwnerRole]
     
-    # Niche to service type field mapping
+    # Niche to service type field mapping (for niches with dedicated fields)
     NICHE_FIELD_MAPPING = {
         'esthetician': 'esthetician_service_type',
         'massage': 'esthetician_service_type',  # massage is under esthetician_service_type
         'hair': 'hair_service_type',
-        'barber': None,  # barber uses shop niche, not service type
-        'tattoo': None,
+        'hairstylist': 'hair_service_type',
         'nail': 'nail_style_type',
+        'nail_tech': 'nail_style_type',
+        'makeup': 'look_type',
+        'makeup_artist': 'look_type',
+    }
+    
+    # Keywords for niches without dedicated service type fields
+    NICHE_KEYWORDS = {
+        'barber': ['barber', 'haircut', 'hair cut', 'fade', 'beard', 'shave', 'trim', 'lineup', 'taper'],
+        'tattoo': ['tattoo', 'ink', 'piercing', 'body art', 'tat'],
+        'tattoo_artist': ['tattoo', 'ink', 'piercing', 'body art', 'tat'],
+        'esthetician': ['facial', 'skin', 'peel', 'microderm', 'wax', 'lash', 'brow', 'spa'],
+        'massage': ['massage', 'deep tissue', 'swedish', 'hot stone', 'body work', 'reflexology'],
+        'massage_therapist': ['massage', 'deep tissue', 'swedish', 'hot stone', 'body work', 'reflexology'],
+        'hair': ['hair', 'color', 'highlight', 'loc', 'braid', 'weave', 'style', 'blow'],
+        'hairstylist': ['hair', 'color', 'highlight', 'loc', 'braid', 'weave', 'style', 'blow'],
+        'nail': ['nail', 'manicure', 'pedicure', 'gel', 'acrylic', 'polish'],
+        'nail_tech': ['nail', 'manicure', 'pedicure', 'gel', 'acrylic', 'polish'],
+        'makeup': ['makeup', 'make up', 'bridal', 'glam', 'mua', 'look'],
+        'makeup_artist': ['makeup', 'make up', 'bridal', 'glam', 'mua', 'look'],
     }
     
     def get(self, request):
@@ -106,7 +186,7 @@ class DailyRevenueView(APIView):
             shop=shop,
             slot__start_time__date=target_date,
             status__in=['active', 'completed']
-        ).select_related('slot__service')
+        ).select_related('slot__service', 'slot__service__category')
         
         # Apply service_type filter if provided
         if service_type:
@@ -117,13 +197,34 @@ class DailyRevenueView(APIView):
             )
         
         # Apply niche filter if provided
-        if niche and niche in self.NICHE_FIELD_MAPPING:
-            field = self.NICHE_FIELD_MAPPING[niche]
+        if niche:
+            field = self.NICHE_FIELD_MAPPING.get(niche)
+            keywords = self.NICHE_KEYWORDS.get(niche, [])
+            
             if field:
-                # Filter by service type field
+                # Filter by service type field (non-empty value)
                 filter_kwargs = {f'slot__service__{field}__isnull': False}
                 exclude_kwargs = {f'slot__service__{field}': ''}
-                bookings = bookings.filter(**filter_kwargs).exclude(**exclude_kwargs)
+                field_bookings = bookings.filter(**filter_kwargs).exclude(**exclude_kwargs)
+                
+                # Also include keyword matches (fallback)
+                if keywords:
+                    q = Q()
+                    for kw in keywords:
+                        q |= Q(slot__service__title__icontains=kw)
+                        q |= Q(slot__service__category__name__icontains=kw)
+                    keyword_bookings = bookings.filter(q)
+                    # Combine both (field match OR keyword match)
+                    bookings = (field_bookings | keyword_bookings).distinct()
+                else:
+                    bookings = field_bookings
+            elif keywords:
+                # Keyword-only filtering (for barber, tattoo)
+                q = Q()
+                for kw in keywords:
+                    q |= Q(slot__service__title__icontains=kw)
+                    q |= Q(slot__service__category__name__icontains=kw)
+                bookings = bookings.filter(q)
         
         # Calculate revenue from bookings (service price)
         booking_count = bookings.count()
