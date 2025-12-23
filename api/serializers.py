@@ -590,6 +590,7 @@ class ShopListSerializer(serializers.Serializer):
     name = serializers.CharField()
     address = serializers.CharField()
     location = serializers.CharField(allow_null=True)
+    status = serializers.CharField()  # V1 Fix: for verification badge
     avg_rating = serializers.FloatField()
     review_count = serializers.IntegerField()
     distance = serializers.SerializerMethodField()
@@ -642,6 +643,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
             'avg_rating', 'review_count', 'distance', 'services', 'reviews',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
             'is_deposit_required', 'default_deposit_percentage', 'time_zone',
+            'status',  # V1 Fix: for verification badge
             # 🆕 Social Links
             'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
             'gallery_preview',
