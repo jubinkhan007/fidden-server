@@ -29,7 +29,7 @@ class HairstylistDashboardView(APIView):
         shop = get_object_or_404(Shop, owner=request.user)
         
         # Use shop's timezone for "today" calculation
-        shop_tz = pytz.timezone(shop.timezone) if shop.timezone else pytz.UTC
+        shop_tz = pytz.timezone(shop.time_zone) if shop.time_zone else pytz.UTC
         now_local = timezone.now().astimezone(shop_tz)
         today = now_local.date()
         week_end = today + timedelta(days=7)
