@@ -55,12 +55,30 @@ class HairstylistDashboardView(APIView):
             status__in=['active', 'completed']
         ).count()
         
-        # Today's revenue
-        from .models import Revenue
-        today_revenue = Revenue.objects.filter(
+        # Today's revenue - calculate from actual payments for hair services
+        from payments.models import Payment
+        from django.db.models.functions import Coalesce
+        from django.db.models import DecimalField, Value
+        from decimal import Decimal
+        
+        # Get today's hair service bookings
+        today_hair_bookings = Booking.objects.filter(
+            hair_service_filter,
             shop=shop,
-            timestamp=today
-        ).aggregate(total=Sum('revenue'))['total'] or 0
+            slot__start_time__date=today,
+            status__in=['active', 'completed']
+        )
+        
+        # Get slot_ids (Payment.booking_id references SlotBooking.id)
+        slot_ids = list(today_hair_bookings.values_list('slot_id', flat=True))
+        
+        # Sum payments for these hair service bookings
+        today_revenue = Payment.objects.filter(
+            booking_id__in=slot_ids,
+            status='succeeded'
+        ).aggregate(
+            total=Coalesce(Sum('amount'), Value(Decimal('0')), output_field=DecimalField())
+        )['total'] or 0
         
         # Client profiles count
         client_profiles = ClientHairProfile.objects.filter(shop=shop).count()
