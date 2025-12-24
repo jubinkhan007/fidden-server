@@ -24,6 +24,7 @@ class userBookingSerializer(serializers.ModelSerializer):
     slot_time = serializers.DateTimeField(source='slot.start_time', read_only=True)
     service_id = serializers.CharField(source='slot.service.id', read_only=True)
     service_title = serializers.CharField(source='slot.service.title', read_only=True)
+    service_img = serializers.SerializerMethodField()  # V1 Fix: for booking list display
     service_duration = serializers.CharField(source='slot.service.duration', read_only=True)
 
     avg_rating = serializers.SerializerMethodField()
@@ -53,6 +54,7 @@ class userBookingSerializer(serializers.ModelSerializer):
             'slot_time',
             'service_id',
             'service_title',
+            'service_img',   # V1 Fix: for booking list display
             'service_duration',
             'status',
             'created_at',
@@ -75,6 +77,14 @@ class userBookingSerializer(serializers.ModelSerializer):
         request = self.context.get("request")  #  need request from view
         if obj.shop.shop_img:
             return request.build_absolute_uri(obj.shop.shop_img.url) if request else obj.shop.shop_img.url
+        return None
+
+    def get_service_img(self, obj):
+        """V1 Fix: Return service image URL for booking display."""
+        request = self.context.get("request")
+        service = obj.slot.service if obj.slot else None
+        if service and service.service_img:
+            return request.build_absolute_uri(service.service_img.url) if request else service.service_img.url
         return None
 
     def get_avg_rating(self, obj):
