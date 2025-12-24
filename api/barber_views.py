@@ -262,11 +262,13 @@ class DailyRevenueView(APIView):
         
         # Sum actual payment amounts for these bookings
         from payments.models import Payment
-        booking_ids = list(bookings.values_list('id', flat=True))
+        # CRITICAL: Payment.booking_id references SlotBooking.id, NOT Booking.id!
+        # We need to use slot_id (which is the SlotBooking PK) to match payments
+        slot_ids = list(bookings.values_list('slot_id', flat=True))
         
-        # Get payments for these bookings that are in succeeded status
+        # Get payments for these slot bookings that are in succeeded status
         payments = Payment.objects.filter(
-            booking_id__in=booking_ids,
+            booking_id__in=slot_ids,
             status='succeeded'
         )
         
