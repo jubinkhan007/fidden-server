@@ -8,13 +8,16 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 
-from .models import Shop, Service, ClientHairProfile, ProductRecommendation
+from .models import Shop, Service, ServiceCategory, ClientHairProfile, ProductRecommendation
 from .permissions import IsOwnerAndOwnerRole
 from .hairstylist_serializers import (
     ClientHairProfileSerializer, ProductRecommendationSerializer,
     PrepNotesSerializer, HairstylistDashboardSerializer
 )
 from payments.models import Booking
+
+# Define hair-related category names for filtering
+HAIR_CATEGORY_KEYWORDS = ['hair', 'haircut', 'hairstyle', 'locs', 'braids', 'weave']
 
 
 class HairstylistDashboardView(APIView):
@@ -26,15 +29,26 @@ class HairstylistDashboardView(APIView):
         today = timezone.now().date()
         week_end = today + timedelta(days=7)
         
-        # Today's appointments
+        # Get hair-related categories
+        hair_category_q = Q()
+        for keyword in HAIR_CATEGORY_KEYWORDS:
+            hair_category_q |= Q(name__icontains=keyword)
+        hair_category_ids = ServiceCategory.objects.filter(hair_category_q).values_list('id', flat=True)
+        
+        # Base filter for hair services
+        hair_service_filter = Q(slot__service__category_id__in=hair_category_ids)
+        
+        # Today's appointments (hair services only)
         today_appointments = Booking.objects.filter(
+            hair_service_filter,
             shop=shop,
             slot__start_time__date=today,
             status__in=['active', 'completed']
         ).count()
         
-        # Week appointments (next 7 days)
+        # Week appointments (next 7 days, hair services only)
         week_appointments = Booking.objects.filter(
+            hair_service_filter,
             shop=shop,
             slot__start_time__date__gte=today,
             slot__start_time__date__lt=week_end,
@@ -81,10 +95,17 @@ class WeeklyScheduleView(APIView):
         days = int(request.query_params.get('days', 7))
         end_date = today + timedelta(days=days)
         
+        # Get hair-related categories
+        hair_category_q = Q()
+        for keyword in HAIR_CATEGORY_KEYWORDS:
+            hair_category_q |= Q(name__icontains=keyword)
+        hair_category_ids = ServiceCategory.objects.filter(hair_category_q).values_list('id', flat=True)
+        
         bookings = Booking.objects.filter(
             shop=shop,
             slot__start_time__date__gte=today,
             slot__start_time__date__lt=end_date,
+            slot__service__category_id__in=hair_category_ids,
             status__in=['active', 'completed']
         ).select_related('user', 'slot__service').order_by('slot__start_time')
         
@@ -121,9 +142,16 @@ class PrepNotesView(APIView):
         shop = get_object_or_404(Shop, owner=request.user)
         today = timezone.now().date()
         
+        # Get hair-related categories
+        hair_category_q = Q()
+        for keyword in HAIR_CATEGORY_KEYWORDS:
+            hair_category_q |= Q(name__icontains=keyword)
+        hair_category_ids = ServiceCategory.objects.filter(hair_category_q).values_list('id', flat=True)
+        
         bookings = Booking.objects.filter(
             shop=shop,
             slot__start_time__date=today,
+            slot__service__category_id__in=hair_category_ids,
             status__in=['active']
         ).select_related('user', 'slot__service').order_by('slot__start_time')
         
