@@ -256,29 +256,48 @@ class DailyRevenueView(APIView):
                 bookings = bookings.filter(q)
                 logger.info(f"DailyRevenueView: after keyword filter, count={bookings.count()}")
         
-        # Calculate revenue from bookings (service price)
+        # Calculate revenue from ACTUAL payments (not service prices)
+        # This reflects what was actually paid (deposits + checkout payments)
         booking_count = bookings.count()
         logger.info(f"DailyRevenueView: final booking_count={booking_count}")
-        calculated_revenue = bookings.aggregate(
-            total=Sum('slot__service__price')
-        )['total'] or 0
         
-        # If no filters applied, also get from Revenue model for comparison
-        if not service_type and not niche:
-            from .models import Revenue
-            daily_revenue = Revenue.objects.filter(
-                shop=shop,
-                timestamp=target_date
-            ).aggregate(total=Sum('revenue'))['total'] or 0
-        else:
-            daily_revenue = calculated_revenue
+        # Sum actual payment amounts for these bookings
+        from payments.models import Payment
+        booking_ids = bookings.values_list('id', flat=True)
+        
+        # Get payments for these bookings that are in succeeded/credited status
+        payments = Payment.objects.filter(
+            booking_id__in=booking_ids,
+            status__in=['succeeded', 'paid']
+        )
+        
+        # Sum deposit_paid + balance_paid (what was actually collected)
+        from django.db.models.functions import Coalesce
+        payment_totals = payments.aggregate(
+            total_deposits=Coalesce(Sum('deposit_paid'), 0),
+            total_balance=Coalesce(Sum('balance_paid'), 0),
+            total_tips=Coalesce(Sum('tips_amount'), 0),
+        )
+        
+        # Daily revenue = deposits + balance + tips
+        daily_revenue = float(
+            (payment_totals['total_deposits'] or 0) +
+            (payment_totals['total_balance'] or 0) +
+            (payment_totals['total_tips'] or 0)
+        )
+        
+        # Fallback: If no payment records, use the amount field
+        if daily_revenue == 0 and booking_count > 0:
+            daily_revenue = float(payments.aggregate(
+                total=Coalesce(Sum('amount'), 0)
+            )['total']) or 0
         
         # Calculate average booking value
-        avg_booking_value = (float(daily_revenue) / booking_count) if booking_count > 0 else 0
+        avg_booking_value = (daily_revenue / booking_count) if booking_count > 0 else 0
         
         return Response({
             'date': target_date.isoformat(),
-            'total_revenue': float(daily_revenue),
+            'total_revenue': daily_revenue,
             'booking_count': booking_count,
             'average_booking_value': float(avg_booking_value),
             'filters_applied': {
