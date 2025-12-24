@@ -25,8 +25,13 @@ class HairstylistDashboardView(APIView):
     permission_classes = [IsAuthenticated, IsOwnerAndOwnerRole]
     
     def get(self, request):
+        import pytz
         shop = get_object_or_404(Shop, owner=request.user)
-        today = timezone.now().date()
+        
+        # Use shop's timezone for "today" calculation
+        shop_tz = pytz.timezone(shop.timezone) if shop.timezone else pytz.UTC
+        now_local = timezone.now().astimezone(shop_tz)
+        today = now_local.date()
         week_end = today + timedelta(days=7)
         
         # Get hair-related categories
@@ -38,11 +43,17 @@ class HairstylistDashboardView(APIView):
         # Base filter for hair services
         hair_service_filter = Q(slot__service__category_id__in=hair_category_ids)
         
-        # Today's appointments (hair services only)
+        # Create timezone-aware datetime range for today
+        today_start = shop_tz.localize(timezone.datetime(today.year, today.month, today.day, 0, 0, 0))
+        today_end = today_start + timedelta(days=1)
+        week_end_dt = today_start + timedelta(days=7)
+        
+        # Today's appointments (hair services only) - use datetime range for timezone accuracy
         today_appointments = Booking.objects.filter(
             hair_service_filter,
             shop=shop,
-            slot__start_time__date=today,
+            slot__start_time__gte=today_start,
+            slot__start_time__lt=today_end,
             status__in=['active', 'completed']
         ).count()
         
@@ -50,8 +61,8 @@ class HairstylistDashboardView(APIView):
         week_appointments = Booking.objects.filter(
             hair_service_filter,
             shop=shop,
-            slot__start_time__date__gte=today,
-            slot__start_time__date__lt=week_end,
+            slot__start_time__gte=today_start,
+            slot__start_time__lt=week_end_dt,
             status__in=['active', 'completed']
         ).count()
         
@@ -61,11 +72,12 @@ class HairstylistDashboardView(APIView):
         from django.db.models import DecimalField, Value
         from decimal import Decimal
         
-        # Get today's hair service bookings
+        # Get today's hair service bookings (use same datetime range as appointments)
         today_hair_bookings = Booking.objects.filter(
             hair_service_filter,
             shop=shop,
-            slot__start_time__date=today,
+            slot__start_time__gte=today_start,
+            slot__start_time__lt=today_end,
             status__in=['active', 'completed']
         )
         
