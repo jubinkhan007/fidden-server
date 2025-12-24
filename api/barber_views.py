@@ -256,44 +256,32 @@ class DailyRevenueView(APIView):
                 bookings = bookings.filter(q)
                 logger.info(f"DailyRevenueView: after keyword filter, count={bookings.count()}")
         
-        # Calculate revenue from ACTUAL payments (not service prices)
         # This reflects what was actually paid (deposits + checkout payments)
         booking_count = bookings.count()
         logger.info(f"DailyRevenueView: final booking_count={booking_count}")
         
         # Sum actual payment amounts for these bookings
         from payments.models import Payment
-        booking_ids = bookings.values_list('id', flat=True)
+        booking_ids = list(bookings.values_list('id', flat=True))
         
-        # Get payments for these bookings that are in succeeded/credited status
+        # Get payments for these bookings that are in succeeded status
         payments = Payment.objects.filter(
             booking_id__in=booking_ids,
-            status__in=['succeeded', 'paid']
+            status='succeeded'
         )
         
-        # Sum deposit_paid + balance_paid (what was actually collected)
+        # Log for debugging
+        for p in payments:
+            logger.info(f"  Payment id={p.id}, booking_id={p.booking_id}, amount={p.amount}")
+        
+        # Sum the 'amount' field directly - this is what was actually charged
         from django.db.models.functions import Coalesce
         from django.db.models import DecimalField, Value
         from decimal import Decimal
         
-        payment_totals = payments.aggregate(
-            total_deposits=Coalesce(Sum('deposit_paid'), Value(Decimal('0')), output_field=DecimalField()),
-            total_balance=Coalesce(Sum('balance_paid'), Value(Decimal('0')), output_field=DecimalField()),
-            total_tips=Coalesce(Sum('tips_amount'), Value(Decimal('0')), output_field=DecimalField()),
-        )
-        
-        # Daily revenue = deposits + balance + tips
-        daily_revenue = float(
-            (payment_totals['total_deposits'] or 0) +
-            (payment_totals['total_balance'] or 0) +
-            (payment_totals['total_tips'] or 0)
-        )
-        
-        # Fallback: If no payment records, use the amount field
-        if daily_revenue == 0 and booking_count > 0:
-            daily_revenue = float(payments.aggregate(
-                total=Coalesce(Sum('amount'), Value(Decimal('0')), output_field=DecimalField())
-            )['total']) or 0
+        daily_revenue = float(payments.aggregate(
+            total=Coalesce(Sum('amount'), Value(Decimal('0')), output_field=DecimalField())
+        )['total'] or 0)
         
         # Calculate average booking value
         avg_booking_value = (daily_revenue / booking_count) if booking_count > 0 else 0
