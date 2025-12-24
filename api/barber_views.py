@@ -273,10 +273,13 @@ class DailyRevenueView(APIView):
         
         # Sum deposit_paid + balance_paid (what was actually collected)
         from django.db.models.functions import Coalesce
+        from django.db.models import DecimalField, Value
+        from decimal import Decimal
+        
         payment_totals = payments.aggregate(
-            total_deposits=Coalesce(Sum('deposit_paid'), 0),
-            total_balance=Coalesce(Sum('balance_paid'), 0),
-            total_tips=Coalesce(Sum('tips_amount'), 0),
+            total_deposits=Coalesce(Sum('deposit_paid'), Value(Decimal('0')), output_field=DecimalField()),
+            total_balance=Coalesce(Sum('balance_paid'), Value(Decimal('0')), output_field=DecimalField()),
+            total_tips=Coalesce(Sum('tips_amount'), Value(Decimal('0')), output_field=DecimalField()),
         )
         
         # Daily revenue = deposits + balance + tips
@@ -289,7 +292,7 @@ class DailyRevenueView(APIView):
         # Fallback: If no payment records, use the amount field
         if daily_revenue == 0 and booking_count > 0:
             daily_revenue = float(payments.aggregate(
-                total=Coalesce(Sum('amount'), 0)
+                total=Coalesce(Sum('amount'), Value(Decimal('0')), output_field=DecimalField())
             )['total']) or 0
         
         # Calculate average booking value
