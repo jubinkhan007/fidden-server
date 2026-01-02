@@ -258,3 +258,34 @@ urlpatterns += [
     # Client self-service
     path('my-massage-profile/', MyMassageProfileView.as_view(), name='my-massage-profile'),
 ]
+
+
+# ==========================================
+# WALK-IN QUEUE ROUTES 🚶
+# ==========================================
+from .walk_in_views import WalkInViewSet
+
+urlpatterns += [
+    # Walk-in queue management
+    path('walk-in/', WalkInViewSet.as_view({
+        'get': 'list', 
+        'post': 'create'
+    }), name='walk-in-list'),
+    path('walk-in/<int:pk>/', WalkInViewSet.as_view({
+        'get': 'retrieve', 
+        'patch': 'partial_update', 
+        'delete': 'destroy'
+    }), name='walk-in-detail'),
+    path('walk-in/<int:pk>/start/', WalkInViewSet.as_view({
+        'post': 'start'
+    }), name='walk-in-start'),
+    path('walk-in/<int:pk>/complete/', WalkInViewSet.as_view({
+        'post': 'complete'
+    }), name='walk-in-complete'),
+    path('walk-in/<int:pk>/no_show/', WalkInViewSet.as_view({
+        'post': 'no_show'
+    }), name='walk-in-no-show'),
+    path('walk-in/stats/', WalkInViewSet.as_view({
+        'get': 'stats'
+    }), name='walk-in-stats'),
+]

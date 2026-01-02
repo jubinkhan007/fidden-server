@@ -58,13 +58,22 @@ class Payment(models.Model):
     ]
 
     booking = models.OneToOneField(SlotBooking, on_delete=models.CASCADE, related_name='payment')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # User is nullable for walk-in payments
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True
+    )
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
     
-    # Payment method tracking
+    # Payment method tracking (includes walk-in methods)
     PAYMENT_METHOD_CHOICES = [
         ('stripe', 'Stripe'),
         ('paypal', 'PayPal'),
+        ('cash', 'Cash'),      # Walk-in
+        ('card', 'Card'),      # Walk-in (manual card)
+        ('other', 'Other'),    # Walk-in
     ]
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, default='stripe')
     paypal_capture_id = models.CharField(max_length=255, blank=True, null=True, help_text="PayPal capture ID for refunds")
@@ -283,7 +292,13 @@ class TransactionLog(models.Model):
     transaction_type = models.CharField(max_length=10, choices=TRANSACTION_TYPE_CHOICES)
     payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="transaction_logs")
     refund = models.ForeignKey(Refund, on_delete=models.CASCADE, null=True, blank=True, related_name="transaction_logs")
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # User is nullable for walk-in transactions
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True
+    )
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE)
     slot = models.ForeignKey('api.SlotBooking', on_delete=models.CASCADE, null=True, blank=True)
     service = models.ForeignKey('api.Service', on_delete=models.CASCADE, null=True, blank=True)

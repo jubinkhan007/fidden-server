@@ -851,7 +851,14 @@ class SlotBooking(models.Model):
         ('refund', 'Refund'),
     ]
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='slot_bookings')
+    # User is nullable for walk-ins
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='slot_bookings',
+        null=True, 
+        blank=True
+    )
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='slot_bookings')
     service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='slot_bookings')
     slot = models.ForeignKey(Slot, on_delete=models.CASCADE, related_name='bookings')
@@ -860,6 +867,11 @@ class SlotBooking(models.Model):
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='confirmed')
     payment_status = models.CharField(max_length=10, choices=PAYMENT_STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Walk-in support
+    is_walk_in = models.BooleanField(default=False)
+    walk_in_customer_name = models.CharField(max_length=255, blank=True, null=True)
+    walk_in_customer_phone = models.CharField(max_length=20, blank=True, null=True)
 
     class Meta:
         ordering = ['-start_time']
@@ -868,9 +880,10 @@ class SlotBooking(models.Model):
             models.Index(fields=['service', 'start_time']),
         ]
         constraints = [
+            # Only apply unique constraint for non-walk-in bookings with users
             models.UniqueConstraint(
                 fields=['user', 'slot'],
-                condition=Q(status='confirmed'),
+                condition=Q(status='confirmed') & Q(is_walk_in=False) & ~Q(user=None),
                 name='uniq_user_slot_confirmed'
             )
         ]
@@ -1491,8 +1504,9 @@ class Consultation(models.Model):
 
 class WalkInEntry(models.Model):
     """
-    Walk-in queue entry for barber shops.
+    Walk-in queue entry for shops.
     Customers can join the queue without a pre-booked appointment.
+    On completion/checkout, creates SlotBooking + Payment for integration with existing system.
     """
     STATUS_CHOICES = [
         ('waiting', 'Waiting'),
@@ -1500,6 +1514,12 @@ class WalkInEntry(models.Model):
         ('completed', 'Completed'),
         ('no_show', 'No Show'),
         ('cancelled', 'Cancelled'),
+    ]
+    
+    PAYMENT_METHOD_CHOICES = [
+        ('cash', 'Cash'),
+        ('card', 'Card'),
+        ('other', 'Other'),
     ]
     
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='walk_ins')
@@ -1520,14 +1540,38 @@ class WalkInEntry(models.Model):
         related_name='walk_ins'
     )
     
+    # Queue management (position renamed to queue_number for consistency)
     position = models.PositiveIntegerField(default=0, help_text="Queue position")
     estimated_wait_minutes = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='waiting')
     notes = models.TextField(blank=True)
     
+    # Timing
     joined_at = models.DateTimeField(auto_now_add=True)
     called_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    
+    # Link to SlotBooking after checkout (for integration with bookings/transactions)
+    slot_booking = models.OneToOneField(
+        SlotBooking,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='walk_in_entry'
+    )
+    
+    # Payment at checkout (full payment, no deposit)
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    tips_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    payment_method = models.CharField(
+        max_length=20,
+        choices=PAYMENT_METHOD_CHOICES,
+        blank=True,
+        null=True
+    )
+    
+    # Service niche for dashboard filtering
+    service_niche = models.CharField(max_length=50, blank=True, null=True)
     
     class Meta:
         ordering = ['position', 'joined_at']
@@ -1538,6 +1582,16 @@ class WalkInEntry(models.Model):
     
     def __str__(self):
         return f"{self.customer_name} - {self.status} (#{self.position})"
+    
+    @classmethod
+    def get_next_queue_number(cls, shop):
+        """Get next queue number for today (resets daily)."""
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        last_entry = cls.objects.filter(
+            shop=shop,
+            joined_at__gte=today_start
+        ).order_by('-position').first()
+        return (last_entry.position + 1) if last_entry else 1
 
 
 class LoyaltyProgram(models.Model):
@@ -2185,3 +2239,4 @@ class SessionNote(models.Model):
     
     def __str__(self):
         return f"{self.get_technique_used_display()} - {self.client.name} ({self.booking.id})"
+

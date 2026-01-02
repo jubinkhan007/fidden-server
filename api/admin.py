@@ -528,11 +528,11 @@ class SignedConsentFormAdmin(admin.ModelAdmin):
 
 @admin.register(WalkInEntry)
 class WalkInEntryAdmin(admin.ModelAdmin):
-    list_display = ('id', 'customer_name', 'shop', 'service', 'position', 'status', 'joined_at')
-    list_filter = ('status', 'shop', 'joined_at')
+    list_display = ('id', 'customer_name', 'shop', 'service', 'position', 'status', 'payment_method', 'amount_paid', 'joined_at')
+    list_filter = ('status', 'shop', 'joined_at', 'payment_method')
     search_fields = ('customer_name', 'customer_phone', 'customer_email', 'shop__name')
-    readonly_fields = ('joined_at', 'called_at', 'completed_at')
-    raw_id_fields = ('shop', 'user', 'service')
+    readonly_fields = ('joined_at', 'called_at', 'completed_at', 'slot_booking')
+    raw_id_fields = ('shop', 'user', 'service', 'slot_booking')
     ordering = ['shop', 'position', '-joined_at']
 
 
