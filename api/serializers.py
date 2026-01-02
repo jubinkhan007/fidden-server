@@ -1383,7 +1383,7 @@ class DesignRequestSerializer(serializers.ModelSerializer):
         model = DesignRequest
         fields = [
             'id', 'shop', 'user', 'user_name', 'user_email', 'booking', 
-            'description', 'placement', 'size_approx', 'status', 
+            'description', 'placement', 'size_approx', 'status', 'service_niche',
             'images', 'created_at', 'updated_at'
         ]
         read_only_fields = ['user', 'created_at', 'updated_at']

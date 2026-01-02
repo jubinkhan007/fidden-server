@@ -1372,6 +1372,12 @@ class DesignRequest(models.Model):
     # Let's use a separate model for images to allow multiple uploads.
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    service_niche = models.CharField(
+        max_length=50, 
+        blank=True, 
+        null=True,
+        help_text="Service niche: tattoo_artist, nail_tech, hairstylist, etc."
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

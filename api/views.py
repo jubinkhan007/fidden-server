@@ -2409,10 +2409,17 @@ class DesignRequestViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role == 'owner':
             # Owners see requests for their shop
-            return DesignRequest.objects.filter(shop=user.shop).order_by('-created_at')
+            queryset = DesignRequest.objects.filter(shop=user.shop)
         else:
             # Clients see their own requests
-            return DesignRequest.objects.filter(user=user).order_by('-created_at')
+            queryset = DesignRequest.objects.filter(user=user)
+        
+        # Optional: filter by service_niche
+        niche = self.request.query_params.get('service_niche')
+        if niche:
+            queryset = queryset.filter(service_niche=niche)
+        
+        return queryset.order_by('-created_at')
     
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
