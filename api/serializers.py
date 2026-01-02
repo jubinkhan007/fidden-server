@@ -875,12 +875,26 @@ class ServiceListSerializer(serializers.ModelSerializer):
 class ServiceDetailSerializer(serializers.ModelSerializer):
     shop_id = serializers.IntegerField(source="shop.id", read_only=True)
     shop_name = serializers.CharField(source="shop.name", read_only=True)
-    shop_niche = serializers.CharField(source="shop.niche", read_only=True)  # Shop's primary niche
+    service_niche = serializers.SerializerMethodField()  # Niche based on service category
     shop_address = serializers.CharField(source="shop.address", read_only=True)
     shop_img = serializers.SerializerMethodField()  # V1 Fix: declared as method field
     avg_rating = serializers.FloatField(read_only=True)
     review_count = serializers.IntegerField(read_only=True)
     reviews = serializers.SerializerMethodField()
+    
+    # Category to niche mapping
+    CATEGORY_NICHE_MAP = {
+        'hair': 'hairstylist',
+        'haircut': 'hairstylist',
+        'hairstyle': 'hairstylist',
+        'nails': 'nail_tech',
+        'nail': 'nail_tech',
+        'skincare': 'esthetician',
+        'massage': 'massage_therapist',
+        'tattoo': 'tattoo_artist',
+        'makeup': 'makeup_artist',
+        'barber': 'barber',
+    }
 
     class Meta:
         model = Service
@@ -894,7 +908,7 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
             "duration",
             "shop_id",
             "shop_name",
-            "shop_niche",  # Shop's primary niche (tattoo, barber, hairstylist, etc.)
+            "service_niche",  # Service's niche based on category (tattoo_artist, hairstylist, etc.)
             "shop_img",   # V1 Fix: for storefront icon
             "shop_address",
             "avg_rating",
@@ -902,6 +916,20 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
             "reviews",
             "requires_age_18_plus",
         ]
+    
+    def get_service_niche(self, obj):
+        """Derive niche from service category name."""
+        if not obj.category:
+            return "general"
+        category_name = obj.category.name.lower()
+        # Direct match
+        if category_name in self.CATEGORY_NICHE_MAP:
+            return self.CATEGORY_NICHE_MAP[category_name]
+        # Partial match
+        for key, niche in self.CATEGORY_NICHE_MAP.items():
+            if key in category_name:
+                return niche
+        return "general"
 
     def get_reviews(self, obj):
         request = self.context.get("request")
