@@ -875,6 +875,7 @@ class ServiceListSerializer(serializers.ModelSerializer):
 class ServiceDetailSerializer(serializers.ModelSerializer):
     shop_id = serializers.IntegerField(source="shop.id", read_only=True)
     shop_name = serializers.CharField(source="shop.name", read_only=True)
+    shop_niche = serializers.CharField(source="shop.niche", read_only=True)  # Shop's primary niche
     shop_address = serializers.CharField(source="shop.address", read_only=True)
     shop_img = serializers.SerializerMethodField()  # V1 Fix: declared as method field
     avg_rating = serializers.FloatField(read_only=True)
@@ -893,6 +894,7 @@ class ServiceDetailSerializer(serializers.ModelSerializer):
             "duration",
             "shop_id",
             "shop_name",
+            "shop_niche",  # Shop's primary niche (tattoo, barber, hairstylist, etc.)
             "shop_img",   # V1 Fix: for storefront icon
             "shop_address",
             "avg_rating",
