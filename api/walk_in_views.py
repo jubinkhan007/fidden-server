@@ -184,19 +184,19 @@ class WalkInViewSet(viewsets.ModelViewSet):
         now = timezone.now()
         
         # Create a walk-in specific slot
+        # For walk-ins, we create a slot effectively "on demand"
         slot, created = Slot.objects.get_or_create(
             shop=entry.shop,
             service=entry.service,
             start_time=now.replace(second=0, microsecond=0),
             defaults={
-                'capacity': 1,
-                'booked_count': 1,
+                'capacity_left': 0,  # Immediately consumed
+                'end_time': now + timezone.timedelta(minutes=entry.service.duration or 30)
             }
         )
         
-        if not created:
-            slot.booked_count = (slot.booked_count or 0) + 1
-            slot.save()
+        # If slot existed, we don't strictly need to do anything for walk-ins
+        # as we are bypassing standard capacity checks
         
         return slot
     
