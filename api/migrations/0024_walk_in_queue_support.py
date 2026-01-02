@@ -17,21 +17,7 @@ class Migration(migrations.Migration):
             model_name='slotbooking',
             name='uniq_user_slot_confirmed',
         ),
-        migrations.AddField(
-            model_name='shop',
-            name='last_daily_snapshot_sent_at',
-            field=models.DateTimeField(blank=True, help_text='When daily snapshot was last sent (stored in UTC)', null=True),
-        ),
-        migrations.AddField(
-            model_name='shop',
-            name='last_week_ahead_sent_at',
-            field=models.DateTimeField(blank=True, help_text='When week-ahead forecast was last sent (stored in UTC)', null=True),
-        ),
-        migrations.AddField(
-            model_name='shop',
-            name='last_weekly_wrap_sent_at',
-            field=models.DateTimeField(blank=True, help_text='When weekly wrap-up notification was last sent (stored in UTC)', null=True),
-        ),
+        # Walk-in support for SlotBooking
         migrations.AddField(
             model_name='slotbooking',
             name='is_walk_in',
@@ -47,6 +33,7 @@ class Migration(migrations.Migration):
             name='walk_in_customer_phone',
             field=models.CharField(blank=True, max_length=20, null=True),
         ),
+        # Walk-in checkout fields
         migrations.AddField(
             model_name='walkinentry',
             name='amount_paid',
@@ -72,31 +59,13 @@ class Migration(migrations.Migration):
             name='tips_amount',
             field=models.DecimalField(decimal_places=2, default=0, max_digits=10),
         ),
-        migrations.AddField(
-            model_name='weeklysummary',
-            name='revenue_checkout',
-            field=models.DecimalField(decimal_places=2, default=0, help_text='Total checkout payments (remaining + tips) this week', max_digits=10),
-        ),
-        migrations.AddField(
-            model_name='weeklysummary',
-            name='revenue_deposits',
-            field=models.DecimalField(decimal_places=2, default=0, help_text='Total deposits collected this week', max_digits=10),
-        ),
-        migrations.AddField(
-            model_name='weeklysummary',
-            name='revenue_tips',
-            field=models.DecimalField(decimal_places=2, default=0, help_text='Total tips collected this week', max_digits=10),
-        ),
-        migrations.AlterField(
-            model_name='shop',
-            name='status',
-            field=models.CharField(choices=[('unverified', 'Unverified'), ('pending', 'Pending'), ('rejected', 'Rejected'), ('verified', 'Verified')], default='unverified', max_length=10),
-        ),
+        # Nullable user for walk-ins
         migrations.AlterField(
             model_name='slotbooking',
             name='user',
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='slot_bookings', to=settings.AUTH_USER_MODEL),
         ),
+        # Updated constraint to exclude walk-ins
         migrations.AddConstraint(
             model_name='slotbooking',
             constraint=models.UniqueConstraint(condition=models.Q(('status', 'confirmed'), ('is_walk_in', False), models.Q(('user', None), _negated=True)), fields=('user', 'slot'), name='uniq_user_slot_confirmed'),
