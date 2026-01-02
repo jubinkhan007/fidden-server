@@ -13,31 +13,19 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='booking',
-            name='review_reminder_sent_at',
-            field=models.DateTimeField(blank=True, help_text='Timestamp when review reminder was sent (max 1 per booking)', null=True),
-        ),
-        migrations.AddField(
-            model_name='booking',
-            name='review_request_sent_at',
-            field=models.DateTimeField(blank=True, help_text='Timestamp when initial review request was sent', null=True),
-        ),
-        migrations.AlterField(
-            model_name='booking',
-            name='status',
-            field=models.CharField(choices=[('active', 'Active'), ('completed', 'Completed'), ('cancelled', 'Cancelled'), ('no-show', 'No-Show'), ('late-cancel', 'Late Cancel')], default='active', max_length=20),
-        ),
+        # Walk-in payment method choices
         migrations.AlterField(
             model_name='payment',
             name='payment_method',
             field=models.CharField(choices=[('stripe', 'Stripe'), ('paypal', 'PayPal'), ('cash', 'Cash'), ('card', 'Card'), ('other', 'Other')], default='stripe', max_length=20),
         ),
+        # Nullable user for walk-in payments
         migrations.AlterField(
             model_name='payment',
             name='user',
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL),
         ),
+        # Nullable user for walk-in transaction logs
         migrations.AlterField(
             model_name='transactionlog',
             name='user',
