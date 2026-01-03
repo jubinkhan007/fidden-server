@@ -36,6 +36,25 @@ class BarberAppointmentSerializer(serializers.ModelSerializer):
             return get_valid_iana_timezone(obj.shop.time_zone)
         return "America/New_York"
     
+    def to_representation(self, instance):
+        """
+        Ensure all times are in UTC with Z suffix - consistent with ownerBookingSerializer.
+        """
+        from api.utils.timezone_helpers import to_utc_iso
+        rep = super().to_representation(instance)
+        
+        # Convert start_time and end_time to UTC
+        if instance.slot and instance.slot.start_time:
+            rep['start_time'] = to_utc_iso(instance.slot.start_time)
+        if instance.slot and instance.slot.end_time:
+            rep['end_time'] = to_utc_iso(instance.slot.end_time)
+        
+        # Created time in UTC
+        if instance.created_at:
+            rep['created_at'] = to_utc_iso(instance.created_at)
+        
+        return rep
+    
     def get_service_niche(self, obj):
         """Determine the niche based on service nail_style_type or category"""
         if obj.slot and obj.slot.service:
