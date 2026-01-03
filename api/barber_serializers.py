@@ -11,6 +11,7 @@ class BarberAppointmentSerializer(serializers.ModelSerializer):
     service_niche = serializers.SerializerMethodField()
     start_time = serializers.DateTimeField(source='slot.start_time', read_only=True)
     end_time = serializers.DateTimeField(source='slot.end_time', read_only=True)
+    shop_timezone = serializers.SerializerMethodField()
     
     class Meta:
         model = Booking
@@ -24,8 +25,16 @@ class BarberAppointmentSerializer(serializers.ModelSerializer):
             'start_time',
             'end_time',
             'status',
+            'shop_timezone',
             'created_at'
         ]
+    
+    def get_shop_timezone(self, obj):
+        """Return shop's IANA timezone for client-side conversion."""
+        from api.utils.timezone_helpers import get_valid_iana_timezone
+        if obj.shop:
+            return get_valid_iana_timezone(obj.shop.time_zone)
+        return "America/New_York"
     
     def get_service_niche(self, obj):
         """Determine the niche based on service nail_style_type or category"""
