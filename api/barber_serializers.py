@@ -56,23 +56,40 @@ class BarberAppointmentSerializer(serializers.ModelSerializer):
         return rep
     
     def get_service_niche(self, obj):
-        """Determine the niche based on service nail_style_type or category"""
+        """Determine the niche based on service type fields or category"""
         if obj.slot and obj.slot.service:
             service = obj.slot.service
-            # Check for nail-specific field
-            if service.nail_style_type:
+            
+            # Check service-specific type fields first
+            if getattr(service, 'look_type', None):
+                return 'makeup_artist'
+            if getattr(service, 'nail_style_type', None):
                 return 'nail_tech'
-            # Check category for niche inference
+            if getattr(service, 'hair_service_type', None):
+                return 'hairstylist'
+            if getattr(service, 'esthetician_service_type', None):
+                return 'esthetician'
+            
+            # Fallback: Check category for niche inference
             if service.category:
                 cat_name = service.category.name.lower()
-                if any(k in cat_name for k in ['nail', 'manicure', 'pedicure', 'gel', 'acrylic']):
+                # Check title too for better matching
+                title = service.title.lower() if service.title else ''
+                
+                if any(k in cat_name or k in title for k in ['makeup', 'make up', 'mua', 'bridal', 'glam']):
+                    return 'makeup_artist'
+                if any(k in cat_name or k in title for k in ['nail', 'manicure', 'pedicure', 'gel', 'acrylic']):
                     return 'nail_tech'
-                if any(k in cat_name for k in ['barber', 'haircut', 'fade', 'beard']):
+                if any(k in cat_name or k in title for k in ['barber', 'haircut', 'fade', 'beard', 'shave']):
                     return 'barber'
-                if any(k in cat_name for k in ['tattoo', 'piercing', 'ink']):
+                if any(k in cat_name or k in title for k in ['tattoo', 'piercing', 'ink', 'tat']):
                     return 'tattoo_artist'
-                if any(k in cat_name for k in ['hair', 'style', 'color', 'loc']):
+                if any(k in cat_name or k in title for k in ['hair', 'style', 'color', 'loc', 'braid']):
                     return 'hairstylist'
+                if any(k in cat_name or k in title for k in ['massage', 'deep tissue', 'swedish', 'hot stone']):
+                    return 'massage_therapist'
+                if any(k in cat_name or k in title for k in ['facial', 'skin', 'peel', 'wax', 'spa']):
+                    return 'esthetician'
         return 'general'
 
 
