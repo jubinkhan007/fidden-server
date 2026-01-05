@@ -54,26 +54,42 @@ class TodayAppointmentsView(APIView):
     def get(self, request):
         shop = get_object_or_404(Shop, owner=request.user)
         
-        # Get date from query params (default: today)
+        # Get date from query params (default: today in shop's timezone)
         date_param = request.query_params.get('date')
+        
+        # Get shop's timezone for proper date filtering
+        import zoneinfo
+        from datetime import datetime, time
+        from api.utils.timezone_helpers import get_valid_iana_timezone
+        
+        shop_tz_str = get_valid_iana_timezone(shop.time_zone)
+        shop_tz = zoneinfo.ZoneInfo(shop_tz_str)
+        
+        # Determine target date in shop's timezone
         if date_param:
             try:
-                target_date = timezone.datetime.strptime(date_param, '%Y-%m-%d').date()
+                target_date = datetime.strptime(date_param, '%Y-%m-%d').date()
             except ValueError:
-                target_date = timezone.now().date()
+                # Default to today in shop's timezone
+                target_date = datetime.now(shop_tz).date()
         else:
-            target_date = timezone.now().date()
+            # Default to today in shop's timezone
+            target_date = datetime.now(shop_tz).date()
         
         # Get niche filter
         niche = request.query_params.get('niche')
         
-        # Create UTC date range for proper timezone-independent filtering
-        from datetime import datetime, time, timezone as dt_tz
-        import pytz
-        start_of_day_utc = datetime.combine(target_date, time.min, tzinfo=pytz.UTC)
-        end_of_day_utc = datetime.combine(target_date, time.max, tzinfo=pytz.UTC)
+        # Create date range in shop's timezone, then convert to UTC for DB query
+        # This ensures we capture ALL bookings for the target date in shop's local time
+        start_of_day_local = datetime.combine(target_date, time.min).replace(tzinfo=shop_tz)
+        end_of_day_local = datetime.combine(target_date, time.max).replace(tzinfo=shop_tz)
         
-        # Get all bookings for the target date (using UTC range)
+        # Convert to UTC for database filtering
+        import pytz
+        start_of_day_utc = start_of_day_local.astimezone(pytz.UTC)
+        end_of_day_utc = end_of_day_local.astimezone(pytz.UTC)
+        
+        # Get all bookings for the target date (using shop's local day converted to UTC)
         bookings = Booking.objects.filter(
             shop=shop,
             slot__start_time__gte=start_of_day_utc,
