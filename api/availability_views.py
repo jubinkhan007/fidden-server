@@ -201,53 +201,75 @@ class BookingCreateView(APIView):
                     selected_provider = select_best_provider(shop, service, target_date, start_at)
                     
                     if not selected_provider:
-                        return Response({"detail": "No provider available for requested time."}, 
-                                        status=status.HTTP_409_CONFLICT)
+                        return Response({
+                            "code": "NO_PROVIDER_AVAILABLE",
+                            "detail": "No provider available for requested time."
+                        }, status=status.HTTP_409_CONFLICT)
 
                 # -----------------------------------------------------------------
-                # 3. CREATE BOOKING
+                # 3. CREATE DYNAMIC SLOT + SLOTBOOKING
                 # -----------------------------------------------------------------
-                # We need to bridge to the existing Payment flow.
-                # Usually we'd create a SlotBooking and then a Booking.
-                # But we don't have a pre-generated Slot.
-                # Calculate end_time
+                # Calculate end_time based on service duration
                 duration_mins = service.duration or 30
                 end_at = start_at + timedelta(minutes=duration_mins)
                 
-                # Create dynamic slot
-                # We use a special flag or just the fact it's created on the fly.
-                from api.models import Slot
-                dynamic_slot = Slot.objects.create(
-                    shop=shop,
+                # Create dynamic Slot (unique per service/start_time)
+                from api.models import Slot, SlotBooking
+                
+                # Try to get existing slot or create new one
+                # This handles edge case where slot already exists from pre-generation
+                dynamic_slot, slot_created = Slot.objects.get_or_create(
                     service=service,
                     start_time=start_at,
-                    end_time=end_at,
-                    capacity_left=0,  # booked - no capacity remaining
+                    defaults={
+                        'shop': shop,
+                        'end_time': end_at,
+                        'capacity_left': 1,  # Will be decremented below
+                    }
                 )
-
                 
-                # Now use existing serializer to create SlotBooking + Booking
-                # Actually we can just create them manually to avoid serializer complexity.
-                # But existing serializer might have important side effects (signals, etc.)
-                # Let's check SlotBookingSerializer.
+                # Validate slot has capacity
+                if dynamic_slot.capacity_left <= 0:
+                    return Response({
+                        "code": "SLOT_FULLY_BOOKED",
+                        "detail": "This time slot is no longer available."
+                    }, status=status.HTTP_409_CONFLICT)
                 
-                from api.serializers import SlotBookingSerializer
-                # ... wait, SlotBookingSerializer usually takes slot_id.
+                # Create SlotBooking with provider
+                slot_booking = SlotBooking.objects.create(
+                    user=request.user,
+                    slot=dynamic_slot,
+                    shop=shop,
+                    service=service,
+                    provider=selected_provider,  # Rule-based assignment
+                    start_time=start_at,
+                    end_time=end_at,
+                    status='confirmed',
+                    payment_status='pending'
+                )
                 
-                # For Phase 3, I will implement a simplified Booking creation logic 
-                # and then integrate with Payment views in next step.
+                # Decrement slot capacity
+                dynamic_slot.capacity_left -= 1
+                dynamic_slot.save(update_fields=['capacity_left'])
                 
-                # Actually, the user might want a response similar to CreatePaymentIntentView.
-                # I'll return the booking_id and instructions to call PaymentIntent endpoint with this booking?
-                # No, CreatePaymentIntentView COMBINES booking and payment.
-                
+                # Return slot_id for client to call existing payment endpoint
                 return Response({
                     "success": True,
-                    "booking_id": 999, # Placeholder
-                    "provider": selected_provider.name,
-                    "start_at": start_at_str
-                })
+                    "slot_id": dynamic_slot.id,
+                    "slot_booking_id": slot_booking.id,
+                    "provider_id": selected_provider.id,
+                    "provider_name": selected_provider.name,
+                    "start_at": start_at.isoformat(),
+                    "end_at": end_at.isoformat(),
+                    "service_id": service.id,
+                    "shop_id": shop.id,
+                    "next_step": f"POST /payments/payment-intent/{dynamic_slot.id}/"
+                }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
             logger.exception("Booking creation failed")
-            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({
+                "code": "BOOKING_CREATION_FAILED",
+                "detail": str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

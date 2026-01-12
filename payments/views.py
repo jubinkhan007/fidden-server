@@ -232,26 +232,45 @@ class CreatePaymentIntentView(APIView):
                 if not slot:
                     return Response({"detail": "Slot not found."}, status=status.HTTP_404_NOT_FOUND)
 
-                # hard guard (future, capacity, disabled times, etc.)
-                try:
-                    assert_slot_bookable(slot)
-                except ValidationError as e:
-                    return Response(
-                        {"detail": str(e.detail[0] if isinstance(e.detail, list) else e.detail)},
-                        status=status.HTTP_400_BAD_REQUEST
+                # Check if SlotBooking already exists for this user/slot (rule-based flow)
+                from api.models import SlotBooking
+                existing_booking = SlotBooking.objects.filter(
+                    slot=slot,
+                    user=user,
+                    status='confirmed'
+                ).first()
+                
+                if existing_booking:
+                    # Rule-based flow: SlotBooking already created by /api/bookings/
+                    # Validate it belongs to this user
+                    if existing_booking.user != user:
+                        return Response(
+                            {"detail": "This slot is reserved by another user."},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                    booking = existing_booking
+                else:
+                    # Legacy flow: Create SlotBooking via serializer
+                    # hard guard (future, capacity, disabled times, etc.)
+                    try:
+                        assert_slot_bookable(slot)
+                    except ValidationError as e:
+                        return Response(
+                            {"detail": str(e.detail[0] if isinstance(e.detail, list) else e.detail)},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
+                    # create the booking while the slot is locked
+                    data = {"slot_id": slot_id}
+                    if "add_on_ids" in request.data:
+                        data["add_on_ids"] = request.data["add_on_ids"]
+
+                    serializer = SlotBookingSerializer(
+                        data=data,
+                        context={"request": request},
                     )
-
-                # create the booking while the slot is locked
-                data = {"slot_id": slot_id}
-                if "add_on_ids" in request.data:
-                    data["add_on_ids"] = request.data["add_on_ids"]
-
-                serializer = SlotBookingSerializer(
-                    data=data,
-                    context={"request": request},
-                )
-                serializer.is_valid(raise_exception=True)
-                booking = serializer.save()
+                    serializer.is_valid(raise_exception=True)
+                    booking = serializer.save()
         except DatabaseError as e:
             logger.exception("DB error while locking/booking slot %s: %s", slot_id, e)
             return Response({"detail": "Could not reserve this slot. Please try another time."},
