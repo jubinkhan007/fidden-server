@@ -184,6 +184,86 @@ class Booking(models.Model):
         help_text="Timestamp when review reminder was sent (max 1 per booking)"
     )
 
+    # ---------------------------
+    # RULE-BASED SCHEDULING FIELDS
+    # ---------------------------
+    provider = models.ForeignKey(
+        'api.Provider',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='bookings',
+        help_text="The provider who will perform this service"
+    )
+
+    # Start of provider's active busy interval (includes buffer_before)
+    provider_busy_start = models.DateTimeField(
+        null=True, blank=True, db_index=True
+    )
+
+    # End of provider's active busy interval
+    provider_busy_end = models.DateTimeField(
+        null=True, blank=True, db_index=True
+    )
+
+    # Start of processing window (nullable if no processing overlap allowed)
+    processing_start = models.DateTimeField(
+        null=True, blank=True, db_index=True
+    )
+
+    # End of processing window
+    processing_end = models.DateTimeField(
+        null=True, blank=True, db_index=True
+    )
+
+    # Total end time including buffer_after
+    total_end = models.DateTimeField(
+        null=True, blank=True
+    )
+
+    class Meta:
+        # Composite indexes for range queries
+        indexes = [
+            # Efficient querying of busy overlaps: provider + start range
+            models.Index(fields=['provider', 'provider_busy_start']),
+            models.Index(fields=['provider', 'provider_busy_end']),
+            # Efficient querying of processing overlaps
+            models.Index(fields=['provider', 'processing_start']),
+            models.Index(fields=['provider', 'processing_end']),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Auto-compute fields on save
+        if self.slot and self.slot.service and self.slot.service.id:
+            from datetime import timedelta
+            service = self.slot.service
+            start = self.slot.start_time
+            
+            # Carry over provider from slot if not explicitly set
+            if not self.provider and hasattr(self.slot, 'provider'):
+                self.provider = self.slot.provider
+
+            # Buffer before affects start of busy block
+            buf_before = service.buffer_before_minutes
+            self.provider_busy_start = start - timedelta(minutes=buf_before)
+            
+            # Busy end
+            busy_mins = service.effective_provider_block_minutes
+            self.provider_busy_end = start + timedelta(minutes=busy_mins)
+            
+            # Processing window
+            if service.allow_processing_overlap and service.processing_window_minutes > 0:
+                self.processing_start = self.provider_busy_end
+                self.processing_end = self.processing_start + timedelta(minutes=service.processing_window_minutes)
+            else:
+                self.processing_start = None
+                self.processing_end = None
+            
+            # Total end including buffer after
+            buf_after = service.buffer_after_minutes
+            self.total_end = (self.processing_end or self.provider_busy_end) + timedelta(minutes=buf_after)
+
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"Booking {self.id} - {self.status}"
 
@@ -431,6 +511,7 @@ def handle_payment_status(sender, instance, created, **kwargs):
                     "user": instance.user,
                     "shop": shop,
                     "slot": slot_booking,
+                    "provider": slot_booking.provider, # Carry over provider if set
                     "status": "active",
                     "stripe_payment_intent_id": instance.stripe_payment_intent_id,
                 },

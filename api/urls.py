@@ -43,6 +43,13 @@ from .views import (
     GalleryItemDetailView,
     PublicGalleryView,
 )
+
+from .availability_views import (
+    AvailabilityView,
+    BookingCreateView,
+    ProvidersView,
+)
+
 from payments.views import ShopSlotsView
 
 urlpatterns = [
@@ -91,4 +98,9 @@ urlpatterns = [
     path('gallery/', GalleryItemView.as_view(), name='gallery-list-create'),
     path('gallery/<int:pk>/', GalleryItemDetailView.as_view(), name='gallery-detail'),
     path('shops/<int:shop_id>/gallery/', PublicGalleryView.as_view(), name='public-gallery'),
+
+    # Availability & Booking (Rule-Based)
+    path('availability/', AvailabilityView.as_view(), name='availability'),
+    path('bookings/', BookingCreateView.as_view(), name='booking-create'),
+    path('shops/<int:shop_id>/providers/', ProvidersView.as_view(), name='shop-providers'),
 ]
