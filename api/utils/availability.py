@@ -45,6 +45,13 @@ def ceil_to_interval(minutes_from_midnight: int, interval_minutes: int) -> int:
         return minutes_from_midnight
     return minutes_from_midnight + (interval_minutes - remainder)
 
+def get_tz_aware_dt(date_obj: date, time_obj: time, tz: ZoneInfo) -> datetime:
+    """Create a timezone-aware datetime from date, time, and timezone."""
+    dt = datetime.combine(date_obj, time_obj)
+    if timezone.is_aware(dt):
+        return dt.astimezone(tz)
+    return dt.replace(tzinfo=tz)
+
 def to_utc(dt: datetime) -> datetime:
     """Convert aware datetime to UTC."""
     return dt.astimezone(ZoneInfo('UTC'))
