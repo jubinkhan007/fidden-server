@@ -181,7 +181,8 @@ def get_breaks(provider: Provider, date_obj: date) -> List[Interval]:
     # 3. Legacy Shop Breaks
     # Shop model: break_start_time, break_end_time (daily recurrence)
     if shop.break_start_time and shop.break_end_time:
-         tz = pytz.timezone(shop.time_zone)
+         # Legacy: use shop timezone
+         tz = ZoneInfo(shop.time_zone)
          start_dt = get_tz_aware_dt(date_obj, shop.break_start_time, tz)
          end_dt = get_tz_aware_dt(date_obj, shop.break_end_time, tz)
          if start_dt < end_dt:
@@ -196,7 +197,7 @@ def _get_ruleset_intervals(ruleset: AvailabilityRuleSet, date_obj: date) -> List
     if not rules:
         return []
         
-    tz = pytz.timezone(ruleset.timezone)
+    # ZoneInfo cache optimization not needed here as _parse_rules takes str
     return _parse_rules(rules, date_obj, ruleset.timezone)
 
 def _get_ruleset_breaks(ruleset: AvailabilityRuleSet, date_obj: date) -> List[Interval]:
@@ -261,7 +262,12 @@ def _get_legacy_shop_intervals(shop: Shop, date_obj: date) -> List[Interval]:
     # Fallback to start_at/close_at if not in business_hours
     
     intervals = []
-    tz = pytz.timezone(shop.time_zone)
+    # If using rulesets, timezone is stored on ruleset or shop
+    # We need to localize the current time to check "now"
+    
+    # Use helper
+    tz_id = resolve_timezone_id(provider)
+    tz = ZoneInfo(tz_id)
     
     # Check overrides/custom hours first
     if shop.business_hours and day_key in shop.business_hours:
@@ -295,7 +301,7 @@ def get_blocked_intervals(provider: Provider, date_obj: date) -> Tuple[List[Bloc
     processing_blocks: Concurrent conflicts (Booking.processing_window)
     """
     tz_name = provider.availability_ruleset.timezone if provider.availability_ruleset else provider.shop.time_zone
-    tz = pytz.timezone(tz_name)
+    tz = ZoneInfo(tz_name)
     
     busy_blocks = []
     processing_blocks = []
