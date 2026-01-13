@@ -12,6 +12,10 @@ sys.path.append(os.getcwd())
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "fidden.settings")
 django.setup()
 
+# Allow 'testserver' for APIClient
+if 'testserver' not in settings.ALLOWED_HOSTS:
+    settings.ALLOWED_HOSTS.append('testserver')
+
 from api.models import Shop, Service, Provider, AvailabilityRuleSet, SlotBooking, ProviderDayLock, ServiceCategory
 from api.utils.availability import get_working_windows, get_blocked_intervals, provider_available_starts
 from rest_framework.test import APIClient
