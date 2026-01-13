@@ -60,8 +60,7 @@ def run_smoke_test():
 
     # Create/Get Service Category
     category, _ = ServiceCategory.objects.get_or_create(
-        name="Staging Category",
-        defaults={'description': 'Test Category'}
+        name="Staging Category"
     )
 
     # Create Service
