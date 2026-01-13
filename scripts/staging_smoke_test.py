@@ -37,7 +37,15 @@ def run_smoke_test():
     # Use existing shop 'BarberKing' or create
     shop = Shop.objects.filter(name__icontains="Barber").first()
     if not shop:
-        shop = Shop.objects.create(name=f"Staging Shop {run_id}", owner=user, address="123 Staging Ln", capacity=5)
+        shop = Shop.objects.create(
+        name=f"Staging Shop {run_id}", 
+        owner=user, 
+        address="123 Staging Ln", 
+        capacity=5,
+        start_at="09:00",
+        close_at="18:00",
+        niche="Barber"
+    )
         print(f"✅ Created Shop: {shop.name}")
     else:
         # Enable rule-based availability for this shop
