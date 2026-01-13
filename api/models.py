@@ -129,6 +129,13 @@ class Shop(models.Model):
         help_text="Enable new rule-based availability engine for this shop"
     )
 
+    def apply_plan_defaults(self, overwrite=False):
+        """
+        Placeholder for subscriptions app integration.
+        Populates shop settings based on the subscription plan.
+        """
+        pass
+
 # ------------------------------------
 # NEW RULE-BASED SCHEDULING MODELS
 # ------------------------------------
@@ -153,6 +160,18 @@ class AvailabilityRuleSet(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    def clean(self):
+        """Validate timezone is a valid IANA identifier."""
+        from django.core.exceptions import ValidationError
+        from zoneinfo import ZoneInfo
+        
+        try:
+            ZoneInfo(self.timezone)
+        except Exception:
+            raise ValidationError({
+                'timezone': f"'{self.timezone}' is not a valid IANA timezone identifier."
+            })
     
     def __str__(self):
         return f"{self.name or 'Ruleset'} ({self.timezone})"

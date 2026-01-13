@@ -1,5 +1,5 @@
 import logging
-import pytz
+from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, time, date
 from typing import List, Tuple, Optional, Dict, NamedTuple
 from django.utils import timezone
@@ -32,36 +32,94 @@ def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datet
     """
     return a_start < b_end and b_start < a_end
 
-def ceil_to_interval(dt: datetime, interval_minutes: int) -> datetime:
+def ceil_to_interval(minutes_from_midnight: int, interval_minutes: int) -> int:
     """
-    Round up datetime to the next multiple of interval_minutes.
-    Example: 9:05, interval=15 -> 9:15. 9:00 -> 9:00.
+    Round up minutes-from-midnight to the next multiple of interval_minutes.
+    Example: 545 (9:05), interval=15 -> 555 (9:15). 540 (9:00) -> 540.
     """
     if interval_minutes <= 0:
-        return dt
+        return minutes_from_midnight
     
-    delta = timedelta(minutes=interval_minutes)
-    # Start of day (arbitrary anchor)
-    anchor = dt.replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    diff = dt - anchor
-    minutes = diff.total_seconds() / 60
-    remainder = minutes % interval_minutes
-    
+    remainder = minutes_from_midnight % interval_minutes
     if remainder == 0:
-        return dt.replace(second=0, microsecond=0)
-        
-    minutes_to_add = interval_minutes - remainder
-    return (dt + timedelta(minutes=minutes_to_add)).replace(second=0, microsecond=0)
+        return minutes_from_midnight
+    return minutes_from_midnight + (interval_minutes - remainder)
 
 def to_utc(dt: datetime) -> datetime:
     """Convert aware datetime to UTC."""
-    return dt.astimezone(timezone.utc)
+    return dt.astimezone(ZoneInfo('UTC'))
 
-def get_tz_aware_dt(d: date, t: time, tz: timezone.tzinfo) -> datetime:
-    """Combine date and time in a specific timezone."""
-    dt = datetime.combine(d, t)
-    return timezone.make_aware(dt, tz)
+def is_valid_iana_timezone(tz_id: str) -> bool:
+    """Check if a timezone ID is valid IANA."""
+    try:
+        ZoneInfo(tz_id)
+        return True
+    except Exception:
+        return False
+
+def resolve_timezone_id(provider: Provider) -> str:
+    """
+    Resolve the IANA timezone ID for a provider.
+    Priority: Provider Ruleset -> Shop Default Ruleset -> Shop.time_zone -> Fallback
+    """
+    if provider.availability_ruleset and provider.availability_ruleset.timezone:
+        return provider.availability_ruleset.timezone
+    
+    shop = provider.shop
+    if shop.default_availability_ruleset and shop.default_availability_ruleset.timezone:
+        return shop.default_availability_ruleset.timezone
+    
+    if shop.time_zone:
+        return shop.time_zone
+    
+    return 'America/New_York'  # Fallback
+
+def safe_localize(date_obj: date, time_str: str, tz_id: str) -> Optional[datetime]:
+    """
+    Safely create a timezone-aware datetime from date + "HH:MM" string.
+    
+    Uses the minute-offset approach for DST safety:
+    - Returns aware datetime if the local wall time exists
+    - Returns None if time doesn't exist (spring-forward gap)
+    
+    For ambiguous times (fall-back), uses fold=0 (first occurrence).
+    """
+    try:
+        tz = ZoneInfo(tz_id)
+        t = datetime.strptime(time_str, "%H:%M").time()
+        dt_naive = datetime.combine(date_obj, t)
+        
+        # Create aware datetime with fold=0 (first occurrence for ambiguous times)
+        dt_aware = dt_naive.replace(tzinfo=tz, fold=0)
+        
+        # Round-trip check: Convert to UTC and back to local
+        utc_dt = dt_aware.astimezone(ZoneInfo('UTC'))
+        round_trip = utc_dt.astimezone(tz)
+        
+        # If the wall time differs after round-trip, this time doesn't exist
+        if round_trip.hour != dt_aware.hour or round_trip.minute != dt_aware.minute:
+            return None
+        
+        return dt_aware
+    except Exception as e:
+        logger.error(f"safe_localize error: {e} for {date_obj} {time_str} {tz_id}")
+        return None
+
+def safe_localize_minutes(date_obj: date, minutes_from_midnight: int, tz_id: str) -> Optional[datetime]:
+    """
+    Safely create a timezone-aware datetime from date + minutes-from-midnight.
+    This is the preferred method for grid iteration to avoid DST drift.
+    """
+    hours = minutes_from_midnight // 60
+    mins = minutes_from_midnight % 60
+    
+    # Validate time bounds
+    if hours >= 24 or hours < 0 or mins < 0 or mins >= 60:
+        return None
+    
+    time_str = f"{hours:02d}:{mins:02d}"
+    return safe_localize(date_obj, time_str, tz_id)
+
 
 # ==========================================
 # 2. Working Window Resolution
@@ -154,18 +212,20 @@ def _get_ruleset_breaks(ruleset: AvailabilityRuleSet, date_obj: date) -> List[In
     return _parse_break_objects(day_breaks, date_obj, ruleset.timezone)
 
 def _parse_rules(rules_list: List[List[str]], date_obj: date, tz_name: str) -> List[Interval]:
-    """Parse list of [start_str, end_str] into Intervals."""
+    """Parse list of [start_str, end_str] into Intervals using DST-safe localization."""
     intervals = []
-    tz = pytz.timezone(tz_name)
     
     for r in rules_list:
-        if len(r) != 2: continue
+        if len(r) != 2: 
+            continue
         try:
-            start_t = datetime.strptime(r[0], "%H:%M").time()
-            end_t = datetime.strptime(r[1], "%H:%M").time()
+            start_dt = safe_localize(date_obj, r[0], tz_name)
+            end_dt = safe_localize(date_obj, r[1], tz_name)
             
-            start_dt = get_tz_aware_dt(date_obj, start_t, tz)
-            end_dt = get_tz_aware_dt(date_obj, end_t, tz)
+            # Skip if either time doesn't exist (spring-forward gap)
+            if start_dt is None or end_dt is None:
+                logger.warning(f"Skipping rule {r} on {date_obj} - time doesn't exist (DST gap)")
+                continue
             
             if start_dt < end_dt:
                 intervals.append(Interval(start_dt, end_dt))
@@ -176,16 +236,17 @@ def _parse_rules(rules_list: List[List[str]], date_obj: date, tz_name: str) -> L
     return intervals
 
 def _parse_break_objects(break_objs: List[Dict], date_obj: date, tz_name: str) -> List[Interval]:
+    """Parse break objects into Intervals using DST-safe localization."""
     intervals = []
-    tz = pytz.timezone(tz_name)
     
     for b in break_objs:
         try:
-            start_t = datetime.strptime(b['start'], "%H:%M").time()
-            end_t = datetime.strptime(b['end'], "%H:%M").time()
+            start_dt = safe_localize(date_obj, b['start'], tz_name)
+            end_dt = safe_localize(date_obj, b['end'], tz_name)
             
-            start_dt = get_tz_aware_dt(date_obj, start_t, tz)
-            end_dt = get_tz_aware_dt(date_obj, end_t, tz)
+            # Skip if either time doesn't exist (spring-forward gap)
+            if start_dt is None or end_dt is None:
+                continue
             
             if start_dt < end_dt:
                 intervals.append(Interval(start_dt, end_dt))
@@ -244,7 +305,7 @@ def get_blocked_intervals(provider: Provider, date_obj: date) -> Tuple[List[Bloc
     for b in breaks:
         busy_blocks.append(BlockedInterval(b.start, b.end, is_busy=True, booking_id=None))
         
-    # 2. Add Bookings (Optimized Query)
+    # 2. Add Bookings (Legacy Booking Model)
     # We need bookings that overlap the target DATE
     day_start = get_tz_aware_dt(date_obj, time.min, tz)
     day_end = get_tz_aware_dt(date_obj, time.max, tz)
@@ -275,6 +336,63 @@ def get_blocked_intervals(provider: Provider, date_obj: date) -> Tuple[List[Bloc
                 booking_id=b.id
             ))
             
+    # 3. Add SlotBookings (New Model - Rule-based)
+    # These might rely on dynamic connection to Service for buffers
+    from api.models import SlotBooking
+    
+    slot_bookings = SlotBooking.objects.filter(
+        provider=provider,
+        status__in=['confirmed', 'pending'],
+        end_time__gt=day_start,
+        start_time__lt=day_end
+    ).select_related('service')
+    
+    for sb in slot_bookings:
+        svc = sb.service
+        s_start = sb.start_time
+        s_end = sb.end_time # (start + duration)
+        
+        # Calculate Buffers dynamically
+        buffer_before = timedelta(minutes=svc.buffer_before_minutes)
+        buffer_after = timedelta(minutes=svc.buffer_after_minutes)
+        prov_block_mins = svc.effective_provider_block_minutes
+        
+        # Busy Block: [Start - BufferBefore, Start + ProviderBlock]
+        # BUT if ProviderBlock < Duration (Processing), we have a split.
+        # If ProviderBlock == Duration, then Busy is [Start - Buffer, End + BufferAfter]
+        
+        busy_start = s_start - buffer_before
+        
+        if svc.allow_processing_overlap and svc.processing_window_minutes > 0:
+            # Complex Case: Processing Enabled
+            # Busy: [Start - Buffer, Start + ProvBlock]
+            # Processing: [Start + ProvBlock, Start + Duration]
+            # Cleanup (BufferAfter): [Start + Duration, Start + Duration + BufferAfter]
+            # Usually cleanup requires provider, so it's BUSY.
+            
+            busy_end_1 = s_start + timedelta(minutes=prov_block_mins)
+            
+            # Add Initial Busy Block
+            busy_blocks.append(BlockedInterval(busy_start, busy_end_1, is_busy=True, booking_id=sb.id))
+            
+            # Add Processing Block
+            proc_start = busy_end_1
+            proc_end = s_end # (Start + Duration)
+            if proc_start < proc_end:
+                 processing_blocks.append(BlockedInterval(proc_start, proc_end, is_busy=False, booking_id=sb.id))
+            
+            # Add Cleanup Busy Block (if any)
+            if svc.buffer_after_minutes > 0:
+                cleanup_start = s_end
+                cleanup_end = s_end + buffer_after
+                busy_blocks.append(BlockedInterval(cleanup_start, cleanup_end, is_busy=True, booking_id=sb.id))
+                
+        else:
+            # Simple Case: Full Duration is Busy
+            # Busy: [Start - Buffer, End + BufferAfter]
+            busy_end = s_end + buffer_after
+            busy_blocks.append(BlockedInterval(busy_start, busy_end, is_busy=True, booking_id=sb.id))
+
     return busy_blocks, processing_blocks
 
 
@@ -289,6 +407,13 @@ def provider_available_starts(
 ) -> List[datetime]:
     """
     Calculate all valid start times for a service with a provider on a date.
+    
+    DST-Safe Algorithm:
+    - Generate candidate wall-times using minute offsets (not timedelta on aware datetimes)
+    - Localize each candidate independently using safe_localize_minutes()
+    - Skip non-existent times (spring-forward gaps)
+    - Convert to UTC for conflict checks
+    
     Enforces rules:
     1. Must fit in Working Window (considering total duration + buffers)
     2. Must not overlap Busy Blocks (provider_busy_minutes)
@@ -296,15 +421,14 @@ def provider_available_starts(
     """
     
     # 0. Setup
-    tz_name = provider.availability_ruleset.timezone if provider.availability_ruleset else provider.shop.time_zone
-    tz = pytz.timezone(tz_name)
+    tz_id = resolve_timezone_id(provider)
     
     # Grid interval
     interval_minutes = provider.shop.default_interval_minutes
     if provider.availability_ruleset:
         interval_minutes = provider.availability_ruleset.interval_minutes
         
-    start_time_limit = timezone.now() # Don't return past slots
+    start_time_limit = timezone.now()  # Don't return past slots
     
     # Get configuration
     windows = get_working_windows(provider, date_obj)
@@ -312,72 +436,83 @@ def provider_available_starts(
     
     available_slots = []
     
-    # Pre-calculate service intervals relative to 't'
-    # busy: [t - buffer_before, t + provider_block]
-    # processing: [t + provider_block, t + duration]
-    # total_end: t + duration + buffer_after
+    # Pre-calculate service duration offsets (in minutes)
+    buffer_before_mins = service.buffer_before_minutes
+    provider_block_mins = service.effective_provider_block_minutes
+    duration_mins = service.duration or 0
+    buffer_after_mins = service.buffer_after_minutes
+    total_service_mins = duration_mins + buffer_after_mins
     
-    buffer_before = timedelta(minutes=service.buffer_before_minutes)
-    provider_block = timedelta(minutes=service.effective_provider_block_minutes)
-    total_processing_end = timedelta(minutes=(service.duration or 0)) # duration relative to t
-    buffer_after_td = timedelta(minutes=service.buffer_after_minutes) # distinct from buffer_before variable
-    
-    # Loop each working window
+    # Convert windows to minute ranges for iteration
     for window in windows:
-        # Align window start to grid
-        current_t = ceil_to_interval(window.start, interval_minutes)
-        window_end = window.end
+        # Convert window boundaries to minutes-from-midnight in LOCAL time
+        window_start_mins = window.start.hour * 60 + window.start.minute
+        window_end_mins = window.end.hour * 60 + window.end.minute
         
-        while current_t < window_end:
-            # 1. Past check
-            if current_t <= start_time_limit:
-                current_t += timedelta(minutes=interval_minutes)
+        # Align to grid
+        current_mins = ceil_to_interval(window_start_mins, interval_minutes)
+        
+        # Iterate using minute offsets (DST-safe)
+        while current_mins < window_end_mins:
+            # 1. Localize candidate time (may return None for DST gaps)
+            candidate_local = safe_localize_minutes(date_obj, current_mins, tz_id)
+            
+            if candidate_local is None:
+                # Time doesn't exist (spring-forward gap) - skip
+                current_mins += interval_minutes
                 continue
-                
-            # 2. Fit in Window Check (Rule 3)
-            # End of service activity (including buffer after) must fall within window
-            # Actually, usually buffers imply provider presence.
-            # If buffer_after is "cleanup", it must be inside window? Usually yes.
-            # Let's assume total_end must be <= window_end
             
-            service_end_time = current_t + timedelta(minutes=(service.duration or 0)) + buffer_after_td
-            if service_end_time > window_end:
-                # Optimized exit: if this t doesn't fit, later t won't fit this window
+            # 2. Past check
+            if candidate_local <= start_time_limit:
+                current_mins += interval_minutes
+                continue
+            
+            # 3. Fit in Window Check
+            # End of service must fit within window
+            end_mins = current_mins + total_service_mins
+            if end_mins > window_end_mins:
+                # Doesn't fit, exit this window
                 break
-                
-            # 3. Construct Candidate Intervals
-            cand_busy_start = current_t - buffer_before
-            cand_busy_end = current_t + provider_block
             
-            # Rule 1: Busy Overlap Check
+            # 4. Convert to UTC for conflict checks (all conflict checks in UTC)
+            candidate_utc = to_utc(candidate_local)
+            
+            # Calculate busy interval in UTC
+            cand_busy_start = candidate_utc - timedelta(minutes=buffer_before_mins)
+            cand_busy_end = candidate_utc + timedelta(minutes=provider_block_mins)
+            
+            # 5. Busy Overlap Check
             is_busy_conflict = False
             for bb in busy_blocks:
-                if overlaps(cand_busy_start, cand_busy_end, bb.start, bb.end):
+                bb_start_utc = to_utc(bb.start) if bb.start.tzinfo else bb.start
+                bb_end_utc = to_utc(bb.end) if bb.end.tzinfo else bb.end
+                if overlaps(cand_busy_start, cand_busy_end, bb_start_utc, bb_end_utc):
                     is_busy_conflict = True
                     break
             
             if is_busy_conflict:
-                current_t += timedelta(minutes=interval_minutes)
+                current_mins += interval_minutes
                 continue
                 
-            # Rule 2: Concurrency Check (if applicable)
+            # 6. Concurrency Check (if applicable)
             if service.allow_processing_overlap and service.processing_window_minutes > 0:
                 cand_proc_start = cand_busy_end
-                cand_proc_end = current_t + timedelta(minutes=(service.duration or 0))
+                cand_proc_end = candidate_utc + timedelta(minutes=duration_mins)
                 
                 concurrent_count = 0
                 for pb in processing_blocks:
-                    if overlaps(cand_proc_start, cand_proc_end, pb.start, pb.end):
+                    pb_start_utc = to_utc(pb.start) if pb.start.tzinfo else pb.start
+                    pb_end_utc = to_utc(pb.end) if pb.end.tzinfo else pb.end
+                    if overlaps(cand_proc_start, cand_proc_end, pb_start_utc, pb_end_utc):
                         concurrent_count += 1
                 
                 if concurrent_count >= provider.max_concurrent_processing_jobs:
-                    # Concurrency limit hit
-                    current_t += timedelta(minutes=interval_minutes)
+                    current_mins += interval_minutes
                     continue
             
-            # 4. Valid Slot
-            available_slots.append(current_t)
-            current_t += timedelta(minutes=interval_minutes)
+            # 7. Valid Slot - store the LOCAL aware datetime
+            available_slots.append(candidate_local)
+            current_mins += interval_minutes
             
     return available_slots
 
@@ -477,3 +612,34 @@ def select_best_provider(
     valid_candidates.sort(key=lambda x: (x[0], x[1]))
     
     return valid_candidates[0][2]
+
+def get_ranked_providers(
+    shop: Shop, 
+    service: Service, 
+    date_obj: date, 
+    start_time: datetime
+) -> List[Provider]:
+    """
+    Get list of valid providers sorted by best match (workload, ID).
+    Used for 'Any Provider' retry logic.
+    """
+    candidates = Provider.objects.filter(
+        shop=shop, 
+        services=service, 
+        is_active=True, 
+        allow_any_provider_booking=True
+    )
+    
+    valid_candidates = []
+    for p in candidates:
+        workload = Booking.objects.filter(
+            provider=p, 
+            slot__start_time__date=date_obj,
+            status__in=['active', 'confirmed']
+        ).count()
+        valid_candidates.append((workload, p.id, p))
+        
+    # Sort: Workload ASC, ID ASC
+    valid_candidates.sort(key=lambda x: (x[0], x[1]))
+    
+    return [c[2] for c in valid_candidates]

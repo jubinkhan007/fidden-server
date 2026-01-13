@@ -388,6 +388,15 @@ class AvailabilityRuleSetAdmin(admin.ModelAdmin):
     list_display = ('name', 'timezone', 'interval_minutes', 'created_at')
     search_fields = ('name',)
     list_filter = ('timezone', 'interval_minutes')
+    fieldsets = (
+        ('Basic Settings', {
+            'fields': ('name', 'timezone', 'interval_minutes')
+        }),
+        ('Schedule Rules', {
+            'fields': ('weekly_rules', 'breaks'),
+            'description': 'Define base weekly availability and regular breaks (JSON structure).'
+        })
+    )
 
 @admin.register(Provider)
 class ProviderAdmin(admin.ModelAdmin):
@@ -405,7 +414,7 @@ class ProviderAdmin(admin.ModelAdmin):
         }),
         ('Concurrency Control', {
             'fields': ('max_concurrent_processing_jobs',),
-            'description': 'Controls how many processing-phase bookings (e.g. hair processing) can run simultaneously.'
+            'description': 'Controls how many processing-phase services (e.g. hair processing) this provider can handle simultaneously. Default is 1.'
         }),
     )
 
@@ -414,6 +423,17 @@ class AvailabilityExceptionAdmin(admin.ModelAdmin):
     list_display = ('provider', 'date', 'is_closed', 'note')
     list_filter = ('date', 'is_closed', 'provider__shop')
     search_fields = ('provider__name', 'note')
+    date_hierarchy = 'date'
+    
+    fieldsets = (
+        ('Exception Details', {
+            'fields': ('provider', 'date', 'note')
+        }),
+        ('Overrides', {
+            'fields': ('is_closed', 'override_rules', 'override_breaks'),
+            'description': 'Set is_closed=True to block the day. Otherwise, provide specific start/end times in override_rules.'
+        })
+    )
 
 @admin.register(ProviderDayLock)
 class ProviderDayLockAdmin(admin.ModelAdmin):
@@ -421,3 +441,4 @@ class ProviderDayLockAdmin(admin.ModelAdmin):
     list_filter = ('date', 'shop', 'provider')
     search_fields = ('shop__name', 'provider__name')
     readonly_fields = ('shop', 'provider', 'date')
+    date_hierarchy = 'date'

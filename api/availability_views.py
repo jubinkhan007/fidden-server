@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, date, timedelta
-import pytz
+
 
 from django.db import transaction
 from rest_framework.views import APIView
@@ -43,6 +43,11 @@ class AvailabilityView(APIView):
 
         try:
             shop = Shop.objects.get(id=shop_id)
+            if not shop.use_rule_based_availability:
+                 # If disabled, maybe return empty list/404? 
+                 # Let's return 400 to signal client to use legacy.
+                return Response({"detail": "This shop does not support rule-based availability."}, status=status.HTTP_400_BAD_REQUEST)
+
             service = Service.objects.get(id=service_id, shop=shop)
             target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         except Shop.DoesNotExist:
@@ -52,39 +57,48 @@ class AvailabilityView(APIView):
         except ValueError:
             return Response({"detail": "Invalid date format. Use YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Resolve timezone_id for response
+        from api.utils.availability import resolve_timezone_id, to_utc
+        
         if provider_id:
             try:
                 provider = Provider.objects.get(id=provider_id, shop=shop)
                 available_times = provider_available_starts(provider, service, target_date)
+                timezone_id = resolve_timezone_id(provider)
             except Provider.DoesNotExist:
                 return Response({"detail": "Provider not found"}, status=status.HTTP_404_NOT_FOUND)
+            
+            # Format: list of ISO timestamps with offsets
+            available_slots = []
+            for dt in available_times:
+                available_slots.append({
+                    "start_at": dt.isoformat(),
+                    "start_at_utc": to_utc(dt).strftime("%Y-%m-%dT%H:%M:%SZ")
+                })
         else:
             # Aggregate across all providers
             available_times = get_any_provider_availability(shop, service, target_date)
-
-        # Convert datetimes to ISO strings or HH:MM? 
-        # Requirement usually expects start times. Let's return local time HH:MM for grid.
-        # But we should also provide full ISO for precise POSTing.
-        
-        # We assume available_times are aware datetimes in target TZ or UTC.
-        # The engine returns them in local timezone of shop/provider.
-        
-        if provider_id:
-            available_times = [dt.strftime("%H:%M") for dt in available_times]
-        else:
-            # list of dicts: {"start_time": dt, "available_count": int}
-            available_times = [
-                {
-                    "time": item["start_time"].strftime("%H:%M"),
-                    "count": item["available_count"]
-                } for item in available_times
-            ]
+            
+            # Resolve timezone from first active provider or shop default
+            first_provider = Provider.objects.filter(shop=shop, is_active=True).first()
+            timezone_id = resolve_timezone_id(first_provider) if first_provider else shop.time_zone or 'America/New_York'
+            
+            # Format: list of dicts with start_time, availability_count, ISO timestamp
+            available_slots = []
+            for item in available_times:
+                dt = item["start_time"]
+                available_slots.append({
+                    "start_at": dt.isoformat(),
+                    "start_at_utc": to_utc(dt).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "availability_count": item["available_count"]
+                })
         
         return Response({
             "date": date_str,
             "shop_id": int(shop_id),
             "service_id": int(service_id),
-            "available_starts": available_times
+            "timezone_id": timezone_id,
+            "available_slots": available_slots
         })
 
 
@@ -168,46 +182,79 @@ class BookingCreateView(APIView):
                 locked_lock = ProviderDayLock.objects.select_for_update().get(id=lock_obj.id)
                 
                 # -----------------------------------------------------------------
-                # 2. VALIDATE & SELECT PROVIDER
+                # 2. SELECT CANDIDATE PROVIDERS (Ranked List)
+                # -----------------------------------------------------------------
+                from api.utils.availability import get_ranked_providers
+                
+                candidate_providers = []
+                
+                if provider_id:
+                     try:
+                         # Explicit provider: one candidate
+                         p = Provider.objects.get(id=provider_id, shop=shop, is_active=True)
+                         candidate_providers.append(p)
+                     except Provider.DoesNotExist:
+                         return Response({"detail": "Provider not found"}, status=status.HTTP_404_NOT_FOUND)
+                else:
+                     # Any provider: get ranked list
+                      candidate_providers = get_ranked_providers(shop, service, target_date, start_at)
+                      
+                if not candidate_providers:
+                     return Response({
+                         "code": "NO_PROVIDER_AVAILABLE",
+                         "detail": "No providers available."
+                     }, status=status.HTTP_409_CONFLICT)
+                
+                # -----------------------------------------------------------------
+                # 2.5 DST VALIDATION: Reject bookings at non-existent local times
+                # -----------------------------------------------------------------
+                from api.utils.availability import resolve_timezone_id, safe_localize, to_utc
+                from zoneinfo import ZoneInfo
+                
+                # Use first candidate to determine timezone for validation
+                tz_id = resolve_timezone_id(candidate_providers[0])
+                
+                # Convert incoming start_at (which is in UTC or has offset) to local wall time
+                local_tz = ZoneInfo(tz_id)
+                start_at_local = start_at.astimezone(local_tz)
+                
+                # Extract wall time and re-localize to check if it exists
+                wall_time_str = start_at_local.strftime("%H:%M")
+                validated_dt = safe_localize(target_date, wall_time_str, tz_id)
+                
+                if validated_dt is None:
+                    # Spring-forward gap: this local wall time doesn't exist
+                    return Response({
+                        "code": "INVALID_TIME",
+                        "detail": f"The requested time {wall_time_str} does not exist on {target_date} due to DST transition."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                     
+                # -----------------------------------------------------------------
+                # 3. ATTEMPT BOOKING (Retry Loop)
                 # -----------------------------------------------------------------
                 selected_provider = None
                 
-                if provider_id:
-                    try:
-                        provider = Provider.objects.get(id=provider_id, shop=shop, is_active=True)
-                        valid_starts = provider_available_starts(provider, service, target_date)
-                        # Check if requested start_at is in valid_starts
-                        # Note: comparing aware datetimes. provider_available_starts returns them in local or UTC?
-                        # It returns them in provider's timezone.
-                        
-                        # Normalize start_at to provider's timezone for comparison
-                        tz_name = provider.availability_ruleset.timezone if provider.availability_ruleset else shop.time_zone
-                        tz = pytz.timezone(tz_name)
-                        local_start = start_at.astimezone(tz)
-                        
-                        is_valid = any(s == local_start for s in valid_starts)
-                        if not is_valid:
-                            return Response({"detail": "Requested time is no longer available for this provider."}, 
-                                            status=status.HTTP_409_CONFLICT)
-                        selected_provider = provider
-                    except Provider.DoesNotExist:
-                        return Response({"detail": "Provider not found"}, status=status.HTTP_404_NOT_FOUND)
-                else:
-                    # Auto-assign best provider using the engine's selector
-                    # First, we need to ensure the start_at is localized correctly for comparison within select_best_provider
-                    # Actually, select_best_provider handles its own per-provider localization if we fix it there.
-                    # For now, let's call it with shop-level info.
+                for candidate in candidate_providers:
+                    # VALIDATE availability for this specific provider
+                    valid_starts = provider_available_starts(candidate, service, target_date)
                     
-                    selected_provider = select_best_provider(shop, service, target_date, start_at)
+                    # Normalize start_at to provider's timezone for comparison
+                    cand_tz_id = resolve_timezone_id(candidate)
+                    cand_tz = ZoneInfo(cand_tz_id)
+                    local_start = start_at.astimezone(cand_tz)
                     
-                    if not selected_provider:
-                        return Response({
-                            "code": "NO_PROVIDER_AVAILABLE",
-                            "detail": "No provider available for requested time."
-                        }, status=status.HTTP_409_CONFLICT)
+                    if any(s == local_start for s in valid_starts):
+                        selected_provider = candidate
+                        break # Success!
+                
+                if not selected_provider:
+                     return Response({
+                         "code": "NO_PROVIDER_AVAILABLE",
+                         "detail": "Selected time is no longer available."
+                     }, status=status.HTTP_409_CONFLICT)
 
                 # -----------------------------------------------------------------
-                # 3. CREATE DYNAMIC SLOT + SLOTBOOKING
+                # 4. CREATE DYNAMIC SLOT + SLOTBOOKING
                 # -----------------------------------------------------------------
                 # Calculate end_time based on service duration
                 duration_mins = service.duration or 30
@@ -217,21 +264,20 @@ class BookingCreateView(APIView):
                 from api.models import Slot, SlotBooking
                 
                 # Try to get existing slot or create new one
-                # This handles edge case where slot already exists from pre-generation
                 dynamic_slot, slot_created = Slot.objects.get_or_create(
                     service=service,
                     start_time=start_at,
                     defaults={
                         'shop': shop,
                         'end_time': end_at,
-                        'capacity_left': 1,  # Will be decremented below
+                        'capacity_left': 10,
                     }
                 )
                 
                 # Validate slot has capacity
                 if dynamic_slot.capacity_left <= 0:
                     return Response({
-                        "code": "SLOT_FULLY_BOOKED",
+                        "code": "NO_PROVIDER_AVAILABLE",
                         "detail": "This time slot is no longer available."
                     }, status=status.HTTP_409_CONFLICT)
                 
@@ -241,7 +287,7 @@ class BookingCreateView(APIView):
                     slot=dynamic_slot,
                     shop=shop,
                     service=service,
-                    provider=selected_provider,  # Rule-based assignment
+                    provider=selected_provider,
                     start_time=start_at,
                     end_time=end_at,
                     status='confirmed',
@@ -252,15 +298,23 @@ class BookingCreateView(APIView):
                 dynamic_slot.capacity_left -= 1
                 dynamic_slot.save(update_fields=['capacity_left'])
                 
-                # Return slot_id for client to call existing payment endpoint
+                # Convert times for response
+                final_tz_id = resolve_timezone_id(selected_provider)
+                final_tz = ZoneInfo(final_tz_id)
+                start_at_local_resp = start_at.astimezone(final_tz)
+                end_at_local_resp = end_at.astimezone(final_tz)
+                
                 return Response({
                     "success": True,
+                    "booking_id": slot_booking.id,
                     "slot_id": dynamic_slot.id,
-                    "slot_booking_id": slot_booking.id,
                     "provider_id": selected_provider.id,
                     "provider_name": selected_provider.name,
-                    "start_at": start_at.isoformat(),
-                    "end_at": end_at.isoformat(),
+                    "timezone_id": final_tz_id,
+                    "start_at": start_at_local_resp.isoformat(),
+                    "start_at_utc": to_utc(start_at).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "end_at": end_at_local_resp.isoformat(),
+                    "end_at_utc": to_utc(end_at).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "service_id": service.id,
                     "shop_id": shop.id,
                     "next_step": f"POST /payments/payment-intent/{dynamic_slot.id}/"
