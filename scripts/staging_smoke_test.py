@@ -12,7 +12,7 @@ sys.path.append(os.getcwd())
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "fidden.settings")
 django.setup()
 
-from api.models import Shop, Service, Provider, AvailabilityRuleSet, SlotBooking, ProviderDayLock
+from api.models import Shop, Service, Provider, AvailabilityRuleSet, SlotBooking, ProviderDayLock, ServiceCategory
 from api.utils.availability import get_working_windows, get_blocked_intervals, provider_available_starts
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -27,11 +27,10 @@ def run_smoke_test():
     # Create unique email for test run
     run_id = random.randint(1000, 9999)
     email = f"staging_tester_{run_id}@example.com"
-    try:
-        user = User.objects.create_user(email=email, password="password123", name="Staging Tester", mobile_number="1234567890")
+    user, created = User.objects.get_or_create(email=email, defaults={'password': 'password123', 'name': 'Staging Tester', 'mobile_number': '1234567890'})
+    if created:
         print(f"✅ Created User: {email}")
-    except Exception as e:
-        user = User.objects.get(email=email)
+    else:
         print(f"⚠️ User Exists: {email}")
 
     # Use existing shop 'BarberKing' or create
@@ -59,6 +58,12 @@ def run_smoke_test():
         shop.save()
         print("✅ Enabled 'use_rule_based_availability' flag.")
 
+    # Create/Get Service Category
+    category, _ = ServiceCategory.objects.get_or_create(
+        name="Staging Category",
+        defaults={'description': 'Test Category'}
+    )
+
     # Create Service
     service, _ = Service.objects.get_or_create(
         shop=shop,
@@ -67,7 +72,7 @@ def run_smoke_test():
             'price': 50,
             'duration': 60,
             'is_active': True,
-            'category_id': 1 # Assuming category 1 exists
+            'category': category
         }
     )
     print(f"ℹ️ Service: {service.title}")
