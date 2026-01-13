@@ -17,12 +17,13 @@ class Command(BaseCommand):
             status__in=['active', 'confirmed'],
             slot__start_time__gte=cutoff,
             provider_busy_start__isnull=True
-        ).select_related('service', 'slot')
+        ).select_related('slot__service', 'slot')
         
         updated_count = 0
         
         for booking in bookings:
-            service = booking.service
+            # Booking -> SlotBooking -> Service
+            service = booking.slot.service
             start_time = booking.slot.start_time
             
             if not service:
