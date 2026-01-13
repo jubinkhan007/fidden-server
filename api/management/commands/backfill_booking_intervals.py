@@ -14,7 +14,7 @@ class Command(BaseCommand):
         # For safety, let's look at everything from today onwards, or even last 30 days.
         cutoff = timezone.now() - timedelta(days=30)
         bookings = Booking.objects.filter(
-            status__in=['active', 'confirmed'],
+            status__in=['active'],
             slot__start_time__gte=cutoff,
             provider_busy_start__isnull=True
         ).select_related('slot__service', 'slot')
