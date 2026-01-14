@@ -219,16 +219,32 @@ def _get_ruleset_breaks(ruleset: AvailabilityRuleSet, date_obj: date) -> List[In
             
     return _parse_break_objects(day_breaks, date_obj, ruleset.timezone)
 
-def _parse_rules(rules_list: List[List[str]], date_obj: date, tz_name: str) -> List[Interval]:
-    """Parse list of [start_str, end_str] into Intervals using DST-safe localization."""
+def _parse_rules(rules_list: list, date_obj: date, tz_name: str) -> List[Interval]:
+    """Parse list of time ranges into Intervals using DST-safe localization.
+    
+    Supports two formats:
+    - List format: [["09:00", "17:00"], ...]
+    - Dict format: [{"start": "09:00", "end": "17:00"}, ...]
+    """
     intervals = []
     
     for r in rules_list:
-        if len(r) != 2: 
-            continue
         try:
-            start_dt = safe_localize(date_obj, r[0], tz_name)
-            end_dt = safe_localize(date_obj, r[1], tz_name)
+            # Handle both dict and list formats
+            if isinstance(r, dict):
+                start_str = r.get('start')
+                end_str = r.get('end')
+            elif isinstance(r, (list, tuple)) and len(r) == 2:
+                start_str = r[0]
+                end_str = r[1]
+            else:
+                continue
+            
+            if not start_str or not end_str:
+                continue
+                
+            start_dt = safe_localize(date_obj, start_str, tz_name)
+            end_dt = safe_localize(date_obj, end_str, tz_name)
             
             # Skip if either time doesn't exist (spring-forward gap)
             if start_dt is None or end_dt is None:
@@ -237,8 +253,8 @@ def _parse_rules(rules_list: List[List[str]], date_obj: date, tz_name: str) -> L
             
             if start_dt < end_dt:
                 intervals.append(Interval(start_dt, end_dt))
-        except ValueError:
-            logger.error(f"Invalid time format in rules: {r}")
+        except (ValueError, KeyError, TypeError) as e:
+            logger.error(f"Invalid time format in rules: {r} - {e}")
             continue
             
     return intervals
