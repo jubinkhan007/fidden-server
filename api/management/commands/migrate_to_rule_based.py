@@ -43,25 +43,30 @@ class Command(BaseCommand):
             
             if not dry_run:
                 rule_set_name = f"Migrated Rules - {shop.name}"
-                # Check if it already exists to avoid duplicates on re-run
+                
+                # Check if it already exists to avoid duplicates
+                # Since RuleSet doesn't link to Shop, we filter by name which is unique enough for this migration
                 rule_set, created = AvailabilityRuleSet.objects.get_or_create(
                     name=rule_set_name,
-                    shop=shop,
                     defaults={
-                        'timezone': shop.time_zone, # Use shop's IANA zone
+                        'timezone': shop.time_zone,
                         'weekly_rules': weekly_rules,
-                        'breaks': [] # Legacy shop breaks (break_start_time) could be added here if needed
+                        'breaks': []
                     }
                 )
+                
                 if created:
                      self.stdout.write(f"   Created RuleSet: {rule_set.name}")
                 else:
-                    # Update existing if needed
                     rule_set.weekly_rules = weekly_rules
                     rule_set.timezone = shop.time_zone
                     rule_set.save()
                     self.stdout.write(f"   Updated RuleSet: {rule_set.name}")
 
+                # Update Shop's default ruleset
+                shop.default_availability_ruleset = rule_set
+                shop.save()
+                
                 # 2. Assign to Providers who have no ruleset
                 providers = Provider.objects.filter(shop=shop, availability_ruleset__isnull=True)
                 count = providers.update(availability_ruleset=rule_set)
