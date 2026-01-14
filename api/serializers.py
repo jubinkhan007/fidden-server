@@ -642,7 +642,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
             'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id',
             'avg_rating', 'review_count', 'distance', 'services', 'reviews',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
-            'is_deposit_required', 'default_deposit_percentage', 'time_zone',
+            'default_deposit_percentage', 'time_zone',
             'status',  # V1 Fix: for verification badge
             # 🆕 Social Links
             'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
