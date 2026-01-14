@@ -397,9 +397,9 @@ class CreatePaymentIntentView(APIView):
                         "coupon_amount": discount if coupon else None,
                         "stripe_payment_intent_id": intent.id,
                         "status": "pending",
-                        "is_deposit": shop.is_deposit_required,
+                        "is_deposit": is_deposit,
                         "balance_paid": 0,
-                        "deposit_amount": deposit_amount if shop.is_deposit_required else 0,
+                        "deposit_amount": deposit_amount if is_deposit else 0,
                         "remaining_amount": remaining_balance,
                         "deposit_paid": 0,
                         "tips_amount": 0,
@@ -407,7 +407,7 @@ class CreatePaymentIntentView(APIView):
                         "payment_type": "full",
                         # Fidden Pay fields
                         "service_price": full_service_amount,
-                        "deposit_status": "held" if shop.is_deposit_required else "credited",
+                        "deposit_status": "held" if is_deposit else "credited",
                         "tip_base": full_service_amount,  # Tip calculated on full service price
                     },
                 )
