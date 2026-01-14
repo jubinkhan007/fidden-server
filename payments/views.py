@@ -331,33 +331,21 @@ class CreatePaymentIntentView(APIView):
 
             full_service_amount = total_amount
 
-            if shop.is_deposit_required:
-                service = booking.service
+            is_deposit = False
+            if shop.default_is_deposit_required:
+                if shop.default_deposit_type == 'fixed':
+                    deposit_amount = shop.default_deposit_amount
+                elif shop.default_deposit_type == 'percentage':
+                    deposit_amount = (total_amount * Decimal(shop.default_deposit_percentage)) / 100
                 
-                # Dynamic deposit calculation to include add-ons
-                # Fall back to shop's default if service doesn't have its own configuration
-                deposit_type = service.deposit_type or shop.default_deposit_type
-                deposit_percentage = service.deposit_percentage or shop.default_deposit_percentage
-                
-                is_percentage = (
-                    deposit_type == 'percentage' 
-                    or (not deposit_type and deposit_percentage)
-                )
-
-                if is_percentage and deposit_percentage:
-                    deposit_amount = (full_service_amount * deposit_percentage) / 100
-                elif service.deposit_amount:
-                    deposit_amount = service.deposit_amount
-                else:
-                    deposit_amount = full_service_amount
-
-                total_amount = min(deposit_amount, full_service_amount)
+                is_deposit = True
             else:
                 deposit_amount = full_service_amount
-                total_amount = full_service_amount
+
+            total_amount = min(deposit_amount, full_service_amount)
 
             remaining_balance = (
-                full_service_amount - total_amount if shop.is_deposit_required else Decimal("0.00")
+                full_service_amount - total_amount if is_deposit else Decimal("0.00")
             )
             total_amount = float(total_amount)
 
