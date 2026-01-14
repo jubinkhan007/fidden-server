@@ -332,15 +332,18 @@ class CreatePaymentIntentView(APIView):
             full_service_amount = total_amount
 
             is_deposit = False
+            deposit_amount = full_service_amount  # Default to full amount
+            
             if shop.default_is_deposit_required:
-                if shop.default_deposit_type == 'fixed':
+                if shop.default_deposit_type == 'fixed' and shop.default_deposit_amount:
                     deposit_amount = shop.default_deposit_amount
-                elif shop.default_deposit_type == 'percentage':
+                elif shop.default_deposit_type == 'percentage' and shop.default_deposit_percentage:
                     deposit_amount = (total_amount * Decimal(shop.default_deposit_percentage)) / 100
+                else:
+                    # Fallback: 20% deposit if type is misconfigured
+                    deposit_amount = (total_amount * Decimal('20')) / 100
                 
                 is_deposit = True
-            else:
-                deposit_amount = full_service_amount
 
             total_amount = min(deposit_amount, full_service_amount)
 
