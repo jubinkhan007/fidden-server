@@ -245,6 +245,7 @@ class ProviderSerializer(serializers.ModelSerializer):
             'id', 'name', 'profile_image', 'provider_type', 
             'is_active', 'services', 'allow_any_provider_booking', 
             'max_concurrent_processing_jobs',
+            'bio',           # 👈 Added
             'working_hours'  # 👈 Added
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

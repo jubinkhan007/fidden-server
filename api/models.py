@@ -420,6 +420,7 @@ class Provider(models.Model):
     provider_type = models.CharField(max_length=15, choices=PROVIDER_TYPE_CHOICES, default='employee')
     is_active = models.BooleanField(default=True)
     profile_image = models.ImageField(upload_to='providers/', blank=True, null=True)
+    bio = models.TextField(blank=True, null=True, help_text="Short bio or description of the provider")
     
     # Services this provider can perform
     services = models.ManyToManyField('Service', related_name='providers', blank=True)

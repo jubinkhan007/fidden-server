@@ -118,15 +118,10 @@ class ProvidersView(APIView):
         if service_id:
             # Filter providers who can perform this service
             qs = qs.filter(services__id=service_id)
-            
-        data = [{
-            "id": p.id,
-            "name": p.name,
-            "profile_image": p.profile_image.url if p.profile_image else None,
-            "allow_any_provider_booking": p.allow_any_provider_booking
-        } for p in qs]
         
-        return Response(data)
+        # Use ProviderSerializer for full data (bio, services, working_hours)
+        serializer = ProviderSerializer(qs, many=True)
+        return Response(serializer.data)
 
     def post(self, request, shop_id):
         """Create a new provider."""
