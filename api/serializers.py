@@ -233,6 +233,18 @@ class VerificationFileSerializer(serializers.ModelSerializer):
         model = VerificationFile
         fields = ["id", "file", "uploaded_at"]
 
+class ProviderSerializer(serializers.ModelSerializer):
+    services = serializers.PrimaryKeyRelatedField(many=True, queryset=Service.objects.all())
+
+    class Meta:
+        model = Provider
+        fields = [
+            'id', 'name', 'profile_image', 'provider_type', 
+            'is_active', 'services', 'allow_any_provider_booking', 
+            'max_concurrent_processing_jobs'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
 class ShopSerializer(serializers.ModelSerializer):
     #  removed services from response
     owner_id = serializers.IntegerField(source='owner.id', read_only=True)

@@ -48,6 +48,7 @@ from .availability_views import (
     AvailabilityView,
     BookingCreateView,
     ProvidersView,
+    ProviderDetailView,
 )
 
 from payments.views import ShopSlotsView
@@ -103,4 +104,5 @@ urlpatterns = [
     path('availability/', AvailabilityView.as_view(), name='availability'),
     path('bookings/', BookingCreateView.as_view(), name='booking-create'),
     path('shop/<int:shop_id>/providers/', ProvidersView.as_view(), name='shop-providers'),
+    path('providers/<int:pk>/', ProviderDetailView.as_view(), name='provider-detail'),
 ]

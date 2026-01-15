@@ -14,6 +14,7 @@ from api.utils.availability import (
     get_any_provider_availability,
     select_best_provider
 )
+from api.serializers import ProviderSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,10 @@ class AvailabilityView(APIView):
 class ProvidersView(APIView):
     """
     List providers for a specific shop, optionally filtering by service.
+    Create a new provider for the shop (Owner only).
     """
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, shop_id):
         service_id = request.query_params.get('service_id')
         
@@ -123,6 +127,66 @@ class ProvidersView(APIView):
         } for p in qs]
         
         return Response(data)
+
+    def post(self, request, shop_id):
+        """Create a new provider."""
+        try:
+            shop = Shop.objects.get(id=shop_id)
+        except Shop.DoesNotExist:
+            return Response({"detail": "Shop not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if shop.owner != request.user:
+            return Response({"detail": "You do not have permission to add providers to this shop."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = ProviderSerializer(data=request.data)
+        if serializer.is_valid():
+            provider = serializer.save(shop=shop)
+            # Add services if provided (M2M handling)
+            if 'services' in request.data:
+                # Serializer handles M2M if passed as list of IDs, 
+                # but if we need custom logic we can do it here. 
+                # ProviderSerializer already has services field.
+                pass
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ProviderDetailView(APIView):
+    """
+    Retrieve, Update, or Delete a provider (Owner only).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self, pk, user):
+        try:
+            provider = Provider.objects.get(pk=pk)
+            # Ensure user owns the shop this provider belongs to
+            if provider.shop.owner != user:
+                return None
+            return provider
+        except Provider.DoesNotExist:
+            return None
+
+    def patch(self, request, pk):
+        provider = self.get_object(pk, request.user)
+        if not provider:
+            return Response({"detail": "Provider not found or permission denied"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ProviderSerializer(provider, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        provider = self.get_object(pk, request.user)
+        if not provider:
+            return Response({"detail": "Provider not found or permission denied"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Soft delete
+        provider.is_active = False
+        provider.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 class BookingCreateView(APIView):
     """
