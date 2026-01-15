@@ -250,7 +250,7 @@ class ShopSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
-            'shop_img', 'close_days', "business_hours", 'owner_id', 'is_verified', 'status', 
+            'shop_img', 'close_days', "business_hours", 'owner_id', 'status', 
             'verification_files', 'uploaded_files', 'default_is_deposit_required',
             'default_deposit_amount', 'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
@@ -258,7 +258,7 @@ class ShopSerializer(serializers.ModelSerializer):
             # 🆕 Social Links
             'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
         ]
-        read_only_fields = ('owner_id','is_verified', 'uploaded_files')
+        read_only_fields = ('owner_id', 'uploaded_files')
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
