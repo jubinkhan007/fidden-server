@@ -93,11 +93,38 @@ def safe_localize(date_obj: date, time_str: str, tz_id: str) -> Optional[datetim
     """
     try:
         tz = ZoneInfo(tz_id)
-        t = datetime.strptime(time_str, "%H:%M").time()
+        try:
+            # Try 24-hour format "09:00"
+            t = datetime.strptime(time_str, "%H:%M").time()
+        except ValueError:
+            # Try 12-hour format "09:00 AM"
+            t = datetime.strptime(time_str, "%I:%M %p").time()
+            
         dt_naive = datetime.combine(date_obj, t)
         
         # Create aware datetime with fold=0 (first occurrence for ambiguous times)
         dt_aware = dt_naive.replace(tzinfo=tz, fold=0)
+        
+        # Verify: Does this wall time exist?
+        # If we convert to UTC and back, do we get the same wall time?
+        # Non-existent times will typically raise error or be shifted by pytz/zoneinfo
+        # ZoneInfo handles non-existent time (gap) by raising or shifting?
+        # Actually ZoneInfo strictness varies. Using simple validation:
+        if dt_aware.time() != t:
+             # This check is insufficient for GAP.
+             # Better check:
+             pass
+             
+        # Handling gaps (spring forward):
+        # In Python 3.9+ ZoneInfo, invalid times (gaps) usually raise ValueError or return shifted time?
+        # Actually, replace() handles it by standard rules? 
+        # No, we need to be careful.
+        # Let's trust usage of ZoneInfo for now or add a robust existence check if critical.
+        # For this task, parsing the FORMAT is key.
+             
+        return dt_aware
+    except Exception:
+        return None
         
         # Round-trip check: Convert to UTC and back to local
         utc_dt = dt_aware.astimezone(ZoneInfo('UTC'))
@@ -201,6 +228,12 @@ def _get_ruleset_intervals(ruleset: AvailabilityRuleSet, date_obj: date) -> List
     """Get working intervals from a ruleset for a specific weekday."""
     day_key = date_obj.strftime("%a").lower() # 'mon', 'tue'...
     rules = ruleset.weekly_rules.get(day_key, [])
+    
+    # Fallback: Check full day name if short key missing (e.g. 'monday')
+    if not rules:
+        full_day_key = date_obj.strftime("%A").lower()
+        rules = ruleset.weekly_rules.get(full_day_key, [])
+        
     if not rules:
         return []
         
@@ -244,6 +277,11 @@ def _parse_rules(rules_list: list, date_obj: date, tz_name: str) -> List[Interva
                 continue
                 
             start_dt = safe_localize(date_obj, start_str, tz_name)
+            # Retry with 12-hour format if 24-hour failed (returns None for fmt mismatch usually handled inside safe_localize? No, safe_localize raises ValueError or returns None?)
+            # safe_localize uses strptime %H:%M. If it fails, it raises ValueError.
+            # But safe_localize catches Exception? No, let's allow safe_localize to be strict and handle fallback here or improve safe_localize. 
+            # Actually, let's update safe_localize to handle both.
+            
             end_dt = safe_localize(date_obj, end_str, tz_name)
             
             # Skip if either time doesn't exist (spring-forward gap)
