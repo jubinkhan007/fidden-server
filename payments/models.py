@@ -484,10 +484,15 @@ def delete_user_stripe_customer(sender, instance, **kwargs):
 @receiver(post_save, sender=Payment)
 def handle_payment_status(sender, instance, created, **kwargs):
     """
-    Robust version:
-    - Always defines booking_obj/created_booking before use
-    - Only references them inside the 'succeeded' branch
-    - Wraps all side-effects with try/except
+    Post-save handler for Payment model.
+    
+    NOTE: SlotBooking is the single source of truth. Status updates are primarily
+    handled by _update_payment_status() in the webhook. This signal handles:
+    - AutoFillLog closure
+    - Owner notifications (email, push, SMS)
+    - TransactionLog creation
+    
+    It is idempotent - Booking.get_or_create ensures no duplicate records.
     """
     # Make sure these exist even if we never reach the succeeded block
     booking_obj = None
@@ -499,19 +504,20 @@ def handle_payment_status(sender, instance, created, **kwargs):
 
         # ---------------- Payment Succeeded ----------------
         if instance.status == "succeeded":
-            # Idempotent payment status update
+            # Note: SlotBooking status is already confirmed by webhook
+            # This is a fallback to ensure payment_status is correct
             if slot_booking.payment_status != "success":
                 slot_booking.payment_status = "success"
                 slot_booking.save(update_fields=["payment_status"])
 
-            # Create Booking exactly once for this Payment
+            # Create Booking exactly once for this Payment (idempotent)
             booking_obj, created_booking = Booking.objects.get_or_create(
                 payment=instance,
                 defaults={
                     "user": instance.user,
                     "shop": shop,
                     "slot": slot_booking,
-                    "provider": slot_booking.provider, # Carry over provider if set
+                    "provider": slot_booking.provider,
                     "status": "active",
                     "stripe_payment_intent_id": instance.stripe_payment_intent_id,
                 },

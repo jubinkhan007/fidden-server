@@ -833,8 +833,9 @@ class Slot(models.Model):
 
 class SlotBooking(models.Model):
     STATUS_CHOICES = [
-        ('confirmed', 'Confirmed'),
-        ('cancelled', 'Cancelled')
+        ('pending', 'Pending'),      # Awaiting payment
+        ('confirmed', 'Confirmed'),  # Payment received
+        ('cancelled', 'Cancelled')   # Cancelled or payment failed
     ]
     PAYMENT_STATUS_CHOICES = [
         ('pending', 'Pending'),

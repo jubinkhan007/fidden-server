@@ -251,8 +251,8 @@ class ShopSerializer(serializers.ModelSerializer):
             'id', 'name', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
             'shop_img', 'close_days', "business_hours", 'owner_id', 'is_verified', 'status', 
-            'verification_files', 'uploaded_files', 'is_deposit_required',
-            'default_deposit_percentage',
+            'verification_files', 'uploaded_files', 'default_is_deposit_required',
+            'default_deposit_amount', 'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
             'time_zone',
             # 🆕 Social Links
@@ -288,7 +288,7 @@ class ShopSerializer(serializers.ModelSerializer):
         plan_name = instance.subscription.plan.name
 
         policy_fields = {
-            'is_deposit_required', 'deposit_amount', 'default_deposit_percentage',
+            'default_is_deposit_required', 'default_deposit_amount', 'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         }
 
@@ -634,6 +634,8 @@ class ShopDetailSerializer(serializers.ModelSerializer):
     services = serializers.SerializerMethodField()
     reviews = serializers.SerializerMethodField()
     gallery_preview = serializers.SerializerMethodField()  # 🆕 First 5 public gallery items
+    # Alias for Flutter compatibility (Flutter expects 'is_deposit_required')
+    is_deposit_required = serializers.BooleanField(source='default_is_deposit_required', read_only=True)
 
     class Meta:
         model = Shop
@@ -642,7 +644,7 @@ class ShopDetailSerializer(serializers.ModelSerializer):
             'close_at', 'about_us', 'shop_img', 'close_days', 'owner_id',
             'avg_rating', 'review_count', 'distance', 'services', 'reviews',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
-            'default_deposit_percentage', 'time_zone',
+            'is_deposit_required', 'default_deposit_percentage', 'time_zone',
             'status',  # V1 Fix: for verification badge
             # 🆕 Social Links
             'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',

@@ -114,17 +114,17 @@ class AIAutoFillSettingsView(APIView):
 
 class HoldSlotAndBookView(APIView):
     """
-    Allows a user to claim an auto-fill offer.
-    It creates a temporary, exclusive hold on the slot for a few minutes
-    to allow the user to complete the booking process.
+    Creates a pending SlotBooking to hold a slot for a user.
+    SlotBooking is the single source of truth for bookings.
+    The Booking record is created by the webhook after payment confirmation.
     """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, slot_id):
         user = request.user
+        provider_id = request.data.get("provider_id")  # Optional provider selection
         
         try:
-            # Use select_for_update to lock the slot row during the transaction
             with transaction.atomic():
                 slot = Slot.objects.select_for_update().get(id=slot_id)
 
@@ -132,34 +132,58 @@ class HoldSlotAndBookView(APIView):
                 if slot.capacity_left <= 0:
                     return Response(
                         {"error": "This slot was just booked by someone else."},
-                        status=status.HTTP_409_CONFLICT  # 409 Conflict
+                        status=status.HTTP_409_CONFLICT
                     )
 
-                # 2. Check for an existing hold on the slot
+                # 2. Check for an existing hold on the slot by this user
                 hold_key = f"slot_hold_{slot_id}"
-                if cache.get(hold_key):
+                existing_holder = cache.get(hold_key)
+                if existing_holder and existing_holder != user.id:
                     return Response(
                         {"error": "This slot is currently on hold. Please try again in a few moments."},
                         status=status.HTTP_409_CONFLICT
                     )
 
-                # 3. Create a 5-minute hold for the current user
+                # 3. Check if user already has a pending SlotBooking for this slot
+                existing_slot_booking = SlotBooking.objects.filter(
+                    slot=slot,
+                    user=user,
+                    status='pending'
+                ).first()
+                
+                if existing_slot_booking:
+                    # Return the existing pending booking
+                    return Response({
+                        "success": True,
+                        "message": "You already have a pending booking for this slot.",
+                        "slot_booking_id": existing_slot_booking.id,
+                        "slot_id": slot_id,
+                    }, status=status.HTTP_200_OK)
+
+                # 4. Create a 5-minute hold for the current user
                 cache.set(hold_key, user.id, timeout=300)  # 300 seconds = 5 minutes
                 logger.info(f"Slot {slot_id} is now on hold for user {user.id}.")
 
-                # 4. Create the preliminary booking record in 'pending' state
-                # This uses the Booking model from your payments app
-                new_booking = Booking.objects.create(
+                # 5. Resolve provider if specified
+                provider = None
+                if provider_id:
+                    from api.models import Provider
+                    provider = Provider.objects.filter(id=provider_id, shop=slot.shop).first()
+
+                # 6. Create the SlotBooking in 'pending' status (single source of truth)
+                slot_booking = SlotBooking.objects.create(
                     user=user,
+                    slot=slot,
                     shop=slot.shop,
                     service=slot.service,
-                    slot=slot, # Link to the actual Slot
-                    status='pending', # Start as pending until payment is confirmed
+                    provider=provider,
                     start_time=slot.start_time,
                     end_time=slot.end_time,
+                    status='pending',  # Pending until payment confirmed
+                    payment_status='pending',
                 )
                 
-                # 5. Decrement slot capacity immediately
+                # 7. Decrement slot capacity immediately
                 slot.capacity_left -= 1
                 slot.save(update_fields=['capacity_left'])
 
@@ -174,7 +198,7 @@ class HoldSlotAndBookView(APIView):
         return Response({
             "success": True,
             "message": "Slot is now on hold. Please complete your payment within 5 minutes.",
-            "booking_id": new_booking.id,
+            "slot_booking_id": slot_booking.id,
             "slot_id": slot_id,
         }, status=status.HTTP_200_OK)
 

@@ -381,7 +381,7 @@ class CreatePaymentIntentView(APIView):
                 "customer": user_customer.stripe_customer_id,
                 "payment_method_types": ["card"],
                 "transfer_data": {"destination": shop_account.stripe_account_id},
-                "metadata": {"booking_id": booking.id},
+                "metadata": {"slot_booking_id": booking.id},
             }
             if application_fee_cents > 0:
                 payment_intent_params["application_fee_amount"] = application_fee_cents
@@ -1776,41 +1776,84 @@ class StripeWebhookView(APIView):
     # helper on the view (unchanged)
     # ---------------------------------
     def _update_payment_status(self, stripe_obj, new_status):
+        """
+        Update payment status from Stripe webhook.
+        SlotBooking is the single source of truth:
+        1. Find Payment via stripe_payment_intent_id
+        2. Update Payment status
+        3. If succeeded: Confirm SlotBooking, then create/finalize Booking
+        4. If failed: Cancel SlotBooking
+        """
         intent_id = stripe_obj.get("id")
         object_type = stripe_obj.get("object")
+        metadata = stripe_obj.get("metadata", {})
 
         logger.info("🔄 _update_payment_status called:")
         logger.info("   - Object type: %s", object_type)
         logger.info("   - Intent ID: %s", intent_id)
         logger.info("   - New status: %s", new_status)
+        logger.info("   - Metadata: %s", metadata)
 
         # If we got a charge, resolve back to the payment_intent id
         if object_type == "charge":
             intent_id = stripe_obj.get("payment_intent")
             logger.info("   - Resolved payment_intent from charge: %s", intent_id)
 
-        # Subscription/Invoice flows send payment_intents that are NOT your Booking payments.
-        # Those have an invoice on the PI or on the event object; skip noisy DB lookups/logs.
-        # (payment_intent.succeeded from subscription invoices should not create/update Payment rows)
+        # Skip subscription/invoice payments
         if stripe_obj.get("invoice"):
             logger.info("PI %s is attached to a Stripe invoice; skipping local Payment update.", intent_id)
             return
 
         payment = None
         try:
-            payment = Payment.objects.get(stripe_payment_intent_id=intent_id)
+            payment = Payment.objects.select_related('booking').get(stripe_payment_intent_id=intent_id)
             old_status = payment.status
             payment.status = new_status
             payment.save(update_fields=["status"])
 
-            logger.info(
-                " Payment #%s updated: %s → %s (intent: %s)",
-                payment.id, old_status, new_status, intent_id
-            )
-            logger.info(
-                "   - Booking ID: %s",
-                getattr(getattr(payment, "booking", None), "id", "N/A"),
-            )
+            slot_booking = payment.booking  # This is a SlotBooking
+
+            # If payment succeeded, confirm SlotBooking then finalize Booking
+            if new_status == "succeeded":
+                # 1. Confirm the SlotBooking (single source of truth)
+                if slot_booking.status != 'confirmed':
+                    slot_booking.status = 'confirmed'
+                    slot_booking.payment_status = 'success'
+                    slot_booking.save(update_fields=['status', 'payment_status'])
+                    logger.info("   - SlotBooking #%s confirmed (status='confirmed', payment_status='success')", slot_booking.id)
+
+                # 2. Create the Booking record (finalized booking for business logic)
+                from payments.models import Booking
+                booking_obj, created = Booking.objects.get_or_create(
+                    payment=payment,
+                    defaults={
+                        "user": payment.user,
+                        "shop": slot_booking.shop,
+                        "slot": slot_booking,
+                        "provider": slot_booking.provider,
+                        "status": "active",
+                        "stripe_payment_intent_id": intent_id,
+                    }
+                )
+                if created:
+                    logger.info("   - Created Booking #%s for SlotBooking #%s", booking_obj.id, slot_booking.id)
+                else:
+                    logger.info("   - Booking #%s already exists for SlotBooking #%s", booking_obj.id, slot_booking.id)
+
+            # If payment failed, cancel the SlotBooking and release the slot
+            elif new_status == "failed":
+                if slot_booking.status != 'cancelled':
+                    slot_booking.status = 'cancelled'
+                    slot_booking.payment_status = 'pending'  # Reset
+                    slot_booking.save(update_fields=['status', 'payment_status'])
+                    logger.info("   - SlotBooking #%s cancelled due to payment failure", slot_booking.id)
+
+                    # Release the slot capacity
+                    slot = slot_booking.slot
+                    slot.capacity_left += 1
+                    slot.save(update_fields=['capacity_left'])
+                    logger.info("   - Slot #%s capacity restored", slot.id)
+
             logger.info("   - User: %s", payment.user.email)
             logger.info("   - Amount: %s", payment.amount)
 
@@ -2290,14 +2333,26 @@ class CreatePayPalOrderView(APIView):
         total_amount = booking.service.discount_price if booking.service.discount_price > 0 else booking.service.price
         full_service_amount = total_amount
 
-        if shop.is_deposit_required:
+        if shop.default_is_deposit_required:
             service = booking.service
-            deposit_amount = service.deposit_amount if service.deposit_amount else full_service_amount
-            total_amount = min(deposit_amount, full_service_amount)
+            # If service has a specific deposit amount, use it, else default_deposit_amount
+            if service.is_deposit_required:
+                deposit_total = service.deposit_amount if service.deposit_amount else full_service_amount
+            else:
+                if shop.default_deposit_type == 'fixed':
+                    deposit_total = shop.default_deposit_amount
+                elif shop.default_deposit_type == 'percentage':
+                    deposit_total = (full_service_amount * Decimal(shop.default_deposit_percentage)) / 100
+                else:
+                    deposit_total = full_service_amount
+            
+            total_amount = min(deposit_total, full_service_amount)
+            is_deposit = True
         else:
-            deposit_amount = full_service_amount
+            deposit_total = full_service_amount
+            is_deposit = False
 
-        remaining_balance = full_service_amount - total_amount if shop.is_deposit_required else Decimal("0.00")
+        remaining_balance = full_service_amount - total_amount if is_deposit else Decimal("0.00")
         total_amount = float(total_amount)
 
         # Apply Coupon
@@ -2355,13 +2410,13 @@ class CreatePayPalOrderView(APIView):
                 stripe_payment_intent_id=paypal_order_id, # Storing PayPal ID here
                 payment_method='paypal',  # Track payment method for refunds
                 status="pending",
-                is_deposit=shop.is_deposit_required,
-                deposit_amount=deposit_amount if shop.is_deposit_required else 0,
+                is_deposit=is_deposit,
+                deposit_amount=deposit_total if is_deposit else 0,
                 remaining_amount=remaining_balance,
                 payment_type="full",
                 # Fidden Pay fields
                 service_price=full_service_amount,
-                deposit_status="held" if shop.is_deposit_required else "credited",
+                deposit_status="held" if is_deposit else "credited",
                 tip_base=full_service_amount,
             )
 
