@@ -28,6 +28,7 @@ from .models import (
     ServiceDisabledTime,
     BookingAddOn,
     GalleryItem,
+    Provider,
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
