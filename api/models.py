@@ -137,126 +137,7 @@ class Shop(models.Model):
         pass
 
 # ------------------------------------
-# NEW RULE-BASED SCHEDULING MODELS
-# ------------------------------------
 
-class AvailabilityRuleSet(models.Model):
-    """
-    Weekly availability template with breaks.
-    Can be assigned to a Provider or used as shop-level default.
-    """
-    name = models.CharField(max_length=100, blank=True)
-    timezone = models.CharField(max_length=50, default='America/New_York')
-    interval_minutes = models.PositiveIntegerField(
-        default=15,
-        choices=[(5, '5 min'), (10, '10 min'), (15, '15 min'), (30, '30 min'), (60, '60 min')]
-    )
-    
-    # Weekly rules: {"mon": [["09:00", "12:00"], ["13:00", "18:00"]], ...}
-    weekly_rules = models.JSONField(default=dict)
-    
-    # Breaks: [{"start": "12:00", "end": "13:00", "days": ["mon", "tue", "wed", "thu", "fri"]}]
-    breaks = models.JSONField(default=list)
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    def clean(self):
-        """Validate timezone is a valid IANA identifier."""
-        from django.core.exceptions import ValidationError
-        from zoneinfo import ZoneInfo
-        
-        try:
-            ZoneInfo(self.timezone)
-        except Exception:
-            raise ValidationError({
-                'timezone': f"'{self.timezone}' is not a valid IANA timezone identifier."
-            })
-    
-    def __str__(self):
-        return f"{self.name or 'Ruleset'} ({self.timezone})"
-
-
-class Provider(models.Model):
-    """
-    Represents a bookable person (employee or independent contractor).
-    For single-owner shops, the owner is the implicit provider.
-    """
-    PROVIDER_TYPE_CHOICES = [
-        ('employee', 'Employee'),           # Shifts managed by business
-        ('independent', 'Independent'),     # Self-managed schedule
-    ]
-    
-    shop = models.ForeignKey('Shop', on_delete=models.CASCADE, related_name='providers')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, 
-                            related_name='provider_profiles', null=True, blank=True)
-    name = models.CharField(max_length=255)
-    provider_type = models.CharField(max_length=15, choices=PROVIDER_TYPE_CHOICES, default='employee')
-    is_active = models.BooleanField(default=True)
-    profile_image = models.ImageField(upload_to='providers/', blank=True, null=True)
-    
-    # Services this provider can perform
-    services = models.ManyToManyField('Service', related_name='providers', blank=True)
-    
-    # Opt-in for "Any Provider" aggregated view
-    allow_any_provider_booking = models.BooleanField(default=True)
-    
-    # Availability ruleset link
-    availability_ruleset = models.ForeignKey(
-        'AvailabilityRuleSet', 
-        on_delete=models.SET_NULL, 
-        null=True, blank=True,
-        related_name='providers'
-    )
-    
-    # Processing overlap concurrency limit
-    max_concurrent_processing_jobs = models.PositiveIntegerField(
-        default=1,
-        help_text="Maximum number of processing-phase services this provider can handle simultaneously"
-    )
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    def __str__(self):
-        return f"{self.name} ({self.shop.name})"
-
-
-class ProviderDayLock(models.Model):
-    """
-    Used for pessimistic locking during booking creation.
-    Can lock a specific provider on a date, or the whole shop on a date.
-    """
-    shop = models.ForeignKey('Shop', on_delete=models.CASCADE, related_name='day_locks', null=True, blank=True)
-    provider = models.ForeignKey('Provider', on_delete=models.CASCADE, related_name='day_locks', null=True, blank=True)
-    date = models.DateField(db_index=True)
-    
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=['shop', 'provider', 'date'], 
-                name='uniq_shop_provider_date_lock'
-            )
-        ]
-        
-    def __str__(self):
-        return f"Lock: {self.shop.name} | {self.provider.name if self.provider else 'ALL'} | {self.date}"
-
-
-class AvailabilityException(models.Model):
-    """
-    Date-specific override for a provider's schedule.
-    """
-    provider = models.ForeignKey('Provider', on_delete=models.CASCADE, related_name='exceptions')
-    date = models.DateField(db_index=True)
-    
-    is_closed = models.BooleanField(default=False)
-    override_rules = models.JSONField(default=list, blank=True)
-    override_breaks = models.JSONField(default=list, blank=True)
-    note = models.CharField(max_length=255, blank=True)
-    
-    class Meta:
-        unique_together = ['provider', 'date']
 
 
 
@@ -482,6 +363,129 @@ class AvailabilityException(models.Model):
 
     def __str__(self):
         return self.name
+
+# ------------------------------------
+# NEW RULE-BASED SCHEDULING MODELS
+# ------------------------------------
+
+class AvailabilityRuleSet(models.Model):
+    """
+    Weekly availability template with breaks.
+    Can be assigned to a Provider or used as shop-level default.
+    """
+    name = models.CharField(max_length=100, blank=True)
+    timezone = models.CharField(max_length=50, default='America/New_York')
+    interval_minutes = models.PositiveIntegerField(
+        default=15,
+        choices=[(5, '5 min'), (10, '10 min'), (15, '15 min'), (30, '30 min'), (60, '60 min')]
+    )
+    
+    # Weekly rules: {"mon": [["09:00", "12:00"], ["13:00", "18:00"]], ...}
+    weekly_rules = models.JSONField(default=dict)
+    
+    # Breaks: [{"start": "12:00", "end": "13:00", "days": ["mon", "tue", "wed", "thu", "fri"]}]
+    breaks = models.JSONField(default=list)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def clean(self):
+        """Validate timezone is a valid IANA identifier."""
+        from django.core.exceptions import ValidationError
+        from zoneinfo import ZoneInfo
+        
+        try:
+            ZoneInfo(self.timezone)
+        except Exception:
+            raise ValidationError({
+                'timezone': f"'{self.timezone}' is not a valid IANA timezone identifier."
+            })
+    
+    def __str__(self):
+        return f"{self.name or 'Ruleset'} ({self.timezone})"
+
+
+class Provider(models.Model):
+    """
+    Represents a bookable person (employee or independent contractor).
+    For single-owner shops, the owner is the implicit provider.
+    """
+    PROVIDER_TYPE_CHOICES = [
+        ('employee', 'Employee'),           # Shifts managed by business
+        ('independent', 'Independent'),     # Self-managed schedule
+    ]
+    
+    shop = models.ForeignKey('Shop', on_delete=models.CASCADE, related_name='providers')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, 
+                            related_name='provider_profiles', null=True, blank=True)
+    name = models.CharField(max_length=255)
+    provider_type = models.CharField(max_length=15, choices=PROVIDER_TYPE_CHOICES, default='employee')
+    is_active = models.BooleanField(default=True)
+    profile_image = models.ImageField(upload_to='providers/', blank=True, null=True)
+    
+    # Services this provider can perform
+    services = models.ManyToManyField('Service', related_name='providers', blank=True)
+    
+    # Opt-in for "Any Provider" aggregated view
+    allow_any_provider_booking = models.BooleanField(default=True)
+    
+    # Availability ruleset link
+    availability_ruleset = models.ForeignKey(
+        'AvailabilityRuleSet', 
+        on_delete=models.SET_NULL, 
+        null=True, blank=True,
+        related_name='providers'
+    )
+    
+    # Processing overlap concurrency limit
+    max_concurrent_processing_jobs = models.PositiveIntegerField(
+        default=1,
+        help_text="Maximum number of processing-phase services this provider can handle simultaneously"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"{self.name} ({self.shop.name})"
+
+
+class ProviderDayLock(models.Model):
+    """
+    Used for pessimistic locking during booking creation.
+    Can lock a specific provider on a date, or the whole shop on a date.
+    """
+    shop = models.ForeignKey('Shop', on_delete=models.CASCADE, related_name='day_locks', null=True, blank=True)
+    provider = models.ForeignKey('Provider', on_delete=models.CASCADE, related_name='day_locks', null=True, blank=True)
+    date = models.DateField(db_index=True)
+    
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['shop', 'provider', 'date'], 
+                name='uniq_shop_provider_date_lock'
+            )
+        ]
+        
+    def __str__(self):
+        return f"Lock: {self.shop.name} | {self.provider.name if self.provider else 'ALL'} | {self.date}"
+
+
+class AvailabilityException(models.Model):
+    """
+    Date-specific override for a provider's schedule.
+    """
+    provider = models.ForeignKey('Provider', on_delete=models.CASCADE, related_name='exceptions')
+    date = models.DateField(db_index=True)
+    
+    is_closed = models.BooleanField(default=False)
+    override_rules = models.JSONField(default=list, blank=True)
+    override_breaks = models.JSONField(default=list, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+    
+    class Meta:
+        unique_together = ['provider', 'date']
+
 
 class VerificationFile(models.Model):
     shop = models.ForeignKey(
