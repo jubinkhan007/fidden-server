@@ -141,10 +141,7 @@ class Shop(models.Model):
 
 
 
-    is_deposit_required = models.BooleanField(default=False, help_text="Is a deposit required for booking?")
-    # deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
 
-    is_verified = models.BooleanField(default=False)  # renamed (typo fix)
     
     # V1 Fix: Notification cadence tracking (prevents over-triggering)
     last_weekly_wrap_sent_at = models.DateTimeField(
@@ -162,6 +159,10 @@ class Shop(models.Model):
         blank=True,
         help_text="When daily snapshot was last sent (stored in UTC)"
     )
+
+    @property
+    def is_verified(self):
+        return self.status == "verified"
 
     @property
     def ranking_power(self):
@@ -248,14 +249,14 @@ class Shop(models.Model):
 
         if plan == 'Foundation':
             # Apply all defaults
-            set_field('is_deposit_required', dep_required)
+            set_field('default_is_deposit_required', dep_required)
             set_field('default_deposit_type', dep_type)
             set_field('default_deposit_percentage', dep_pct)
             set_field('free_cancellation_hours', free_cancel)
             set_field('cancellation_fee_percentage', cancel_fee)
             set_field('no_refund_hours', no_refund)
         elif plan == 'Momentum':
-            set_field('is_deposit_required', dep_required)
+            set_field('default_is_deposit_required', dep_required)
             set_field('default_deposit_type', dep_type)
             set_field('free_cancellation_hours', free_cancel)
             set_field('cancellation_fee_percentage', cancel_fee)
@@ -264,7 +265,7 @@ class Shop(models.Model):
 
 
         self.save(update_fields=[
-            'is_deposit_required',
+            'default_is_deposit_required',
             'default_deposit_type',
             'default_deposit_percentage',
             'free_cancellation_hours',
@@ -300,11 +301,8 @@ class Shop(models.Model):
 
             # --- Logic to run *before* save ---
             
-            # Auto-update is_verified based on status
-            if self.status == "verified":
-                self.is_verified = True
-            else:
-                self.is_verified = False
+            # Auto-update is_verified logic removed (using property instead)
+
 
             # --- Call the original save method ---
             super().save(*args, **kwargs)
