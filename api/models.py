@@ -125,7 +125,7 @@ class Shop(models.Model):
     
     # Feature flag for gradual rollout
     use_rule_based_availability = models.BooleanField(
-        default=False,
+        default=True,
         help_text="Enable new rule-based availability engine for this shop"
     )
 
