@@ -252,7 +252,7 @@ class ShopSerializer(serializers.ModelSerializer):
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
             'shop_img', 'close_days', "business_hours", 'owner_id', 'status', 
             'verification_files', 'uploaded_files', 'default_is_deposit_required',
-            'default_deposit_amount', 'default_deposit_percentage',
+            'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
             'time_zone',
             # 🆕 Social Links
@@ -288,7 +288,7 @@ class ShopSerializer(serializers.ModelSerializer):
         plan_name = instance.subscription.plan.name
 
         policy_fields = {
-            'default_is_deposit_required', 'default_deposit_amount', 'default_deposit_percentage',
+            'default_is_deposit_required', 'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         }
 
