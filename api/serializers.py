@@ -378,10 +378,28 @@ class ProviderSerializer(serializers.ModelSerializer):
             instance.services.set(services)
             
         if working_hours is not None:
-            shop_tz = instance.shop.time_zone
-            ruleset = self._get_or_create_ruleset(instance, shop_tz)
-            ruleset.weekly_rules = working_hours
-            ruleset.save()
+            # If working_hours is ANY content, create/update ruleset.
+            # If working_hours is EMPTY DICT {}, it means "Revert to Shop Defaults/No Individual Schedule"
+            
+            if not working_hours:
+                # User wants to clear individual schedule
+                if instance.availability_ruleset:
+                    # Check if we should delete it (if exclusive) or just unlink
+                    old_ruleset = instance.availability_ruleset
+                    instance.availability_ruleset = None
+                    instance.save()
+                    
+                    # Cleanup: If ruleset belongs only to this provider (by name convention or check), delete it
+                    # But if it was shared, leave it.
+                    # Simple check:
+                    if old_ruleset.providers.count() == 0:
+                        old_ruleset.delete()
+            else:
+                # Update/Create valid ruleset
+                shop_tz = instance.shop.time_zone
+                ruleset = self._get_or_create_ruleset(instance, shop_tz)
+                ruleset.weekly_rules = working_hours
+                ruleset.save()
             
         return instance
 
