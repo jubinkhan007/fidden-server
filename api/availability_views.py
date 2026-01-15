@@ -104,22 +104,22 @@ class AvailabilityView(APIView):
 
 class ProvidersView(APIView):
     """
-    List providers for a specific shop and service.
+    List providers for a specific shop, optionally filtering by service.
     """
     def get(self, request, shop_id):
         service_id = request.query_params.get('service_id')
         
         qs = Provider.objects.filter(shop_id=shop_id, is_active=True)
+        
         if service_id:
-            # Assuming providers might be linked to services via M2M or just all?
-            # For now, return all active providers of the shop.
-            # In some systems providers might only do certain services.
-            pass
+            # Filter providers who can perform this service
+            qs = qs.filter(services__id=service_id)
             
         data = [{
             "id": p.id,
             "name": p.name,
-            "profile_image": p.profile_image.url if p.profile_image else None
+            "profile_image": p.profile_image.url if p.profile_image else None,
+            "allow_any_provider_booking": p.allow_any_provider_booking
         } for p in qs]
         
         return Response(data)

@@ -102,5 +102,5 @@ urlpatterns = [
     # Availability & Booking (Rule-Based)
     path('availability/', AvailabilityView.as_view(), name='availability'),
     path('bookings/', BookingCreateView.as_view(), name='booking-create'),
-    path('shops/<int:shop_id>/providers/', ProvidersView.as_view(), name='shop-providers'),
+    path('shop/<int:shop_id>/providers/', ProvidersView.as_view(), name='shop-providers'),
 ]
