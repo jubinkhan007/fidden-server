@@ -299,8 +299,55 @@ class ProviderSerializer(serializers.ModelSerializer):
             
         return ruleset
 
+    def _normalize_working_hours(self, working_hours_data):
+        """
+        Normalize client input format to internal format.
+        Client sends: {"monday": [["09:00 AM", "05:00 PM"]]}
+        Internal expects: {"mon": [["09:00", "17:00"]]}
+        """
+        if not working_hours_data:
+            return {}
+            
+        mapping = {
+            'monday': 'mon', 'tuesday': 'tue', 'wednesday': 'wed',
+            'thursday': 'thu', 'friday': 'fri', 'saturday': 'sat', 'sunday': 'sun'
+        }
+        
+        normalized = {}
+        from datetime import datetime
+        
+        for key, value in working_hours_data.items():
+            # Normalize key
+            norm_key = mapping.get(key.lower(), key.lower())[:3] # Ensure 3 chars
+            
+            norm_value = []
+            for item in value:
+                # item is list of [start, end]
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    s, e = item[0], item[1]
+                    try:
+                        # Try parsing 12-hour AM/PM
+                        s_obj = datetime.strptime(s, "%I:%M %p")
+                        s = s_obj.strftime("%H:%M")
+                    except ValueError:
+                        pass # Already 24h?
+                        
+                    try:
+                        e_obj = datetime.strptime(e, "%I:%M %p")
+                        e = e_obj.strftime("%H:%M")
+                    except ValueError:
+                        pass
+                        
+                    norm_value.append([s, e])
+            
+            normalized[norm_key] = norm_value
+            
+        return normalized
+
     def create(self, validated_data):
         working_hours = validated_data.pop('working_hours', None)
+        working_hours = self._normalize_working_hours(working_hours)
+        
         services = validated_data.pop('services', [])
         
         provider = Provider.objects.create(**validated_data)
@@ -317,6 +364,8 @@ class ProviderSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         working_hours = validated_data.pop('working_hours', None)
+        working_hours = self._normalize_working_hours(working_hours)
+        
         services = validated_data.pop('services', None) # None means no change if not provided? Or empty list?
         # Standard DRF: keys missing in payload => not updated.
         
