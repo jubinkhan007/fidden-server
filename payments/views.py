@@ -331,22 +331,55 @@ class CreatePaymentIntentView(APIView):
 
             full_service_amount = total_amount
 
+            # Determine if deposit is required (Service overrides Shop)
+            service = booking.service
             is_deposit = False
-            deposit_amount = full_service_amount  # Default to full amount
             
-            if shop.default_is_deposit_required:
+            # Check Service Level first
+            if service.is_deposit_required:
                 is_deposit = True
-                default_deposit_amount = getattr(shop, 'default_deposit_amount', None)
-                
-                if shop.default_deposit_type == 'fixed' and default_deposit_amount:
-                    deposit_amount = Decimal(str(default_deposit_amount))
-                elif shop.default_deposit_percentage:
-                    # Percentage-based deposit (most common)
-                    deposit_amount = (total_amount * Decimal(shop.default_deposit_percentage)) / 100
+                deposit_type = service.deposit_type
+                if deposit_type == 'fixed':
+                    deposit_amount = service.deposit_amount
+                elif deposit_type == 'percentage':
+                     if service.deposit_percentage:
+                        deposit_amount = (total_amount * Decimal(service.deposit_percentage)) / 100
+                     else:
+                        # Fallback if percentage type selected but no value
+                        deposit_amount = (total_amount * Decimal('20')) / 100
                 else:
-                    # Fallback: 20% deposit if nothing is configured
+                    # Fallback if type missing
                     deposit_amount = (total_amount * Decimal('20')) / 100
 
+            # If Service didn't enforce it, check Shop default
+            elif shop.default_is_deposit_required:
+                is_deposit = True
+                shop_def_type = shop.default_deposit_type
+                
+                if shop_def_type == 'fixed':
+                    # Shop model doesn't have default_deposit_amount field, so checking safely
+                    def_val = getattr(shop, 'default_deposit_amount', None)
+                    if def_val:
+                        deposit_amount = Decimal(str(def_val))
+                    else:
+                        # Fallback to 20% if fixed amount missing
+                        deposit_amount = (total_amount * Decimal('20')) / 100
+                        
+                elif shop_def_type == 'percentage':
+                    pct = shop.default_deposit_percentage or 20
+                    deposit_amount = (total_amount * Decimal(pct)) / 100
+                else:
+                    # Fallback
+                    deposit_amount = (total_amount * Decimal('20')) / 100
+            
+            else:
+                 # No deposit required at all
+                 deposit_amount = full_service_amount
+
+            # Safety: Deposit cannot exceed total price
+            if deposit_amount is None:
+                deposit_amount = full_service_amount
+            
             total_amount = min(deposit_amount, full_service_amount)
 
             remaining_balance = (
