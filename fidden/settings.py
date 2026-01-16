@@ -401,3 +401,10 @@ TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")  # fallback if no messa
 TWILIO_ENABLE = os.getenv("TWILIO_ENABLE", True)
 
 ZAPIER_KLAVIYO_WEBHOOK = os.getenv("ZAPIER_KLAVIYO_WEBHOOK", "")
+# ==============================
+# Stripe Configuration
+# ==============================
+STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY", "")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_ENDPOINT_SECRET = os.getenv("STRIPE_ENDPOINT_SECRET", "")
+STRIPE_CLIENT_ID = os.getenv("STRIPE_CLIENT_ID", "")
