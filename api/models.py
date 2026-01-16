@@ -198,6 +198,11 @@ class Shop(models.Model):
             'ghost_client_reengagement': False,
         }
 
+    @property
+    def is_deposit_required(self):
+        """Alias for backward compatibility with payment code."""
+        return self.default_is_deposit_required
+
     ##update all service new method
     def update_all_service_deposits(self):
         """Update all services' deposit amounts based on shop's default percentage"""
