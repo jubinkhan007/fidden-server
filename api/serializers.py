@@ -137,6 +137,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'service_img', 'category', 'duration', 'capacity', 'is_active',
             'disabled_start_times',   # write
             'disabled_times', "requires_age_18_plus",         # read
+            'allow_processing_overlap', 'provider_block_minutes', # 👈 Added for Concurrency Control
         ]
         read_only_fields = ('shop',)
 
