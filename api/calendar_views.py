@@ -77,12 +77,10 @@ class CalendarView(APIView):
         # exclude late-cancel if desired? No, keep all statuses per requirements.
         
         # Alias fields to match 'start_at' / 'end_at' expected by serializer
-        # Using provider_busy_end as the visual end of the service block
-        # Fallback to total_end if busy_end is null?
-        # Note: F() expressions work in annotation.
+        # Using slot.end_time for actual service duration (not provider_busy_end)
         bookings = bookings_qs.annotate(
             start_at=F('slot__start_time'),
-            end_at=F('provider_busy_end')
+            end_at=F('slot__end_time')
         )
 
         # 5. Fetch BlockedTime

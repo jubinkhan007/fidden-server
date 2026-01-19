@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 from datetime import datetime, timezone as dt_timezone
+from zoneinfo import ZoneInfo
 from api.models import BlockedTime
 from payments.models import Booking
 from payments.utils.deposit import calculate_deposit_details
@@ -14,8 +15,9 @@ class CalendarEventSerializer(serializers.Serializer):
     event_type = serializers.SerializerMethodField()  # "booking" or "blocked"
     title = serializers.SerializerMethodField()
     
-    start_at = serializers.DateTimeField()
-    end_at = serializers.DateTimeField()
+    # Use SerializerMethodField to apply shop timezone conversion
+    start_at = serializers.SerializerMethodField()
+    end_at = serializers.SerializerMethodField()
     
     # Timezone helpers
     start_at_utc = serializers.SerializerMethodField()
@@ -34,6 +36,35 @@ class CalendarEventSerializer(serializers.Serializer):
     # Blocked specific
     blocked_reason = serializers.SerializerMethodField()
     note = serializers.SerializerMethodField()
+
+    def _get_shop_tz(self, obj):
+        """Get the shop's timezone as a ZoneInfo object."""
+        shop = getattr(obj, 'shop', None)
+        tz_str = getattr(shop, 'time_zone', None) if shop else None
+        if tz_str:
+            try:
+                return ZoneInfo(tz_str)
+            except Exception:
+                pass
+        return ZoneInfo('America/New_York')  # Default fallback
+
+    def get_start_at(self, obj):
+        """Return start_at in shop's local timezone with offset."""
+        dt = getattr(obj, 'start_at', None)
+        if dt is None:
+            return None
+        shop_tz = self._get_shop_tz(obj)
+        local_dt = dt.astimezone(shop_tz)
+        return local_dt.isoformat()
+
+    def get_end_at(self, obj):
+        """Return end_at in shop's local timezone with offset."""
+        dt = getattr(obj, 'end_at', None)
+        if dt is None:
+            return None
+        shop_tz = self._get_shop_tz(obj)
+        local_dt = dt.astimezone(shop_tz)
+        return local_dt.isoformat()
 
     def get_event_type(self, obj):
         if isinstance(obj, BlockedTime):
@@ -63,21 +94,21 @@ class CalendarEventSerializer(serializers.Serializer):
         return None
 
     def get_start_at_utc(self, obj):
-        # Allow obj to be dict or model
-        dt = obj.get('start_at') if isinstance(obj, dict) else obj.start_at
+        dt = getattr(obj, 'start_at', None)
+        if dt is None:
+            return None
         return dt.astimezone(dt_timezone.utc).isoformat()
 
     def get_end_at_utc(self, obj):
-        dt = obj.get('end_at') if isinstance(obj, dict) else obj.end_at
+        dt = getattr(obj, 'end_at', None)
+        if dt is None:
+            return None
         return dt.astimezone(dt_timezone.utc).isoformat()
 
     def get_timezone_id(self, obj):
-        # Retrieve timezone from shop (if available) or settings
-        # This assumes obj has a 'shop' relation or field
-        shop = obj.get('shop') if isinstance(obj, dict) else getattr(obj, 'shop', None)
-        if hasattr(shop, 'timezone'):
-            return str(shop.timezone)
-        # Fallback to current active timezone
+        shop = getattr(obj, 'shop', None)
+        if shop and hasattr(shop, 'time_zone'):
+            return str(shop.time_zone)
         return str(timezone.get_current_timezone_name())
 
     def get_calendar_status(self, obj):
@@ -136,8 +167,7 @@ class CalendarEventSerializer(serializers.Serializer):
             payment = getattr(obj, 'payment', None)
             
             # [PAID]
-            # Succeeded = fully paid or deposit paid?
-            # Client req: "Payment.status == 'succeeded' OR (deposit credited & remaining 0)"
+            # Shows when deposit or full payment has succeeded
             if payment:
                 if payment.status == 'succeeded':
                     badges.append("PAID")
@@ -145,9 +175,14 @@ class CalendarEventSerializer(serializers.Serializer):
                     badges.append("PAID")
             
             # [DEP_DUE]
-            # Deposit required but not credited
-            if payment and payment.is_deposit and payment.deposit_status != 'credited':
+            # Deposit required but NOT yet paid (payment hasn't succeeded)
+            if payment and payment.is_deposit and payment.status != 'succeeded':
                 badges.append("DEP_DUE")
+            
+            # [BAL_DUE]
+            # Deposit was paid but there's remaining balance
+            if payment and payment.status == 'succeeded' and payment.remaining_amount and payment.remaining_amount > 0:
+                badges.append("BAL_DUE")
                 
             # [FORMS]
             # Check Booking fields
