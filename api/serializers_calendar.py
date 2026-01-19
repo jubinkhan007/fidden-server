@@ -194,23 +194,7 @@ class CalendarEventSerializer(serializers.Serializer):
 
     def to_representation(self, instance):
         """
-        Polymorphic dispatch or manual dict construction based on instance type.
+        Let SerializerMethodFields handle all field computation.
+        Just call super() - no overrides needed anymore.
         """
-        ret = super().to_representation(instance)
-        
-        # Inject event_type
-        if isinstance(instance, BlockedTime):
-            ret['event_type'] = 'blocked'
-            ret['title'] = "Blocked" # or instance.note or reason
-            if instance.note:
-                ret['title'] += f": {instance.note}"
-            ret['blocked_reason'] = instance.reason
-            
-        elif isinstance(instance, Booking):
-            ret['event_type'] = 'booking'
-            # Title is usually Service Name + Customer Name
-            svc_title = instance.slot.service.title if instance.slot and instance.slot.service else "Service"
-            cust_name = instance.user.first_name if instance.user else "Guest"
-            ret['title'] = f"{svc_title} - {cust_name}"
-            
-        return ret
+        return super().to_representation(instance)
