@@ -10,7 +10,7 @@ class CalendarEventSerializer(serializers.Serializer):
     Output schema is consistent for UI rendering.
     """
     id = serializers.IntegerField()
-    event_type = serializers.CharField()  # "booking" or "blocked"
+    event_type = serializers.SerializerMethodField()  # "booking" or "blocked"
     title = serializers.CharField()
     
     start_at = serializers.DateTimeField()
@@ -33,6 +33,11 @@ class CalendarEventSerializer(serializers.Serializer):
     # Blocked specific
     blocked_reason = serializers.CharField(required=False)
     note = serializers.CharField(required=False)
+
+    def get_event_type(self, obj):
+        if isinstance(obj, BlockedTime):
+            return "blocked"
+        return "booking"
 
     def get_start_at_utc(self, obj):
         # Allow obj to be dict or model
