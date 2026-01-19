@@ -67,8 +67,8 @@ class CalendarView(APIView):
         
         bookings_qs = Booking.objects.filter(
             shop=shop,
-            start_time__date__gte=start_date,
-            start_time__date__lte=end_date
+            slot__start_time__date__gte=start_date,
+            slot__start_time__date__lte=end_date
         ).select_related('slot', 'slot__service', 'user', 'provider', 'payment', 'shop')
         
         if provider_id:
@@ -81,7 +81,7 @@ class CalendarView(APIView):
         # Fallback to total_end if busy_end is null?
         # Note: F() expressions work in annotation.
         bookings = bookings_qs.annotate(
-            start_at=F('start_time'),
+            start_at=F('slot__start_time'),
             end_at=F('provider_busy_end')
         )
 
