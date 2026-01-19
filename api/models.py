@@ -96,7 +96,7 @@ class Shop(models.Model):
     status = models.CharField(
         max_length=10,
         choices=STATUS_CHOICES,
-        default="unverified"
+        default="verified"
     )
     free_cancellation_hours = models.PositiveIntegerField(default=24)
     cancellation_fee_percentage = models.PositiveIntegerField(default=50)
