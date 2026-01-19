@@ -11,7 +11,7 @@ class CalendarEventSerializer(serializers.Serializer):
     """
     id = serializers.IntegerField()
     event_type = serializers.SerializerMethodField()  # "booking" or "blocked"
-    title = serializers.CharField()
+    title = serializers.SerializerMethodField()
     
     start_at = serializers.DateTimeField()
     end_at = serializers.DateTimeField()
@@ -31,13 +31,35 @@ class CalendarEventSerializer(serializers.Serializer):
     service = serializers.SerializerMethodField()
     
     # Blocked specific
-    blocked_reason = serializers.CharField(required=False)
-    note = serializers.CharField(required=False)
+    blocked_reason = serializers.SerializerMethodField()
+    note = serializers.SerializerMethodField()
 
     def get_event_type(self, obj):
         if isinstance(obj, BlockedTime):
             return "blocked"
         return "booking"
+
+    def get_title(self, obj):
+        if isinstance(obj, BlockedTime):
+            title = "Blocked"
+            if obj.note:
+                title += f": {obj.note}"
+            return title
+        elif isinstance(obj, Booking):
+            svc_title = obj.slot.service.title if obj.slot and obj.slot.service else "Service"
+            cust_name = obj.user.first_name if obj.user else "Guest"
+            return f"{svc_title} - {cust_name}"
+        return "Event"
+
+    def get_blocked_reason(self, obj):
+        if isinstance(obj, BlockedTime):
+            return obj.reason
+        return None
+
+    def get_note(self, obj):
+        if isinstance(obj, BlockedTime):
+            return obj.note
+        return None
 
     def get_start_at_utc(self, obj):
         # Allow obj to be dict or model
