@@ -498,10 +498,52 @@ class VerificationFile(models.Model):
         related_name="verification_files"
     )
     file = models.FileField(
-        upload_to="shop/verifications/",
-        help_text="Upload verification document (e.g., trade license, ID card)"
+        upload_to='verification_files/'
     )
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+
+class BlockedTime(models.Model):
+    """
+    Represents time blocks where a provider (or whole shop) is unavailable.
+    Used for: Breaks, PTO, Personal Time, etc.
+    These appear as 'BLOCKED' on the calendar.
+    """
+    REASON_CHOICES = [
+        ('break', 'Break'),
+        ('pto', 'PTO'),
+        ('other', 'Other'),
+    ]
+
+    shop = models.ForeignKey('Shop', on_delete=models.CASCADE, related_name='blocked_times')
+    provider = models.ForeignKey(
+        'Provider', 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True, 
+        related_name='blocked_times',
+        help_text="If null, blocks the entire shop (all providers)"
+    )
+    
+    start_at = models.DateTimeField(db_index=True)
+    end_at = models.DateTimeField()
+    
+    reason = models.CharField(max_length=10, choices=REASON_CHOICES, default='break')
+    note = models.CharField(max_length=255, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['start_at']
+        indexes = [
+            models.Index(fields=['shop', 'start_at', 'end_at']),
+            models.Index(fields=['provider', 'start_at', 'end_at']),
+        ]
+
+    def __str__(self):
+        subject = self.provider.name if self.provider else "Whole Shop"
+        return f"Blocked: {subject} ({self.reason}) @ {self.start_at}"
 
     def __str__(self):
         return f"{self.shop.name} - {self.file.name}"

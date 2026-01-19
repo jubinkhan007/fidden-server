@@ -185,6 +185,12 @@ class Booking(models.Model):
     )
 
     # ---------------------------
+    # INTAKE FORMS (Compliance)
+    # ---------------------------
+    forms_required = models.BooleanField(default=False, help_text="Are intake forms required for this booking?")
+    forms_completed = models.BooleanField(default=False, help_text="Have all required forms been completed?")
+
+    # ---------------------------
     # RULE-BASED SCHEDULING FIELDS
     # ---------------------------
     provider = models.ForeignKey(
