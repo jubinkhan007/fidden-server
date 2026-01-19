@@ -47,7 +47,7 @@ class CalendarEventSerializer(serializers.Serializer):
             return title
         elif isinstance(obj, Booking):
             svc_title = obj.slot.service.title if obj.slot and obj.slot.service else "Service"
-            cust_name = obj.user.first_name if obj.user else "Guest"
+            cust_name = obj.user.name if obj.user and obj.user.name else "Guest"
             return f"{svc_title} - {cust_name}"
         return "Event"
 
@@ -182,8 +182,8 @@ class CalendarEventSerializer(serializers.Serializer):
         return None
 
     def get_customer(self, obj):
-        if hasattr(obj, 'user'):
-            return {"id": obj.user.id, "name": f"{obj.user.first_name} {obj.user.last_name}".strip()}
+        if hasattr(obj, 'user') and obj.user:
+            return {"id": obj.user.id, "name": obj.user.name or obj.user.email}
         return None
 
     def get_service(self, obj):
