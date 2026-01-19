@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.utils import timezone
+from datetime import datetime, timezone as dt_timezone
 from api.models import BlockedTime
 from payments.models import Booking
 from payments.utils.deposit import calculate_deposit_details
@@ -64,11 +65,11 @@ class CalendarEventSerializer(serializers.Serializer):
     def get_start_at_utc(self, obj):
         # Allow obj to be dict or model
         dt = obj.get('start_at') if isinstance(obj, dict) else obj.start_at
-        return dt.astimezone(timezone.utc).isoformat()
+        return dt.astimezone(dt_timezone.utc).isoformat()
 
     def get_end_at_utc(self, obj):
         dt = obj.get('end_at') if isinstance(obj, dict) else obj.end_at
-        return dt.astimezone(timezone.utc).isoformat()
+        return dt.astimezone(dt_timezone.utc).isoformat()
 
     def get_timezone_id(self, obj):
         # Retrieve timezone from shop (if available) or settings
