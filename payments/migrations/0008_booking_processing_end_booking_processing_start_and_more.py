@@ -14,45 +14,63 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='booking',
-            name='processing_end',
-            field=models.DateTimeField(blank=True, db_index=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='booking',
-            name='processing_start',
-            field=models.DateTimeField(blank=True, db_index=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='booking',
-            name='provider',
-            field=models.ForeignKey(blank=True, help_text='The provider who will perform this service', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='bookings', to='api.provider'),
-        ),
-        migrations.AddField(
-            model_name='booking',
-            name='provider_busy_end',
-            field=models.DateTimeField(blank=True, db_index=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='booking',
-            name='provider_busy_start',
-            field=models.DateTimeField(blank=True, db_index=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='booking',
-            name='review_reminder_sent_at',
-            field=models.DateTimeField(blank=True, help_text='Timestamp when review reminder was sent (max 1 per booking)', null=True),
-        ),
-        migrations.AddField(
-            model_name='booking',
-            name='review_request_sent_at',
-            field=models.DateTimeField(blank=True, help_text='Timestamp when initial review request was sent', null=True),
-        ),
-        migrations.AddField(
-            model_name='booking',
-            name='total_end',
-            field=models.DateTimeField(blank=True, null=True),
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.AddField(
+                    model_name='booking',
+                    name='processing_end',
+                    field=models.DateTimeField(blank=True, db_index=True, null=True),
+                ),
+                migrations.AddField(
+                    model_name='booking',
+                    name='processing_start',
+                    field=models.DateTimeField(blank=True, db_index=True, null=True),
+                ),
+                migrations.AddField(
+                    model_name='booking',
+                    name='provider',
+                    field=models.ForeignKey(blank=True, help_text='The provider who will perform this service', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='bookings', to='api.provider'),
+                ),
+                migrations.AddField(
+                    model_name='booking',
+                    name='provider_busy_end',
+                    field=models.DateTimeField(blank=True, db_index=True, null=True),
+                ),
+                migrations.AddField(
+                    model_name='booking',
+                    name='provider_busy_start',
+                    field=models.DateTimeField(blank=True, db_index=True, null=True),
+                ),
+                migrations.AddField(
+                    model_name='booking',
+                    name='review_reminder_sent_at',
+                    field=models.DateTimeField(blank=True, help_text='Timestamp when review reminder was sent (max 1 per booking)', null=True),
+                ),
+                migrations.AddField(
+                    model_name='booking',
+                    name='review_request_sent_at',
+                    field=models.DateTimeField(blank=True, help_text='Timestamp when initial review request was sent', null=True),
+                ),
+                migrations.AddField(
+                    model_name='booking',
+                    name='total_end',
+                    field=models.DateTimeField(blank=True, null=True),
+                ),
+            ],
+            database_operations=[
+                migrations.RunSQL(
+                    sql="""
+                    ALTER TABLE "payments_booking" ADD COLUMN IF NOT EXISTS "processing_end" timestamp with time zone NULL;
+                    ALTER TABLE "payments_booking" ADD COLUMN IF NOT EXISTS "processing_start" timestamp with time zone NULL;
+                    ALTER TABLE "payments_booking" ADD COLUMN IF NOT EXISTS "provider_id" bigint NULL;
+                    ALTER TABLE "payments_booking" ADD COLUMN IF NOT EXISTS "provider_busy_end" timestamp with time zone NULL;
+                    ALTER TABLE "payments_booking" ADD COLUMN IF NOT EXISTS "provider_busy_start" timestamp with time zone NULL;
+                    ALTER TABLE "payments_booking" ADD COLUMN IF NOT EXISTS "review_reminder_sent_at" timestamp with time zone NULL;
+                    ALTER TABLE "payments_booking" ADD COLUMN IF NOT EXISTS "review_request_sent_at" timestamp with time zone NULL;
+                    ALTER TABLE "payments_booking" ADD COLUMN IF NOT EXISTS "total_end" timestamp with time zone NULL;
+                    """,
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name='booking',
