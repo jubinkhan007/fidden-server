@@ -30,20 +30,33 @@ class Migration(migrations.Migration):
             model_name='availabilityexception',
             name='last_weekly_wrap_sent_at',
         ),
-        migrations.AddField(
-            model_name='shop',
-            name='last_daily_snapshot_sent_at',
-            field=models.DateTimeField(blank=True, help_text='When daily snapshot was last sent (stored in UTC)', null=True),
-        ),
-        migrations.AddField(
-            model_name='shop',
-            name='last_week_ahead_sent_at',
-            field=models.DateTimeField(blank=True, help_text='When week-ahead forecast was last sent (stored in UTC)', null=True),
-        ),
-        migrations.AddField(
-            model_name='shop',
-            name='last_weekly_wrap_sent_at',
-            field=models.DateTimeField(blank=True, help_text='When weekly wrap-up notification was last sent (stored in UTC)', null=True),
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.AddField(
+                    model_name='shop',
+                    name='last_daily_snapshot_sent_at',
+                    field=models.DateTimeField(blank=True, help_text='When daily snapshot was last sent (stored in UTC)', null=True),
+                ),
+                migrations.AddField(
+                    model_name='shop',
+                    name='last_week_ahead_sent_at',
+                    field=models.DateTimeField(blank=True, help_text='When week-ahead forecast was last sent (stored in UTC)', null=True),
+                ),
+                migrations.AddField(
+                    model_name='shop',
+                    name='last_weekly_wrap_sent_at',
+                    field=models.DateTimeField(blank=True, help_text='When weekly wrap-up notification was last sent (stored in UTC)', null=True),
+                ),
+            ],
+            database_operations=[
+                migrations.RunSQL(
+                    sql="""
+                    ALTER TABLE "api_shop" ADD COLUMN IF NOT EXISTS "last_daily_snapshot_sent_at" timestamp with time zone NULL;
+                    ALTER TABLE "api_shop" ADD COLUMN IF NOT EXISTS "last_week_ahead_sent_at" timestamp with time zone NULL;
+                    ALTER TABLE "api_shop" ADD COLUMN IF NOT EXISTS "last_weekly_wrap_sent_at" timestamp with time zone NULL;
+                    """,
+                ),
+            ],
         ),
         migrations.AlterField(
             model_name='slotbooking',
