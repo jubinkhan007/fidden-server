@@ -69,17 +69,17 @@ class Migration(migrations.Migration):
             name='use_rule_based_availability',
             field=models.BooleanField(default=False, help_text='Enable new rule-based availability engine for this shop'),
         ),
-        migrations.AddField(
+        migrations.AlterField(
             model_name='weeklysummary',
             name='revenue_checkout',
             field=models.DecimalField(decimal_places=2, default=0, help_text='Total checkout payments (remaining + tips) this week', max_digits=10),
         ),
-        migrations.AddField(
+        migrations.AlterField(
             model_name='weeklysummary',
             name='revenue_deposits',
             field=models.DecimalField(decimal_places=2, default=0, help_text='Total deposits collected this week', max_digits=10),
         ),
-        migrations.AddField(
+        migrations.AlterField(
             model_name='weeklysummary',
             name='revenue_tips',
             field=models.DecimalField(decimal_places=2, default=0, help_text='Total tips collected this week', max_digits=10),
