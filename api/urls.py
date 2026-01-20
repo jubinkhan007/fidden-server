@@ -50,6 +50,16 @@ from .views import (
     OwnerLoyaltyAddPointsView,
     OwnerLoyaltyRedeemView,
 )
+
+from .calendar_views import CalendarView
+
+from .availability_views import (
+    AvailabilityView,
+    BookingCreateView,
+    ProvidersView,
+    ProviderDetailView,
+)
+
 from payments.views import ShopSlotsView
 
 urlpatterns = [
@@ -97,7 +107,16 @@ urlpatterns = [
     # 🆕 Gallery endpoints
     path('gallery/', GalleryItemView.as_view(), name='gallery-list-create'),
     path('gallery/<int:pk>/', GalleryItemDetailView.as_view(), name='gallery-detail'),
-    path('shops/<int:shop_id>/gallery/', PublicGalleryView.as_view(), name='public-gallery'),
+    path('shop/<int:shop_id>/gallery/public/', PublicGalleryView.as_view(), name='public-gallery-list'),
+
+    # 🆕 Calendar endpoint
+    path('calendar/', CalendarView.as_view(), name='calendar'),
+
+    # Availability & Booking (Rule-Based)
+    path('availability/', AvailabilityView.as_view(), name='availability'),
+    path('bookings/', BookingCreateView.as_view(), name='booking-create'),
+    path('shop/<int:shop_id>/providers/', ProvidersView.as_view(), name='shop-providers'),
+    path('providers/<int:pk>/', ProviderDetailView.as_view(), name='provider-detail'),
 ]
 
 # ==========================================

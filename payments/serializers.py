@@ -153,6 +153,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
     service_duration = serializers.CharField(source='slot.service.duration', read_only=True) 
     refund = RefundSerializer(source="payment.refund", read_only=True)
     add_on_services = serializers.SerializerMethodField()
+    add_ons = serializers.SerializerMethodField()
     shop_timezone = serializers.SerializerMethodField()
     
     # Fidden Pay checkout fields
@@ -180,6 +181,7 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             'status',
             'refund',
             'add_on_services',
+            'add_ons',
             'shop_timezone',
             'created_at',
             'updated_at',
@@ -209,6 +211,23 @@ class ownerBookingSerializer(serializers.ModelSerializer):
             {
                 'title': add_on.service.title,
                 'duration': str(add_on.service.duration) if add_on.service.duration else '0',
+            }
+            for add_on in add_ons
+        ]
+    
+    def get_add_ons(self, obj):
+        """
+        Return list of add-ons with id, title and price for owner booking display.
+        This is the format expected by the Flutter frontend.
+        """
+        if not obj.slot:
+            return []
+        add_ons = obj.slot.add_ons.all()
+        return [
+            {
+                'id': add_on.service.id,
+                'title': add_on.service.title,
+                'price': float(add_on.service.price) if add_on.service.price else 0.0,
             }
             for add_on in add_ons
         ]

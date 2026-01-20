@@ -88,13 +88,13 @@ class ShopPermissionMixin(PlanBasedPermissionMixin):
     def get_field_permissions(self):
         return {
             # Foundation: No modifications allowed for these fields
-            'is_deposit_required': [SubscriptionPlan.MOMENTUM, SubscriptionPlan.ICON],
+            'default_is_deposit_required': [SubscriptionPlan.MOMENTUM, SubscriptionPlan.ICON],
             'free_cancellation_hours': [SubscriptionPlan.ICON],
             'cancellation_fee_percentage': [SubscriptionPlan.ICON],
             'no_refund_hours': [SubscriptionPlan.ICON],
             
             # Momentum: Only deposit amount allowed
-            'deposit_amount': [SubscriptionPlan.MOMENTUM, SubscriptionPlan.ICON],
+            'default_deposit_amount': [SubscriptionPlan.MOMENTUM, SubscriptionPlan.ICON],
             
             # Icon: All fields allowed (no restrictions needed)
         }

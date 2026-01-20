@@ -50,6 +50,11 @@ from .models import (
     # Massage Therapist Dashboard Models
     ClientMassageProfile,
     SessionNote,
+    # New Scheduling Models
+    AvailabilityRuleSet,
+    Provider,
+    ProviderDayLock,
+    AvailabilityException,
 )
 try:
     from .models import AIAutoFillSettings  # noqa: F401
@@ -100,10 +105,10 @@ class IDVerificationInline(admin.TabularInline):
 class ShopAdmin(admin.ModelAdmin):
     list_display = (
         'name', 'owner', 'address', 'location', 'capacity', 
-        'status', 'is_deposit_required', 'get_subscription_plan'
+        'status', 'default_is_deposit_required', 'get_subscription_plan'
     )
     list_filter = (
-        'status', 'is_deposit_required', 'is_verified', 
+        'status', 'default_is_deposit_required', 
         'subscription__plan__name'
     )
     search_fields = ('name', 'owner__email', 'owner__name', 'address')
@@ -115,11 +120,14 @@ class ShopAdmin(admin.ModelAdmin):
         ('Operational Settings', {
             'fields': (
                 'capacity', 'start_at', 'close_at', 
-                'break_start_time', 'break_end_time', 'close_days'
+                'break_start_time', 'break_end_time', 'close_days',
+                # New rule-based fields
+                'default_interval_minutes', 'access_hours', 'default_availability_ruleset',
+                'use_rule_based_availability'
             )
         }),
         ('Deposit Settings', {
-            'fields': ('is_deposit_required',),
+            'fields': ('default_is_deposit_required',),
             'description': 'Deposit settings - restricted by subscription plan for regular users'
         }),
         ('Cancellation Policy', {
@@ -130,7 +138,7 @@ class ShopAdmin(admin.ModelAdmin):
             'description': 'Cancellation policy - Icon plan required for regular users'
         }),
         ('Status & Verification', {
-            'fields': ('status', 'is_verified')
+            'fields': ('status',)
         }),
     )
     
@@ -150,15 +158,15 @@ class ShopAdmin(admin.ModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         """Superusers can modify all fields, regular staff have restrictions"""
         if request.user.is_superuser:
-            return ['is_verified']  # Only verification status is readonly for superusers
+            return []  # Only verification status is readonly for superusers
         
          # Fields controlled by plan
-        deposit_fields = ['is_deposit_required',]
+        deposit_fields = ['default_is_deposit_required',]
         cancellation_fields = ['free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours']
 
         # On add view (obj is None), be conservative like Foundation
         if obj is None:
-            return ['is_verified'] + deposit_fields + cancellation_fields
+            return deposit_fields + cancellation_fields
 
         
         # Determine current plan (if any)
@@ -168,19 +176,19 @@ class ShopAdmin(admin.ModelAdmin):
 
         # Foundation: no modification on deposit/cancellation
         if plan_name == 'Foundation':
-            return ['is_verified'] + deposit_fields + cancellation_fields
+            return deposit_fields + cancellation_fields
 
         # Momentum: only deposit_amount editable; keep others readonly
         if plan_name == 'Momentum':
-            return ['is_verified'] + ['is_deposit_required'] + cancellation_fields
+            return ['default_is_deposit_required'] + cancellation_fields
 
         # Icon (or anything else): full control except verification
-        return ['is_verified']
+        return []
 
         
         # Regular staff cannot modify deposit/cancellation settings
         return [
-            'is_verified', 'is_deposit_required',
+            'default_is_deposit_required',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         ]
     # list_display = ('name', 'owner', 'address', 'location', 'capacity')
@@ -765,3 +773,69 @@ class SessionNoteAdmin(admin.ModelAdmin):
     def get_client_name(self, obj):
         return obj.client.name if obj.client else '-'
     get_client_name.short_description = 'Client'
+
+
+# ---------------------------------------------
+# NEW SCHEDULING SYSTEM ADMIN
+# ---------------------------------------------
+
+@admin.register(AvailabilityRuleSet)
+class AvailabilityRuleSetAdmin(admin.ModelAdmin):
+    list_display = ('name', 'timezone', 'interval_minutes', 'created_at')
+    search_fields = ('name',)
+    list_filter = ('timezone', 'interval_minutes')
+    fieldsets = (
+        ('Basic Settings', {
+            'fields': ('name', 'timezone', 'interval_minutes')
+        }),
+        ('Schedule Rules', {
+            'fields': ('weekly_rules', 'breaks'),
+            'description': 'Define base weekly availability and regular breaks (JSON structure).'
+        })
+    )
+
+@admin.register(Provider)
+class ProviderAdmin(admin.ModelAdmin):
+    list_display = ('name', 'shop', 'provider_type', 'is_active', 'allow_any_provider_booking', 'max_concurrent_processing_jobs')
+    list_filter = ('shop', 'provider_type', 'is_active', 'allow_any_provider_booking')
+    search_fields = ('name', 'shop__name', 'user__email')
+    filter_horizontal = ('services',)
+    
+    fieldsets = (
+        ('Identity', {
+            'fields': ('shop', 'user', 'name', 'provider_type', 'is_active', 'profile_image')
+        }),
+        ('Scheduling Config', {
+            'fields': ('availability_ruleset', 'services', 'allow_any_provider_booking')
+        }),
+        ('Concurrency Control', {
+            'fields': ('max_concurrent_processing_jobs',),
+            'description': 'Controls how many processing-phase services (e.g. hair processing) this provider can handle simultaneously. Default is 1.'
+        }),
+    )
+
+@admin.register(AvailabilityException)
+class AvailabilityExceptionAdmin(admin.ModelAdmin):
+    list_display = ('provider', 'date', 'is_closed', 'note')
+    list_filter = ('date', 'is_closed', 'provider__shop')
+    search_fields = ('provider__name', 'note')
+    date_hierarchy = 'date'
+    
+    fieldsets = (
+        ('Exception Details', {
+            'fields': ('provider', 'date', 'note')
+        }),
+        ('Overrides', {
+            'fields': ('is_closed', 'override_rules', 'override_breaks'),
+            'description': 'Set is_closed=True to block the day. Otherwise, provide specific start/end times in override_rules.'
+        })
+    )
+
+@admin.register(ProviderDayLock)
+class ProviderDayLockAdmin(admin.ModelAdmin):
+    list_display = ('shop', 'provider', 'date')
+    list_filter = ('date', 'shop', 'provider')
+    search_fields = ('shop__name', 'provider__name')
+    readonly_fields = ('shop', 'provider', 'date')
+    date_hierarchy = 'date'
+

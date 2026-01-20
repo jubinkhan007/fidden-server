@@ -318,6 +318,8 @@ if google_ids_str:
 CSRF_TRUSTED_ORIGINS = [x.strip() for x in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if x]
 # Add localhost for local development
 CSRF_TRUSTED_ORIGINS += ['http://localhost:8000', 'http://127.0.0.1:8000']
+# Production domains
+CSRF_TRUSTED_ORIGINS += ['https://phase1new.fidden.io', 'https://fidden.io']
 
 # ==============================
 # Celery Configuration
@@ -351,7 +353,7 @@ except json.JSONDecodeError:
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")  # sk_test_...
 STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY")  # pk_test_...
-STRIPE_ENDPOINT_SECRET = os.environ.get("STRIPE_ENDPOINT_SECRET")  # webhook secret
+STRIPE_ENDPOINT_SECRET = "whsec_SjsTVQJNYHKS21Rv69oV37KRS43DttaX"  # os.environ.get("STRIPE_ENDPOINT_SECRET")
 STRIPE_AI_PRICE_ID = os.environ.get("STRIPE_AI_PRICE_ID")
 
 STRIPE_SUCCESS_URL = os.getenv('STRIPE_SUCCESS_URL', 'http://localhost:3000/subscription/success')
@@ -403,3 +405,10 @@ TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")  # fallback if no messa
 TWILIO_ENABLE = os.getenv("TWILIO_ENABLE", True)
 
 ZAPIER_KLAVIYO_WEBHOOK = os.getenv("ZAPIER_KLAVIYO_WEBHOOK", "")
+# ==============================
+# Stripe Configuration
+# ==============================
+STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY", "")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_ENDPOINT_SECRET = os.getenv("STRIPE_ENDPOINT_SECRET", "")
+STRIPE_CLIENT_ID = os.getenv("STRIPE_CLIENT_ID", "")

@@ -83,6 +83,9 @@ class Shop(models.Model):
     youtube_url = models.URLField(max_length=200, blank=True, null=True)
     website_url = models.URLField(max_length=200, blank=True, null=True)
 
+    # Missing field restored to match DB schema
+    niche = models.CharField(max_length=50, default='Barber', blank=True, null=True)
+
     close_days = models.JSONField(
         default=list,
         blank=True,
@@ -116,17 +119,52 @@ class Shop(models.Model):
     status = models.CharField(
         max_length=10,
         choices=STATUS_CHOICES,
-        default="unverified"
+        default="verified"
     )
     free_cancellation_hours = models.PositiveIntegerField(default=24)
     cancellation_fee_percentage = models.PositiveIntegerField(default=50)
     no_refund_hours = models.PositiveIntegerField(default=4)
 
+    # ---------------------------
+    # RULE-BASED SCHEDULING FIELDS
+    # ---------------------------
+    default_interval_minutes = models.PositiveIntegerField(
+        default=15,
+        choices=[(5, '5 min'), (10, '10 min'), (15, '15 min'), (30, '30 min'), (60, '60 min')],
+        help_text="Default slot interval for time selection grid"
+    )
 
-    is_deposit_required = models.BooleanField(default=False, help_text="Is a deposit required for booking?")
-    # deposit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text="The fixed amount for the deposit.")
+    access_hours = models.JSONField(
+        default=dict, blank=True,
+        help_text="Optional access hours that constrain all providers"
+    )
 
-    is_verified = models.BooleanField(default=False)  # renamed (typo fix)
+    default_availability_ruleset = models.ForeignKey(
+        'AvailabilityRuleSet',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='default_for_shops'
+    )
+    
+    # Feature flag for gradual rollout
+    use_rule_based_availability = models.BooleanField(
+        default=True,
+        help_text="Enable new rule-based availability engine for this shop"
+    )
+
+    def apply_plan_defaults(self, overwrite=False):
+        """
+        Placeholder for subscriptions app integration.
+        Populates shop settings based on the subscription plan.
+        """
+        pass
+
+# ------------------------------------
+
+
+
+
+
     
     # V1 Fix: Notification cadence tracking (prevents over-triggering)
     last_weekly_wrap_sent_at = models.DateTimeField(
@@ -144,6 +182,10 @@ class Shop(models.Model):
         blank=True,
         help_text="When daily snapshot was last sent (stored in UTC)"
     )
+
+    @property
+    def is_verified(self):
+        return self.status == "verified"
 
     @property
     def ranking_power(self):
@@ -304,6 +346,11 @@ class Shop(models.Model):
         
         return self.niches
 
+    @property
+    def is_deposit_required(self):
+        """Alias for backward compatibility with payment code."""
+        return self.default_is_deposit_required
+
     ##update all service new method
     def update_all_service_deposits(self):
         """Update all services' deposit amounts based on shop's default percentage"""
@@ -355,14 +402,14 @@ class Shop(models.Model):
 
         if plan == 'Foundation':
             # Apply all defaults
-            set_field('is_deposit_required', dep_required)
+            set_field('default_is_deposit_required', dep_required)
             set_field('default_deposit_type', dep_type)
             set_field('default_deposit_percentage', dep_pct)
             set_field('free_cancellation_hours', free_cancel)
             set_field('cancellation_fee_percentage', cancel_fee)
             set_field('no_refund_hours', no_refund)
         elif plan == 'Momentum':
-            set_field('is_deposit_required', dep_required)
+            set_field('default_is_deposit_required', dep_required)
             set_field('default_deposit_type', dep_type)
             set_field('free_cancellation_hours', free_cancel)
             set_field('cancellation_fee_percentage', cancel_fee)
@@ -371,7 +418,7 @@ class Shop(models.Model):
 
 
         self.save(update_fields=[
-            'is_deposit_required',
+            'default_is_deposit_required',
             'default_deposit_type',
             'default_deposit_percentage',
             'free_cancellation_hours',
@@ -407,11 +454,8 @@ class Shop(models.Model):
 
             # --- Logic to run *before* save ---
             
-            # Auto-update is_verified based on status
-            if self.status == "verified":
-                self.is_verified = True
-            else:
-                self.is_verified = False
+            # Auto-update is_verified logic removed (using property instead)
+
 
             # --- Call the original save method ---
             super().save(*args, **kwargs)
@@ -471,6 +515,130 @@ class Shop(models.Model):
     def __str__(self):
         return self.name
 
+# ------------------------------------
+# NEW RULE-BASED SCHEDULING MODELS
+# ------------------------------------
+
+class AvailabilityRuleSet(models.Model):
+    """
+    Weekly availability template with breaks.
+    Can be assigned to a Provider or used as shop-level default.
+    """
+    name = models.CharField(max_length=100, blank=True)
+    timezone = models.CharField(max_length=50, default='America/New_York')
+    interval_minutes = models.PositiveIntegerField(
+        default=15,
+        choices=[(5, '5 min'), (10, '10 min'), (15, '15 min'), (30, '30 min'), (60, '60 min')]
+    )
+    
+    # Weekly rules: {"mon": [["09:00", "12:00"], ["13:00", "18:00"]], ...}
+    weekly_rules = models.JSONField(default=dict)
+    
+    # Breaks: [{"start": "12:00", "end": "13:00", "days": ["mon", "tue", "wed", "thu", "fri"]}]
+    breaks = models.JSONField(default=list)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def clean(self):
+        """Validate timezone is a valid IANA identifier."""
+        from django.core.exceptions import ValidationError
+        from zoneinfo import ZoneInfo
+        
+        try:
+            ZoneInfo(self.timezone)
+        except Exception:
+            raise ValidationError({
+                'timezone': f"'{self.timezone}' is not a valid IANA timezone identifier."
+            })
+    
+    def __str__(self):
+        return f"{self.name or 'Ruleset'} ({self.timezone})"
+
+
+class Provider(models.Model):
+    """
+    Represents a bookable person (employee or independent contractor).
+    For single-owner shops, the owner is the implicit provider.
+    """
+    PROVIDER_TYPE_CHOICES = [
+        ('employee', 'Employee'),           # Shifts managed by business
+        ('independent', 'Independent'),     # Self-managed schedule
+    ]
+    
+    shop = models.ForeignKey('Shop', on_delete=models.CASCADE, related_name='providers')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, 
+                            related_name='provider_profiles', null=True, blank=True)
+    name = models.CharField(max_length=255)
+    provider_type = models.CharField(max_length=15, choices=PROVIDER_TYPE_CHOICES, default='employee')
+    is_active = models.BooleanField(default=True)
+    profile_image = models.ImageField(upload_to='providers/', blank=True, null=True)
+    bio = models.TextField(blank=True, null=True, help_text="Short bio or description of the provider")
+    
+    # Services this provider can perform
+    services = models.ManyToManyField('Service', related_name='providers', blank=True)
+    
+    # Opt-in for "Any Provider" aggregated view
+    allow_any_provider_booking = models.BooleanField(default=True)
+    
+    # Availability ruleset link
+    availability_ruleset = models.ForeignKey(
+        'AvailabilityRuleSet', 
+        on_delete=models.SET_NULL, 
+        null=True, blank=True,
+        related_name='providers'
+    )
+    
+    # Processing overlap concurrency limit
+    max_concurrent_processing_jobs = models.PositiveIntegerField(
+        default=1,
+        help_text="Maximum number of processing-phase services this provider can handle simultaneously"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"{self.name} ({self.shop.name})"
+
+
+class ProviderDayLock(models.Model):
+    """
+    Used for pessimistic locking during booking creation.
+    Can lock a specific provider on a date, or the whole shop on a date.
+    """
+    shop = models.ForeignKey('Shop', on_delete=models.CASCADE, related_name='day_locks', null=True, blank=True)
+    provider = models.ForeignKey('Provider', on_delete=models.CASCADE, related_name='day_locks', null=True, blank=True)
+    date = models.DateField(db_index=True)
+    
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['shop', 'provider', 'date'], 
+                name='uniq_shop_provider_date_lock'
+            )
+        ]
+        
+    def __str__(self):
+        return f"Lock: {self.shop.name} | {self.provider.name if self.provider else 'ALL'} | {self.date}"
+
+
+class AvailabilityException(models.Model):
+    """
+    Date-specific override for a provider's schedule.
+    """
+    provider = models.ForeignKey('Provider', on_delete=models.CASCADE, related_name='exceptions')
+    date = models.DateField(db_index=True)
+    
+    is_closed = models.BooleanField(default=False)
+    override_rules = models.JSONField(default=list, blank=True)
+    override_breaks = models.JSONField(default=list, blank=True)
+    note = models.CharField(max_length=255, blank=True)
+    
+    class Meta:
+        unique_together = ['provider', 'date']
+
+
 class VerificationFile(models.Model):
     shop = models.ForeignKey(
         "Shop",
@@ -478,10 +646,52 @@ class VerificationFile(models.Model):
         related_name="verification_files"
     )
     file = models.FileField(
-        upload_to="shop/verifications/",
-        help_text="Upload verification document (e.g., trade license, ID card)"
+        upload_to='verification_files/'
     )
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+
+class BlockedTime(models.Model):
+    """
+    Represents time blocks where a provider (or whole shop) is unavailable.
+    Used for: Breaks, PTO, Personal Time, etc.
+    These appear as 'BLOCKED' on the calendar.
+    """
+    REASON_CHOICES = [
+        ('break', 'Break'),
+        ('pto', 'PTO'),
+        ('other', 'Other'),
+    ]
+
+    shop = models.ForeignKey('Shop', on_delete=models.CASCADE, related_name='blocked_times')
+    provider = models.ForeignKey(
+        'Provider', 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True, 
+        related_name='blocked_times',
+        help_text="If null, blocks the entire shop (all providers)"
+    )
+    
+    start_at = models.DateTimeField(db_index=True)
+    end_at = models.DateTimeField()
+    
+    reason = models.CharField(max_length=10, choices=REASON_CHOICES, default='break')
+    note = models.CharField(max_length=255, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['start_at']
+        indexes = [
+            models.Index(fields=['shop', 'start_at', 'end_at']),
+            models.Index(fields=['provider', 'start_at', 'end_at']),
+        ]
+
+    def __str__(self):
+        subject = self.provider.name if self.provider else "Whole Shop"
+        return f"Blocked: {subject} ({self.reason}) @ {self.start_at}"
 
     def __str__(self):
         return f"{self.shop.name} - {self.file.name}"
@@ -678,6 +888,63 @@ class Service(models.Model):
     )
     is_active = models.BooleanField(default=True)
 
+    # ---------------------------
+    # RULE-BASED SCHEDULING FIELDS
+    # ---------------------------
+    # Buffer fields
+    buffer_before_minutes = models.PositiveIntegerField(
+        default=0,
+        help_text="Buffer time required before this service (in minutes)"
+    )
+
+    buffer_after_minutes = models.PositiveIntegerField(
+        default=0,
+        help_text="Buffer time required after this service (in minutes)"
+    )
+
+    # Processing overlap fields
+    provider_block_minutes = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Minutes provider is actively occupied. Defaults to duration if not set."
+    )
+
+    allow_processing_overlap = models.BooleanField(
+        default=False,
+        help_text="If True, provider can start new bookings after provider_block_minutes"
+    )
+
+    @property
+    def effective_provider_block_minutes(self):
+        """Returns provider_block_minutes or duration if not set."""
+        if self.provider_block_minutes is not None:
+            return self.provider_block_minutes
+        return self.duration or 0
+
+    @property
+    def total_duration_minutes(self):
+        """Total time from buffer_before start to buffer_after end."""
+        return (self.duration or 0) + self.buffer_before_minutes + self.buffer_after_minutes
+
+    @property
+    def provider_busy_minutes(self):
+        """Time provider is actively occupied (busy interval length)."""
+        return self.buffer_before_minutes + self.effective_provider_block_minutes
+
+    @property
+    def processing_window_minutes(self):
+        """Duration of processing phase (provider free but service ongoing)."""
+        return max(0, (self.duration or 0) - self.effective_provider_block_minutes)
+
+    def clean(self):
+        """Validation: provider_block_minutes must not exceed duration."""
+        super().clean()
+        from django.core.exceptions import ValidationError
+        if self.provider_block_minutes is not None:
+            if self.provider_block_minutes > (self.duration or 0):
+                raise ValidationError({
+                    'provider_block_minutes': 'Cannot exceed service duration'
+                })
+
     ##new calculation method
     def calculate_deposit_amount(self):
         """Calculate deposit amount based on percentage and service price"""
@@ -842,8 +1109,9 @@ class Slot(models.Model):
 
 class SlotBooking(models.Model):
     STATUS_CHOICES = [
-        ('confirmed', 'Confirmed'),
-        ('cancelled', 'Cancelled')
+        ('pending', 'Pending'),      # Awaiting payment
+        ('confirmed', 'Confirmed'),  # Payment received
+        ('cancelled', 'Cancelled')   # Cancelled or payment failed
     ]
     PAYMENT_STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -862,6 +1130,13 @@ class SlotBooking(models.Model):
     shop = models.ForeignKey(Shop, on_delete=models.CASCADE, related_name='slot_bookings')
     service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='slot_bookings')
     slot = models.ForeignKey(Slot, on_delete=models.CASCADE, related_name='bookings')
+    provider = models.ForeignKey(
+        'Provider', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='slot_bookings'
+    )
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField()
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='confirmed')
@@ -1341,6 +1616,7 @@ def on_booking_status_change(sender, instance, **kwargs):
         # 2) kick off outreach after the transaction commits
         from api.tasks import trigger_no_show_auto_fill
         transaction.on_commit(lambda: trigger_no_show_auto_fill.delay(instance.id))
+
 
 
 # ==========================================
@@ -2239,4 +2515,3 @@ class SessionNote(models.Model):
     
     def __str__(self):
         return f"{self.get_technique_used_display()} - {self.client.name} ({self.booking.id})"
-

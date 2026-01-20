@@ -36,6 +36,8 @@ from .models import (
     Consultation,
     BookingAddOn,
     GalleryItem,
+    Provider,
+    AvailabilityRuleSet,
 )
 from math import radians, cos, sin, asin, sqrt
 from django.db.models.functions import Coalesce
@@ -143,6 +145,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'service_img', 'category', 'duration', 'capacity', 'is_active',
             'disabled_start_times',   # write
             'disabled_times', "requires_age_18_plus",         # read
+            'allow_processing_overlap', 'provider_block_minutes', # 👈 Added for Concurrency Control
         ]
         read_only_fields = ('shop',)
 
@@ -241,6 +244,175 @@ class VerificationFileSerializer(serializers.ModelSerializer):
         model = VerificationFile
         fields = ["id", "file", "uploaded_at"]
 
+class ProviderSerializer(serializers.ModelSerializer):
+    services = serializers.PrimaryKeyRelatedField(many=True, queryset=Service.objects.all())
+    working_hours = serializers.JSONField(required=False, write_only=False)
+
+    class Meta:
+        model = Provider
+        fields = [
+            'id', 'name', 'profile_image', 'provider_type', 
+            'is_active', 'services', 'allow_any_provider_booking', 
+            'max_concurrent_processing_jobs',
+            'bio',           # 👈 Added
+            'working_hours'  # 👈 Added
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # Populate working_hours from the linked ruleset
+        if instance.availability_ruleset:
+            ret['working_hours'] = instance.availability_ruleset.weekly_rules
+        else:
+            ret['working_hours'] = {}
+        return ret
+    
+    def _get_or_create_ruleset(self, provider, shop_tz):
+        """
+        Helper: Return a mutable ruleset for this provider.
+        If existing ruleset is shared, create a fresh copy for this provider.
+        If no ruleset, create new.
+        """
+        ruleset = provider.availability_ruleset
+        
+        # Check if we need a new one
+        create_new = False
+        if not ruleset:
+            create_new = True
+        else:
+            # Check for sharing: is this ruleset used by ANY other provider?
+            # Or is it the "default_availability_ruleset" for the shop?
+            is_shop_default = (ruleset == provider.shop.default_availability_ruleset)
+            is_shared_provider = ruleset.providers.exclude(id=provider.id).exists()
+            
+            if is_shop_default or is_shared_provider:
+                create_new = True
+        
+        if create_new:
+            # Create fresh ruleset
+            ruleset = AvailabilityRuleSet.objects.create(
+                name=f"{provider.name} Schedule",
+                timezone=shop_tz
+            )
+            # Inherit properties if it was referencing a shared one?
+            # For simplicity, we assume "Edit Schedule" sets the FULL schedule JSON,
+            # so we start fresh or empty, OR copy the old one?
+            # User experience: they see existing schedule, modify it, send it back.
+            # So copying old rules is safer if we didn't receive full payload?
+            # But the serializer receives user input. 
+            # We'll rely on the update logic to fill it.
+            
+            provider.availability_ruleset = ruleset
+            provider.save(update_fields=['availability_ruleset'])
+            
+        return ruleset
+
+    def _normalize_working_hours(self, working_hours_data):
+        """
+        Normalize client input format to internal format.
+        Client sends: {"monday": [["09:00 AM", "05:00 PM"]]}
+        Internal expects: {"mon": [["09:00", "17:00"]]}
+        """
+        if not working_hours_data:
+            return {}
+            
+        mapping = {
+            'monday': 'mon', 'tuesday': 'tue', 'wednesday': 'wed',
+            'thursday': 'thu', 'friday': 'fri', 'saturday': 'sat', 'sunday': 'sun'
+        }
+        
+        normalized = {}
+        from datetime import datetime
+        
+        for key, value in working_hours_data.items():
+            # Normalize key
+            norm_key = mapping.get(key.lower(), key.lower())[:3] # Ensure 3 chars
+            
+            norm_value = []
+            for item in value:
+                # item is list of [start, end]
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    s, e = item[0], item[1]
+                    try:
+                        # Try parsing 12-hour AM/PM
+                        s_obj = datetime.strptime(s, "%I:%M %p")
+                        s = s_obj.strftime("%H:%M")
+                    except ValueError:
+                        pass # Already 24h?
+                        
+                    try:
+                        e_obj = datetime.strptime(e, "%I:%M %p")
+                        e = e_obj.strftime("%H:%M")
+                    except ValueError:
+                        pass
+                        
+                    norm_value.append([s, e])
+            
+            normalized[norm_key] = norm_value
+            
+        return normalized
+
+    def create(self, validated_data):
+        working_hours = validated_data.pop('working_hours', None)
+        working_hours = self._normalize_working_hours(working_hours)
+        
+        services = validated_data.pop('services', [])
+        
+        provider = Provider.objects.create(**validated_data)
+        provider.services.set(services)
+        
+        if working_hours is not None:
+            # Ensure ruleset exists
+            shop_tz = provider.shop.time_zone 
+            ruleset = self._get_or_create_ruleset(provider, shop_tz)
+            ruleset.weekly_rules = working_hours
+            ruleset.save()
+            
+        return provider
+
+    def update(self, instance, validated_data):
+        working_hours = validated_data.pop('working_hours', None)
+        working_hours = self._normalize_working_hours(working_hours)
+        
+        services = validated_data.pop('services', None) # None means no change if not provided? Or empty list?
+        # Standard DRF: keys missing in payload => not updated.
+        
+        # Update scalar fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        if services is not None:
+            instance.services.set(services)
+            
+        if working_hours is not None:
+            # If working_hours is ANY content, create/update ruleset.
+            # If working_hours is EMPTY DICT {}, it means "Revert to Shop Defaults/No Individual Schedule"
+            
+            if not working_hours:
+                # User wants to clear individual schedule
+                if instance.availability_ruleset:
+                    # Check if we should delete it (if exclusive) or just unlink
+                    old_ruleset = instance.availability_ruleset
+                    instance.availability_ruleset = None
+                    instance.save()
+                    
+                    # Cleanup: If ruleset belongs only to this provider (by name convention or check), delete it
+                    # But if it was shared, leave it.
+                    # Simple check:
+                    if old_ruleset.providers.count() == 0:
+                        old_ruleset.delete()
+            else:
+                # Update/Create valid ruleset
+                shop_tz = instance.shop.time_zone
+                ruleset = self._get_or_create_ruleset(instance, shop_tz)
+                ruleset.weekly_rules = working_hours
+                ruleset.save()
+            
+        return instance
+
+
 class ShopSerializer(serializers.ModelSerializer):
     #  removed services from response
     owner_id = serializers.IntegerField(source='owner.id', read_only=True)
@@ -258,15 +430,15 @@ class ShopSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'niche', 'niches', 'address', 'location', 'capacity', 'start_at',
             'close_at', 'break_start_time', 'break_end_time', 'about_us', 
-            'shop_img', 'close_days', "business_hours", 'owner_id', 'is_verified', 'status', 
-            'verification_files', 'uploaded_files', 'is_deposit_required',
+            'shop_img', 'close_days', "business_hours", 'owner_id', 'status', 
+            'verification_files', 'uploaded_files', 'default_is_deposit_required',
             'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours',
             'time_zone',
             # 🆕 Social Links
             'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
         ]
-        read_only_fields = ('owner_id','is_verified', 'uploaded_files')
+        read_only_fields = ('owner_id', 'uploaded_files')
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
@@ -332,7 +504,7 @@ class ShopSerializer(serializers.ModelSerializer):
             plan_name = instance.subscription.plan.name
 
         policy_fields = {
-            'is_deposit_required', 'deposit_amount', 'default_deposit_percentage',
+            'default_is_deposit_required', 'default_deposit_percentage',
             'free_cancellation_hours', 'cancellation_fee_percentage', 'no_refund_hours'
         }
 
@@ -678,6 +850,8 @@ class ShopDetailSerializer(serializers.ModelSerializer):
     services = serializers.SerializerMethodField()
     reviews = serializers.SerializerMethodField()
     gallery_preview = serializers.SerializerMethodField()  # 🆕 First 5 public gallery items
+    # Alias for Flutter compatibility (Flutter expects 'is_deposit_required')
+    is_deposit_required = serializers.BooleanField(source='default_is_deposit_required', read_only=True)
 
     class Meta:
         model = Shop
