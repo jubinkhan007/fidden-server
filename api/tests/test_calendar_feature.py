@@ -15,14 +15,17 @@ class CalendarFeatureTest(APITestCase):
     def setUp(self):
         # 1. Setup Data
         self.owner = User.objects.create_user(email='owner@test.com', password='password', role='owner')
-        self.client = User.objects.create_user(email='client@test.com', password='password', role='user')
+        self.customer = User.objects.create_user(email='client@test.com', password='password', role='user')
         
         # Create Shop
         self.shop = Shop.objects.create(
             owner=self.owner, 
             name="Test Shop", 
             default_is_deposit_required=True,
-            default_deposit_percentage=50
+            default_deposit_percentage=50,
+            capacity=5,
+            start_at="09:00",
+            close_at="17:00"
         )
         self.owner.shop = self.shop
         self.owner.save()
@@ -54,18 +57,19 @@ class CalendarFeatureTest(APITestCase):
         # Create Booking (Confirmed)
         slot = Slot.objects.create(shop=self.shop, service=self.service, start_time=start, end_time=end)
         s_booking = SlotBooking.objects.create(
-            user=self.client, shop=self.shop, service=self.service, slot=slot, 
+            user=self.customer, shop=self.shop, service=self.service, slot=slot, 
             start_time=start, end_time=end, status='confirmed', provider=self.provider
         )
         # Create Payment (Succeeded)
         payment = Payment.objects.create(
-            user=self.client, amount=100, status='succeeded', 
-            is_deposit=True, deposit_status='credited'
+            user=self.customer, amount=100, status='succeeded', 
+            is_deposit=True, deposit_status='credited',
+            booking=s_booking
         )
         booking = Booking.objects.create(
-            user=self.client, shop=self.shop, slot=s_booking, 
+            user=self.customer, shop=self.shop, slot=s_booking, 
             payment=payment, status='active', provider=self.provider,
-            start_time=start, provider_busy_end=end
+            provider_busy_start=start, provider_busy_end=end
         )
         
         # Create BlockedTime
@@ -110,21 +114,22 @@ class CalendarFeatureTest(APITestCase):
         
         slot = Slot.objects.create(shop=self.shop, service=self.service, start_time=start, end_time=end)
         s_booking = SlotBooking.objects.create(
-            user=self.client, shop=self.shop, service=self.service, slot=slot, 
+            user=self.customer, shop=self.shop, service=self.service, slot=slot, 
             start_time=start, end_time=end, status='confirmed', provider=self.provider
         )
         
         # Payment requiring deposit but NOT paid
         payment = Payment.objects.create(
-            user=self.client, amount=100, status='pending', 
+            user=self.customer, amount=100, status='pending', 
             is_deposit=True, deposit_status='held', # Not credited yet
-            deposit_amount=50
+            deposit_amount=50,
+            booking=s_booking
         )
         
         booking = Booking.objects.create(
-            user=self.client, shop=self.shop, slot=s_booking, 
+            user=self.customer, shop=self.shop, slot=s_booking, 
             payment=payment, status='active', 
-            start_time=start, provider_busy_end=end,
+            provider_busy_start=start, provider_busy_end=end,
              # Needs forms
             forms_required=True, forms_completed=False
         )
@@ -150,12 +155,12 @@ class CalendarFeatureTest(APITestCase):
         # 1. First booking (Should be NEW)
         start1 = now + timedelta(days=3)
         slot1 = Slot.objects.create(shop=self.shop, service=self.service, start_time=start1, end_time=start1+timedelta(hours=1))
-        s_booking1 = SlotBooking.objects.create(user=self.client, shop=self.shop, service=self.service, slot=slot1, start_time=start1, end_time=start1+timedelta(hours=1), status='confirmed')
-        payment1 = Payment.objects.create(user=self.client, amount=100, status='succeeded')
+        s_booking1 = SlotBooking.objects.create(user=self.customer, shop=self.shop, service=self.service, slot=slot1, start_time=start1, end_time=start1+timedelta(hours=1), status='confirmed')
+        payment1 = Payment.objects.create(user=self.customer, amount=100, status='succeeded', booking=s_booking1)
         
         booking1 = Booking.objects.create(
-            user=self.client, shop=self.shop, slot=s_booking1, payment=payment1, 
-            status='active', start_time=start1
+            user=self.customer, shop=self.shop, slot=s_booking1, payment=payment1, 
+            status='active', provider_busy_start=start1
         )
         
         # Query just this one
@@ -165,12 +170,12 @@ class CalendarFeatureTest(APITestCase):
         # 2. Second booking (Should NOT be NEW)
         start2 = now + timedelta(days=4)
         slot2 = Slot.objects.create(shop=self.shop, service=self.service, start_time=start2, end_time=start2+timedelta(hours=1))
-        s_booking2 = SlotBooking.objects.create(user=self.client, shop=self.shop, service=self.service, slot=slot2, start_time=start2, end_time=start2+timedelta(hours=1), status='confirmed')
-        payment2 = Payment.objects.create(user=self.client, amount=100, status='succeeded')
+        s_booking2 = SlotBooking.objects.create(user=self.customer, shop=self.shop, service=self.service, slot=slot2, start_time=start2, end_time=start2+timedelta(hours=1), status='confirmed')
+        payment2 = Payment.objects.create(user=self.customer, amount=100, status='succeeded', booking=s_booking2)
         
         booking2 = Booking.objects.create(
-            user=self.client, shop=self.shop, slot=s_booking2, payment=payment2, 
-            status='active', start_time=start2
+            user=self.customer, shop=self.shop, slot=s_booking2, payment=payment2, 
+            status='active', provider_busy_start=start2
         )
         
         # Query second booking

@@ -56,7 +56,7 @@ class Phase3ConcurrencyTests(TestCase):
         # But for integration testing, let's use the actual engine.
         # We need a rule for "today" or the target date.
         # Let's use a fixed date.
-        self.target_date = date(2026, 1, 15) # Thursday
+        self.target_date = date(2026, 2, 5) # Thursday
         
         # Provider 1
         self.p1 = Provider.objects.create(
@@ -98,7 +98,7 @@ class Phase3ConcurrencyTests(TestCase):
         data = {
             "shop_id": self.shop.id,
             "service_id": self.service.id,
-            "start_at": "2026-01-15T10:00:00Z",
+            "start_at": "2026-02-05T10:00:00Z",
             # provider_id is None -> Any Provider
         }
         response = self.client.post(url, data)
@@ -114,7 +114,7 @@ class Phase3ConcurrencyTests(TestCase):
         """
         If Provider 1 is booked at 10:00, a second request for Provider 1 at 10:00 should fail.
         """
-        start_at = "2026-01-15T10:00:00Z"
+        start_at = "2026-02-05T10:00:00Z"
         
         # 1. Book P1 explicitly
         response1 = self.client.post("/api/bookings/", {
@@ -144,7 +144,7 @@ class Phase3ConcurrencyTests(TestCase):
         # Ensure IDs are ordered for deterministic test if logic uses ID as tie breaker
         # P1 created first, likely ID smaller.
         
-        start_at = "2026-01-15T11:00:00Z"
+        start_at = "2026-02-05T11:00:00Z"
         
         # Booking 1
         res1 = self.client.post("/api/bookings/", {
@@ -180,7 +180,7 @@ class Phase3ConcurrencyTests(TestCase):
         self.service.provider_block_minutes = 15 
         self.service.save()
         
-        start_1 = "2026-01-15T12:00:00Z" # 12:00 - 13:00. P-Block: 12:00-12:15.
+        start_1 = "2026-02-05T12:00:00Z" # 12:00 - 13:00. P-Block: 12:00-12:15.
         
         # Book 1
         res1 = self.client.post("/api/bookings/", {
@@ -200,7 +200,7 @@ class Phase3ConcurrencyTests(TestCase):
         self.p1.max_concurrent_processing_jobs = 5
         self.p1.save()
         
-        start_2 = "2026-01-15T12:15:00Z"
+        start_2 = "2026-02-05T12:15:00Z"
         self.client.force_authenticate(user=self.other_user)
         res2 = self.client.post("/api/bookings/", {
             "shop_id": self.shop.id, "service_id": self.service.id, "start_at": start_2,
@@ -212,7 +212,7 @@ class Phase3ConcurrencyTests(TestCase):
     def test_conflict_return_shape(self):
         """Verify the 409 response has code and detail."""
         # Book P1
-        start_at = "2026-01-15T14:00:00Z"
+        start_at = "2026-02-05T14:00:00Z"
         self.client.post("/api/bookings/", {
             "shop_id": self.shop.id, "service_id": self.service.id, "start_at": start_at, "provider_id": self.p1.id
         })

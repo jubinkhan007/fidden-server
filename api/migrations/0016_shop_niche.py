@@ -10,7 +10,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
+        migrations.AlterField(
             model_name='shop',
             name='niche',
             field=models.CharField(blank=True, default='Barber', max_length=50, null=True),
