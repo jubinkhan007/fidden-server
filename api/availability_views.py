@@ -44,10 +44,9 @@ class AvailabilityView(APIView):
 
         try:
             shop = Shop.objects.get(id=shop_id)
-            if not shop.use_rule_based_availability:
-                 # If disabled, maybe return empty list/404? 
-                 # Let's return 400 to signal client to use legacy.
-                return Response({"detail": "This shop does not support rule-based availability."}, status=status.HTTP_400_BAD_REQUEST)
+            # We now support fallback for all shops, so no need to block.
+            # if not shop.use_rule_based_availability:
+            #     return Response({"detail": "This shop does not support rule-based availability."}, status=status.HTTP_400_BAD_REQUEST)
 
             service = Service.objects.get(id=service_id, shop=shop)
             target_date = datetime.strptime(date_str, "%Y-%m-%d").date()

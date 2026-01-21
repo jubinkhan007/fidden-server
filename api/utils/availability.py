@@ -175,17 +175,16 @@ def get_working_windows(provider: Provider, date_obj: date) -> List[Interval]:
             return _parse_rules(exception.override_rules, date_obj, provider.shop.time_zone)
     
     # 1. Check Provider Ruleset
-    ruleset = provider.availability_ruleset
-    if ruleset:
-        return _get_ruleset_intervals(ruleset, date_obj)
+    if provider.availability_ruleset:
+        return _get_ruleset_intervals(provider.availability_ruleset, date_obj)
         
-    # 2. Check Shop Default Ruleset
-    shop = provider.shop
-    if shop.default_availability_ruleset:
-        return _get_ruleset_intervals(shop.default_availability_ruleset, date_obj)
+    # 2. Check Shop Default Ruleset (Only if provider has no specific ruleset)
+    if provider.shop.default_availability_ruleset:
+        return _get_ruleset_intervals(provider.shop.default_availability_ruleset, date_obj)
         
     # 3. Fallback to Legacy Shop Business Hours
-    return _get_legacy_shop_intervals(shop, date_obj)
+    # This is critical for shops that haven't migrated to rulesets yet.
+    return _get_legacy_shop_intervals(provider.shop, date_obj)
 
 def get_breaks(provider: Provider, date_obj: date) -> List[Interval]:
     """
