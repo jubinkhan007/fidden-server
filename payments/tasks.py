@@ -90,6 +90,14 @@ def complete_past_bookings(self):
                 fresh.save(update_fields=["status", "updated_at"])
             except Exception:
                 fresh.save(update_fields=["status"])
+            
+            # --- Fitness Package Hook ---
+            try:
+                from api.utils.fitness import decrement_fitness_package_sessions
+                decrement_fitness_package_sessions(fresh)
+            except Exception as e:
+                logger.error("Failed to decrement fitness package for booking %s: %s", fresh.id, e)
+            
             updated += 1
             logger.info("Booking %s marked as completed (end=%s)", fresh.id, end_dt.isoformat())
 

@@ -171,6 +171,14 @@ router.register(r'consent-forms/signed', SignedConsentFormViewSet, basename='sig
 router.register(r'id-verification', IDVerificationViewSet, basename='id-verification')
 router.register(r'consultations', ConsultationViewSet, basename='consultations')
 
+# Fitness Trainer ViewSets
+from .fitness_views import (
+    FitnessPackageViewSet, WorkoutTemplateViewSet, NutritionPlanViewSet
+)
+router.register(r'fitness/packages', FitnessPackageViewSet, basename='fitness-packages')
+router.register(r'fitness/workout-templates', WorkoutTemplateViewSet, basename='fitness-workout-templates')
+router.register(r'fitness/nutrition-plans', NutritionPlanViewSet, basename='fitness-nutrition-plans')
+
 urlpatterns += [
     path('', include(router.urls)),
 ]
@@ -277,6 +285,17 @@ urlpatterns += [
     # Client self-service
     path('my-massage-profile/', MyMassageProfileView.as_view(), name='my-massage-profile'),
 ]
+
+
+# ==========================================
+# FITNESS TRAINER DASHBOARD ROUTES 🏋️‍♂️
+# ==========================================
+from .fitness_views import FitnessTrainerDashboardView
+
+urlpatterns += [
+    path('fitness/dashboard/', FitnessTrainerDashboardView.as_view(), name='fitness-dashboard'),
+]
+
 
 
 # ==========================================

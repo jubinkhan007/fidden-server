@@ -37,6 +37,9 @@ class CalendarEventSerializer(serializers.Serializer):
     blocked_reason = serializers.SerializerMethodField()
     note = serializers.SerializerMethodField()
 
+    # Fitness specific
+    session_type = serializers.SerializerMethodField() # "class" or "1to1"
+
     def _get_shop_tz(self, obj):
         """Get the shop's timezone as a ZoneInfo object."""
         shop = getattr(obj, 'shop', None)
@@ -92,6 +95,14 @@ class CalendarEventSerializer(serializers.Serializer):
         if isinstance(obj, BlockedTime):
             return obj.note
         return None
+
+    def get_session_type(self, obj):
+        if not isinstance(obj, Booking):
+            return None
+        service = obj.slot.service if obj.slot else None
+        if service:
+            return "class" if (service.capacity or 1) > 1 else "1to1"
+        return "1to1"
 
     def get_start_at_utc(self, obj):
         dt = getattr(obj, 'start_at', None)
