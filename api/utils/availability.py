@@ -326,8 +326,8 @@ def _get_legacy_shop_intervals(shop: Shop, date_obj: date) -> List[Interval]:
     # If using rulesets, timezone is stored on ruleset or shop
     # We need to localize the current time to check "now"
     
-    # Use helper
-    tz_id = resolve_timezone_id(provider)
+    # Use shop timezone directly (we're in legacy fallback, so no provider/shop rulesets exist)
+    tz_id = shop.time_zone or 'America/New_York'
     tz = ZoneInfo(tz_id)
     
     # Check overrides/custom hours first
