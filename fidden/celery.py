@@ -51,7 +51,7 @@ app.conf.beat_schedule = {
         'schedule': crontab(day_of_week='sunday', hour=22, minute=0),  # Every Sunday at 10 PM (end of week recap)
     },
     'send-smart-rebooking-prompts': {
-        'task': 'api.tasks.send_smart_rebooking_prompts',
+        'task': 'payments.tasks.send_smart_rebooking_prompts',
         'schedule': crontab(hour=10, minute=0),  # Every day at 10 AM
     },
     'send-auto-followups': {
@@ -59,7 +59,7 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute='*/30'),  # Every 30 minutes
     },
     'reengage-ghost-clients': {
-        'task': 'api.tasks.reengage_ghost_clients',
+        'task': 'payments.tasks.reengage_ghost_clients',
         'schedule': crontab(day_of_week='monday', hour=11, minute=0),  # Every Monday at 11 AM
     },
     # V1 Fix: Send review reminders every 2 hours to catch the 48-72h window
