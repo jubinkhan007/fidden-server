@@ -1898,13 +1898,14 @@ class StripeWebhookView(APIView):
                 payment = Payment.objects.get(final_payment_intent_id=intent_id)
                 logger.info("Found final checkout payment for intent: %s", intent_id)
                 
-                # If final payment succeeded, mark deposit as credited
+                # If final payment succeeded, mark deposit as credited and clear remaining balance
                 if new_status == "succeeded":
                     payment.deposit_status = 'credited'
                     payment.checkout_completed_at = timezone.now()
-                    payment.save(update_fields=['deposit_status', 'checkout_completed_at'])
+                    payment.remaining_amount = 0  # Clear remaining balance - full payment received
+                    payment.save(update_fields=['deposit_status', 'checkout_completed_at', 'remaining_amount'])
                     logger.info(
-                        "✅ Checkout completed - Payment #%s deposit_status set to 'credited' (intent: %s)",
+                        "✅ Checkout completed - Payment #%s deposit_status='credited', remaining_amount=0 (intent: %s)",
                         payment.id, intent_id
                     )
                     
