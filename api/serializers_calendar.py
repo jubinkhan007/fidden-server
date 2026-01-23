@@ -159,30 +159,26 @@ class CalendarEventSerializer(serializers.Serializer):
         Derives secondary badges list.
         """
         badges = []
-        
+
         if isinstance(obj, BlockedTime):
             return badges # No badges for blocks usually
-            
+
         if isinstance(obj, Booking):
             payment = getattr(obj, 'payment', None)
-            
-            # [PAID]
-            # Shows when deposit or full payment has succeeded
+
+            # Payment badge logic - mutually exclusive (only ONE payment badge shows)
             if payment:
-                if payment.status == 'succeeded':
+                # Priority 1: [BAL_DUE] - Partial payment made, balance still owed
+                if payment.remaining_amount is not None and payment.remaining_amount > 0:
+                    badges.append("BAL_DUE")
+
+                # Priority 2: [PAID] - Full payment received (no remaining balance)
+                elif payment.remaining_amount == 0 and payment.status == 'succeeded':
                     badges.append("PAID")
-                elif payment.deposit_status == 'credited' and payment.remaining_amount == 0:
-                    badges.append("PAID")
-            
-            # [DEP_DUE]
-            # Deposit required but NOT yet paid (payment hasn't succeeded)
-            if payment and payment.is_deposit and payment.status != 'succeeded':
-                badges.append("DEP_DUE")
-            
-            # [BAL_DUE]
-            # Deposit was paid but there's remaining balance
-            if payment and payment.status == 'succeeded' and payment.remaining_amount and payment.remaining_amount > 0:
-                badges.append("BAL_DUE")
+
+                # Priority 3: [DEP_DUE] - Deposit required but not paid yet
+                elif payment.is_deposit and payment.status != 'succeeded':
+                    badges.append("DEP_DUE")
                 
             # [FORMS]
             # Check Booking fields
