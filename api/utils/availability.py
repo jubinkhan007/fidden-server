@@ -184,7 +184,11 @@ def get_working_windows(provider: Provider, date_obj: date) -> List[Interval]:
         
     # 3. Fallback to Legacy Shop Business Hours
     # This is critical for shops that haven't migrated to rulesets yet.
-    return _get_legacy_shop_intervals(provider.shop, date_obj)
+    return _get_legacy_shop_intervals(provider.shop, date_obj) # Sort is inside _parse_rules or can do here? 
+    # Better to sort in _parse_rules for rule-based, but _get_legacy_shop_intervals calls _parse_rules too.
+    # However, get_working_windows returns list. Let's sorting here is safer.
+    # But wait, if _parse_rules returns unsorted, any consumer is affected.
+    # Let's sort in _parse_rules.
 
 def get_breaks(provider: Provider, date_obj: date) -> List[Interval]:
     """
@@ -294,6 +298,8 @@ def _parse_rules(rules_list: list, date_obj: date, tz_name: str) -> List[Interva
             logger.error(f"Invalid time format in rules: {r} - {e}")
             continue
             
+    # Sort intervals by start time to ensure processing order
+    intervals.sort(key=lambda x: x.start)
     return intervals
 
 def _parse_break_objects(break_objs: List[Dict], date_obj: date, tz_name: str) -> List[Interval]:
@@ -580,12 +586,110 @@ def provider_available_starts(
             available_slots.append(candidate_local)
             current_mins += interval_minutes
             
+    # Explicitly sort slots to ensure chronological order for API consumers
+    available_slots.sort()
     return available_slots
 
 
 # ==========================================
 # 5. Any Provider Selection
 # ==========================================
+
+def shop_available_starts(
+    shop: Shop, 
+    service: Service, 
+    date_obj: date
+) -> List[datetime]:
+    """
+    Generate available slots based on shop hours (no provider required).
+    Used as fallback when shop has no active providers.
+    
+    Uses:
+    - Shop's default_availability_ruleset if set
+    - Otherwise, shop's business_hours or start_at/close_at
+    """
+    # Resolve timezone
+    tz_id = shop.time_zone or 'America/New_York'
+    
+    # Get grid interval
+    interval_minutes = shop.default_interval_minutes or 15
+    if shop.default_availability_ruleset:
+        interval_minutes = shop.default_availability_ruleset.interval_minutes
+    
+    # Get working windows from shop ruleset or legacy hours
+    if shop.default_availability_ruleset:
+        windows = _get_ruleset_intervals(shop.default_availability_ruleset, date_obj)
+    else:
+        windows = _get_legacy_shop_intervals(shop, date_obj)
+    
+    if not windows:
+        return []
+    
+    # Get breaks from shop ruleset
+    breaks = []
+    if shop.default_availability_ruleset:
+        breaks = _get_ruleset_breaks(shop.default_availability_ruleset, date_obj)
+    elif shop.break_start_time and shop.break_end_time:
+        tz = ZoneInfo(tz_id)
+        break_start = get_tz_aware_dt(date_obj, shop.break_start_time, tz)
+        break_end = get_tz_aware_dt(date_obj, shop.break_end_time, tz)
+        if break_start < break_end:
+            breaks = [Interval(break_start, break_end)]
+    
+    start_time_limit = timezone.now()  # Don't return past slots
+    
+    # Service duration
+    duration_mins = service.duration or 30
+    buffer_after_mins = service.buffer_after_minutes
+    total_service_mins = duration_mins + buffer_after_mins
+    
+    available_slots = []
+    
+    for window in windows:
+        window_start_mins = window.start.hour * 60 + window.start.minute
+        window_end_mins = window.end.hour * 60 + window.end.minute
+        
+        current_mins = ceil_to_interval(window_start_mins, interval_minutes)
+        
+        while current_mins < window_end_mins:
+            candidate_local = safe_localize_minutes(date_obj, current_mins, tz_id)
+            
+            if candidate_local is None:
+                current_mins += interval_minutes
+                continue
+            
+            # Past check
+            if candidate_local <= start_time_limit:
+                current_mins += interval_minutes
+                continue
+            
+            # Fit in window check
+            end_mins = current_mins + total_service_mins
+            if end_mins > window_end_mins:
+                break
+            
+            # Break overlap check
+            candidate_utc = to_utc(candidate_local)
+            candidate_end_utc = candidate_utc + timedelta(minutes=duration_mins)
+            
+            is_in_break = False
+            for b in breaks:
+                b_start_utc = to_utc(b.start) if b.start.tzinfo else b.start
+                b_end_utc = to_utc(b.end) if b.end.tzinfo else b.end
+                if overlaps(candidate_utc, candidate_end_utc, b_start_utc, b_end_utc):
+                    is_in_break = True
+                    break
+            
+            if is_in_break:
+                current_mins += interval_minutes
+                continue
+            
+            available_slots.append(candidate_local)
+            current_mins += interval_minutes
+    
+    available_slots.sort()
+    return available_slots
+
 
 def get_any_provider_availability(
     shop: Shop, 
@@ -595,6 +699,8 @@ def get_any_provider_availability(
     """
     Aggregate availability for "Any Provider".
     Returns list of {"start_time": dt, "available_count": int}
+    
+    If no providers exist, falls back to shop-level availability.
     """
     providers = Provider.objects.filter(
         shop=shop, 
@@ -602,6 +708,12 @@ def get_any_provider_availability(
         is_active=True, 
         allow_any_provider_booking=True
     )
+    
+    # FALLBACK: No providers → use shop-level availability
+    if not providers.exists():
+        logger.info(f"[AVAILABILITY] No providers for shop {shop.id}, using shop-level fallback")
+        shop_slots = shop_available_starts(shop, service, date_obj)
+        return [{"start_time": dt, "available_count": 1} for dt in shop_slots]
     
     # Map start_time -> count
     availability_map = {}

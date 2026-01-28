@@ -77,6 +77,9 @@ class AvailabilityView(APIView):
                 })
         else:
             # Aggregate across all providers
+            # Note: If no providers, get_any_provider_availability will fallback to shop hours
+            provider_count = Provider.objects.filter(shop=shop, is_active=True).count()
+            
             available_times = get_any_provider_availability(shop, service, target_date)
             
             # Resolve timezone from first active provider or shop default
@@ -92,6 +95,9 @@ class AvailabilityView(APIView):
                     "start_at_utc": to_utc(dt).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "availability_count": item["available_count"]
                 })
+            
+            if len(available_slots) == 0 and provider_count > 0:
+                logger.warning(f"[AVAILABILITY] ZERO_SLOTS: shop_id={shop_id}, service_id={service_id}, date={date_str}, providers={provider_count}")
         
         return Response({
             "date": date_str,
@@ -124,17 +130,23 @@ class ProvidersView(APIView):
 
     def post(self, request, shop_id):
         """Create a new provider."""
+        logger.info(f"[PROVIDER_CREATE] Attempt: shop_id={shop_id}, user={request.user.id} ({request.user.email})")
+        logger.debug(f"[PROVIDER_CREATE] Payload: {request.data}")
+        
         try:
             shop = Shop.objects.get(id=shop_id)
         except Shop.DoesNotExist:
+            logger.warning(f"[PROVIDER_CREATE] FAILED: Shop {shop_id} not found")
             return Response({"detail": "Shop not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if shop.owner != request.user:
+            logger.warning(f"[PROVIDER_CREATE] FAILED: Permission denied. shop.owner={shop.owner_id}, request.user={request.user.id}")
             return Response({"detail": "You do not have permission to add providers to this shop."}, status=status.HTTP_403_FORBIDDEN)
 
         serializer = ProviderSerializer(data=request.data)
         if serializer.is_valid():
             provider = serializer.save(shop=shop)
+            logger.info(f"[PROVIDER_CREATE] SUCCESS: Created provider {provider.id} '{provider.name}' for shop {shop_id}")
             # Add services if provided (M2M handling)
             if 'services' in request.data:
                 # Serializer handles M2M if passed as list of IDs, 
@@ -142,6 +154,8 @@ class ProvidersView(APIView):
                 # ProviderSerializer already has services field.
                 pass
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        logger.warning(f"[PROVIDER_CREATE] FAILED: Validation errors: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
