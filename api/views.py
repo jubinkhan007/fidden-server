@@ -245,28 +245,6 @@ class ShopRetrieveUpdateDestroyView(APIView):
     def get_object(self, pk):
         return get_object_or_404(Shop, pk=pk, owner=self.request.user)
 
-    def _has_verification_change(self, serializer, request):
-        """
-        Return True if this update actually includes verification-related fields.
-        Update the keys to match your model/serializer.
-        """
-        verification_keys = [
-            "uploaded_files",      # ManyToMany / nested files
-            "verification_files",
-            "verification_file",
-        ]
-
-        # 1) Only fields actually being updated (validated_data) matter
-        vd = getattr(serializer, "validated_data", {}) or {}
-        if any(key in vd for key in verification_keys):
-            return True
-
-        # 2) Handle file uploads
-        if any(key in request.FILES for key in verification_keys):
-            return True
-
-        return False
-
     def get(self, request, pk):
         shop = self.get_object(pk)
         serializer = ShopSerializer(shop, context={'request': request})
@@ -274,7 +252,6 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def put(self, request, pk):
         shop = self.get_object(pk)
-        original_status = shop.status
 
         serializer = ShopSerializer(
             shop,
@@ -282,11 +259,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
             context={'request': request}
         )
         if serializer.is_valid():
-            verification_changed = self._has_verification_change(serializer, request)
-            new_status = 'pending' if (original_status == 'verified' and verification_changed) else original_status
-
-            # overrides any 'status' the client may have sent
-            shop = serializer.save(status=new_status)
+            shop = serializer.save()
 
             return Response(
                 ShopSerializer(shop, context={'request': request}).data,
@@ -296,7 +269,6 @@ class ShopRetrieveUpdateDestroyView(APIView):
 
     def patch(self, request, pk):
         shop = self.get_object(pk)
-        original_status = shop.status
 
         serializer = ShopSerializer(
             shop,
@@ -305,10 +277,7 @@ class ShopRetrieveUpdateDestroyView(APIView):
             context={'request': request}
         )
         if serializer.is_valid():
-            verification_changed = self._has_verification_change(serializer, request)
-            new_status = 'pending' if (original_status == 'verified' and verification_changed) else original_status
-
-            shop = serializer.save(status=new_status)
+            shop = serializer.save()
 
             return Response(
                 ShopSerializer(shop, context={'request': request}).data,
@@ -736,8 +705,7 @@ class AllServicesListView(APIView):
 
         services_qs = (
             Service.objects.filter(
-                is_active=True,
-                shop__status__in=['verified', 'unverified']  # V1 Fix: include unverified
+                is_active=True
             )
             .select_related("shop")
             .annotate(
@@ -870,8 +838,7 @@ class FavoriteShopView(APIView):
             return Response({"detail": "Only users can view services."}, status=status.HTTP_403_FORBIDDEN)
 
         user_location = request.data.get("location")  # optional: "lon,lat"
-        # V1 Fix: Include unverified shops in favorites
-        favorites = FavoriteShop.objects.filter(user=request.user, shop__status__in=['verified', 'unverified']).select_related('shop')
+        favorites = FavoriteShop.objects.filter(user=request.user).select_related('shop')
         serializer = FavoriteShopSerializer(favorites, many=True, context={'request': request, 'user_location': user_location})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -934,8 +901,7 @@ class ServiceWishlistView(APIView):
 
         wishlists = ServiceWishlist.objects.filter(
             user=request.user,
-            service__is_active=True,
-            service__shop__status__in=['verified', 'unverified']  # V1 Fix
+            service__is_active=True
         ).select_related('service__shop', 'service__category')
 
         serializer = ServiceWishlistSerializer(wishlists, many=True, context={'request': request})

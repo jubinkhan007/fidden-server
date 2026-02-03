@@ -413,7 +413,7 @@ class ShopSerializer(serializers.ModelSerializer):
     verification_files = serializers.ListField(
         child=serializers.FileField(),
         write_only=True,
-        required=True  # 🔥 mandatory
+        required=False
     )
     uploaded_files = VerificationFileSerializer(source="verification_files", many=True, read_only=True)
 
@@ -430,7 +430,7 @@ class ShopSerializer(serializers.ModelSerializer):
             # 🆕 Social Links
             'instagram_url', 'tiktok_url', 'youtube_url', 'website_url',
         ]
-        read_only_fields = ('owner_id', 'uploaded_files')
+        read_only_fields = ('owner_id', 'uploaded_files', 'status')
 
     def to_representation(self, instance):
         rep = super().to_representation(instance)
@@ -443,16 +443,13 @@ class ShopSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         files = validated_data.pop("verification_files", None)
-
-        if not files:
-            raise serializers.ValidationError(
-                {"verification_files": "At least one verification file is required."}
-            )
-
+        validated_data.pop("status", None)
+        validated_data["status"] = "verified"
         shop = Shop.objects.create(**validated_data)
 
-        for f in files:
-            VerificationFile.objects.create(shop=shop, file=f)
+        if files:
+            for f in files:
+                VerificationFile.objects.create(shop=shop, file=f)
 
         return shop
 
@@ -479,8 +476,8 @@ class ShopSerializer(serializers.ModelSerializer):
 
         # Icon: Can change everything (no restrictions)
 
-        # Continue with update...
-        instance.status = "pending"
+        validated_data.pop("status", None)
+        validated_data["status"] = "verified"
         files = validated_data.pop("verification_files", None)
 
         # USE super().update() instead of manual field setting

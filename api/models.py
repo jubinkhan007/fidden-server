@@ -285,22 +285,13 @@ class Shop(models.Model):
             
             # --- Get Old State ---
             old_percentage = None
-            orig_status = None
-            send_verification_notification = False
 
             if self.pk:  # Existing shop
                 try:
                     # Get the original state from the database
                     orig_shop = Shop.objects.get(pk=self.pk)
                     old_percentage = orig_shop.default_deposit_percentage
-                    orig_status = orig_shop.status
-                    print(f"Old status: {orig_status}, New status: {self.status}")
                     print(f"Old percentage: {old_percentage}, New percentage: {self.default_deposit_percentage}")
-                    
-                    # Check if the status is changing from 'pending' to 'verified'
-                    if orig_status == 'pending' and self.status == 'verified':
-                        send_verification_notification = True
-                        
                 except Shop.DoesNotExist:
                     pass # This is a new shop
 
@@ -321,26 +312,7 @@ class Shop(models.Model):
             else:
                 print("No percentage change detected")
 
-            # 2. Send notification if verification just happened
-            if send_verification_notification and self.owner:
-                try:
-                    from .utils.fcm import notify_user
-                    logger.info(f"Shop {self.id} verified, sending notification to owner {self.owner.id}")
-                    
-                    notify_user(
-                        user=self.owner,
-                        message="Congratulations! Your shop has been verified.", # This is the short message
-                        notification_type="shop_verified", # For a deep link handler
-                        data={
-                            "title": "Your Shop is Live! ✨",
-                            "summary": f"Congratulations! Your shop '{self.name}' has been verified by our team and is now live.",
-                            "deep_link": f"fidden://shop/{self.id}", # Example deep link
-                            "shop_id": str(self.id)
-                        }
-                    )
-                except Exception as e:
-                    # Log the error but don't crash the save operation
-                    logger.error(f"Failed to send verification push notification to owner {self.owner.id}: {e}", exc_info=True)
+            # Verification notifications removed (no approval flow).
     
     # helper (not required but handy)
     def get_intervals_for_date(self, date_obj):
@@ -1377,4 +1349,3 @@ def on_booking_status_change(sender, instance, **kwargs):
         # 2) kick off outreach after the transaction commits
         from api.tasks import trigger_no_show_auto_fill
         transaction.on_commit(lambda: trigger_no_show_auto_fill.delay(instance.id))
-
